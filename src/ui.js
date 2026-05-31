@@ -44,13 +44,13 @@ function buildShell() {
         <div class="cur" title="명성(환생 화폐)">${img(UI_ART.star, 'cur-ico')}<b id="cur-fame">0</b></div>
         <div class="cur" title="큐브(가챠)">${img(UI_ART.cube, 'cur-ico')}<b id="cur-cube">0</b></div>
         <div class="cur cur-inc" title="초당 생산">+<b id="cur-inc">0</b><span class="unit">g/초</span></div>
+        <div class="lvbar" id="lvbar" title="레벨 경험치"><div id="lvfill"></div><span id="lvtext"></span></div>
       </div>
       <div class="topright">
         <button class="hero" id="hero" title="신우 (탭)">${img(CHAR_ART.s1, 'hero-art', 'id="hero-art"')}<span class="hero-lv">Lv.<b id="hero-lvl">0</b><span id="hero-sp" class="hero-sp"></span></span></button>
         <button class="ghost sm" id="btn-logout">로그아웃</button>
       </div>
     </header>
-    <div class="lvbar"><div id="lvfill"></div><span id="lvtext"></span></div>
     <nav class="tabs" id="tabs">${TABS.map(([id, n]) => `<button class="tab" data-tab="${id}">${n}</button>`).join('')}</nav>
     <div class="tabbody" id="tabbody"></div>
     <div id="float-layer"></div><div id="toast-layer"></div><div id="modal-layer"></div>
@@ -77,7 +77,7 @@ export function render() {
   const lo = runForLevel(s.level, G.stats.xpMult), hi = runForLevel(s.level + 1, G.stats.xpMult)
   const p = Math.max(0, Math.min(1, (s.runFat - lo) / (hi - lo)))
   H.lvfill.style.width = (p * 100).toFixed(1) + '%'
-  H.lvtext.textContent = `Lv.${s.level} · 다음 ${Math.floor(p * 100)}%${sp > 0 ? ` · 스킬포인트 ${sp}` : ''}`
+  H.lvtext.textContent = `Lv.${s.level} · 다음 ${Math.floor(p * 100)}%`
   if (s.stage !== H.curStageBg) applyStage(s.stage)
   if (activeTab === 'food') updateFood()
   else if (activeTab === 'fame') updateFame()

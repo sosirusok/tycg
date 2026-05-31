@@ -40,7 +40,7 @@ b{font-weight:700}.muted{color:var(--muted);font-weight:500;font-size:.85em}.hid
 .game{max-width:1080px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding-bottom:30px}
 .topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;padding:9px 14px;background:var(--panel);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .brand{order:1;font-weight:800;font-size:17px;white-space:nowrap}
-.currencies{order:2;display:flex;gap:8px;flex-wrap:wrap;flex:1 1 auto;justify-content:center}
+.currencies{order:2;display:flex;gap:8px;flex-wrap:wrap;flex:1 1 auto;justify-content:flex-start;align-items:center}
 .topright{order:3;display:flex;gap:8px;align-items:center}
 @media(max-width:720px){.brand{font-size:15px}.currencies{order:4;flex-basis:100%;justify-content:flex-start}}
 .cur{display:flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--line);padding:5px 10px;border-radius:999px;font-weight:800;font-size:14px}
@@ -169,11 +169,10 @@ b{font-weight:700}.muted{color:var(--muted);font-weight:500;font-size:.85em}.hid
 .modal-btns .cant{opacity:.45}
 
 /* ===== v4 추가 ===== */
-/* 레벨 바 */
-.lvbar{position:sticky;top:51px;z-index:25;height:18px;background:var(--panel2);border-bottom:1px solid var(--line);position:relative;overflow:hidden;backdrop-filter:blur(6px)}
-.lvbar #lvfill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0;transition:width .2s}
-.lvbar #lvtext{position:absolute;inset:0;display:grid;place-items:center;font-size:11px;font-weight:800;color:var(--text);text-shadow:0 1px 2px rgba(255,255,255,.4)}
-.is-dark .lvbar #lvtext{text-shadow:0 1px 2px rgba(0,0,0,.5)}
+/* 레벨 경험치 바 — 상단 화폐줄의 g/초 다음 빈 공간을 채움(인라인) */
+.lvbar{flex:1 1 130px;min-width:110px;height:28px;border-radius:999px;background:var(--bg2);border:1px solid var(--line);position:relative;overflow:hidden}
+.lvbar #lvfill{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0;transition:width .2s;opacity:.85}
+.lvbar #lvtext{position:absolute;inset:0;display:grid;place-items:center;font-size:11px;font-weight:800;color:var(--text);white-space:nowrap}
 
 /* 단계 진출 버튼 */
 .advance{margin-top:8px;background:#fff;color:var(--accent2);font-weight:900;padding:9px 16px;border-radius:11px;box-shadow:var(--sh);font-size:13.5px}
