@@ -5,7 +5,7 @@ import './style.css'
 import { buildGachaPool } from './data.js'
 import { defaultState, defaultRuntime, computeStats, incomePerSec, tick, applyOffline } from './engine.js'
 import { loadLocal, saveLocal, cloudLoad, cloudSave, pickNewer, CLOUD } from './state.js'
-import { initUI, render, applyTheme, toast, showOffline } from './ui.js'
+import { initUI, render, applyStage, toast, showOffline } from './ui.js'
 import { CHAR_ART, img } from './assets.js'
 import { signIn, signUp, signOut, getSession, emailToId, idToEmail, validateId, validatePw, authErrorKo } from './auth.js'
 
@@ -89,7 +89,7 @@ async function startGame(authUser) {
     onLogout: doLogout,
   }
   G.recompute()
-  applyTheme(state.theme)
+  applyStage(state.stage)
 
   // 오프라인 보상
   const off = applyOffline(state, G.stats, Date.now())

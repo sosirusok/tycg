@@ -7,7 +7,7 @@ export PATH="/c/Users/edu/AppData/Local/node-v24.16.0-win-x64:/c/Program Files/G
 cd "$(dirname "$0")"
 
 echo "==> Building..."
-npm run build
+node node_modules/vite/bin/vite.js build
 
 echo "==> Publishing dist/ to gh-pages..."
 touch dist/.nojekyll

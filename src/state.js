@@ -10,13 +10,27 @@ export const CLOUD = { available: true, lastError: null }
 export function migrate(raw) {
   const base = defaultState()
   if (!raw || typeof raw !== 'object') return base
-  const s = { ...base, ...raw }
-  s.generators = Array.isArray(raw.generators) && raw.generators.length === base.generators.length
-    ? raw.generators.map(n => Number(n) || 0) : base.generators
-  s.skills = (raw.skills && typeof raw.skills === 'object') ? raw.skills : {}
-  s.gacha = (raw.gacha && typeof raw.gacha === 'object') ? raw.gacha : {}
-  s.stats = { ...base.stats, ...(raw.stats || {}) }
-  return s
+  if (raw.version === 2) {
+    const s = { ...base, ...raw }
+    // foods: 알려진 음식만 복사
+    s.foods = { ...base.foods }
+    if (raw.foods && typeof raw.foods === 'object') {
+      for (const id in base.foods) {
+        const f = raw.foods[id]
+        if (f && typeof f === 'object') s.foods[id] = { equip: Number(f.equip) || 0, prog: Number(f.prog) || 0, ready: !!f.ready }
+      }
+    }
+    s.skills = (raw.skills && typeof raw.skills === 'object') ? raw.skills : {}
+    s.gacha = (raw.gacha && typeof raw.gacha === 'object') ? raw.gacha : {}
+    s.stats = { ...base.stats, ...(raw.stats || {}) }
+    return s
+  }
+  // 구버전 저장 → 가챠/별/큐브 정도만 계승하고 진행은 초기화
+  if (raw.gacha && typeof raw.gacha === 'object') base.gacha = raw.gacha
+  if (typeof raw.stars === 'number') base.stars = raw.stars
+  if (typeof raw.cubes === 'number') base.cubes = raw.cubes
+  if (typeof raw.pulls === 'number') base.pulls = raw.pulls
+  return base
 }
 
 const keyFor = userId => `sinwoo_save_${userId || 'guest'}`
