@@ -32,7 +32,7 @@ function food(s, id) { let f = s.foods[id]; if (!f) f = s.foods[id] = { equip: 0
 export function computeStats(state) {
   let allKcal = 0, allTime = 0, allEquip = 0, fameGainB = 0, offEff = 0, offHours = 0, xpMult = 0, cubeMult = 0, petSlot = 0
   let milestonePow = 0, tapAdd = 0, luckAdd = 0
-  const sKcal = {}, sTime = {}, sAuto = new Set(), fBoost = new Set()
+  const sKcal = {}, sTime = {}, sEquip = {}, sAuto = new Set(), fBoost = new Set()
   for (const node of SKILLS.nodes) {
     const lv = state.skills[node.id] || 0; if (lv <= 0 || !node.eff) continue
     const e = node.eff, amt = (e.per || 0) * lv
@@ -50,6 +50,7 @@ export function computeStats(state) {
       case 'petSlot': petSlot += lv; break
       case 'sKcal': sKcal[e.stage] = (sKcal[e.stage] || 0) + amt; break
       case 'sTime': sTime[e.stage] = (sTime[e.stage] || 0) + amt; break
+      case 'sEquip': sEquip[e.stage] = (sEquip[e.stage] || 0) + amt; break
       case 'sAuto': sAuto.add(e.stage); break
       case 'fBoost': fBoost.add(e.food); break
     }
@@ -82,7 +83,7 @@ export function computeStats(state) {
   for (const key of (state.petEquip || [])) { const { grade, star } = parsePetKey(key); const ps = petStats(grade, star); petIncome += ps.income || 0; petTime += ps.time || 0; petOffline += ps.offline || 0; petCube += ps.cube || 0; petFame += ps.fame || 0; petEquip += ps.equip || 0 }
 
   return {
-    allKcal, allTime, allEquip, sKcal, sTime, sAuto, fBoost, fameAutoStage,
+    allKcal, allTime, allEquip, sKcal, sTime, sEquip, sAuto, fBoost, fameAutoStage,
     fameKcal, fameTime, fameEquip, fameStartMult: Math.pow(4, fameStartLv),
     kcalGlobalMult: (1 + fameKcal + g.kcal / 100 + collection) * (1 + petIncome),
     equipGlobal: 1 + allEquip + fameEquip + g.equip / 100 + petEquip,
@@ -101,7 +102,7 @@ export function foodCalc(state, stats, f) {
   const kcalMult = (1 + kcalAdd) * stats.kcalGlobalMult
   const timeFrac = Math.max(0.04, 1 - (stats.timeGlobal + (stats.sTime[f.stage] || 0)))
   const cycle = Math.max(BAL.minCycleTime, f.time * timeFrac)
-  const perCycle = equip * f.kcal * equipMilestoneMult(equip, stats.milestonePow) * stats.equipGlobal * kcalMult
+  const perCycle = equip * f.kcal * equipMilestoneMult(equip, stats.milestonePow) * (stats.equipGlobal + (stats.sEquip[f.stage] || 0)) * kcalMult
   const auto = stats.sAuto.has(f.stage) || stats.fBoost.has(f.id) || stats.fameAutoStage.has(f.stage)
   return { equip, cycle, perCycle, perSec: cycle > 0 ? perCycle / cycle : 0, auto }
 }

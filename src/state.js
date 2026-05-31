@@ -73,11 +73,36 @@ function handleCloudError(e) {
   const msg = (e && (e.message || e.error_description || e.code)) || String(e)
   CLOUD.lastError = msg
   // 테이블 없음 / 권한 등 → 클라우드 비활성, 로컬로만 동작
-  if (/relation .*saves.* does not exist/i.test(msg) || /could not find the table/i.test(msg) ||
-      /schema cache/i.test(msg) || /404/.test(msg) || /42P01/.test(msg)) {
+  if (/does not exist/i.test(msg) || /could not find the table/i.test(msg) ||
+      /schema cache/i.test(msg) || /\b404\b/.test(msg) || /42P01/.test(msg) || /PGRST205/.test(msg)) {
     CLOUD.available = false
   }
   console.warn('[cloud]', msg)
+}
+
+// ---- 공유 저장(모두 같은 진행상황) : Supabase shared_save 테이블의 단일 행 ----
+const SHARED_ID = 1
+export async function sharedLoad() {
+  try {
+    const { data, error } = await supabase.from('shared_save').select('data, updated_at').eq('id', SHARED_ID).maybeSingle()
+    if (error) { handleCloudError(error); return null }
+    CLOUD.available = true
+    return data && data.data ? { state: migrate(data.data), updatedAt: data.updated_at } : null
+  } catch (e) { handleCloudError(e); return null }
+}
+let lastShared = 0
+export async function sharedSave(state, force = false) {
+  if (!CLOUD.available) return false   // 테이블 없으면 도배 방지(다음 로드 때 재시도)
+  const now = Date.now()
+  if (!force && now - lastShared < 12000) return false
+  lastShared = now
+  try {
+    const { error } = await supabase.from('shared_save')
+      .upsert({ id: SHARED_ID, data: state, updated_at: new Date().toISOString() }, { onConflict: 'id' })
+    if (error) { handleCloudError(error); return false }
+    CLOUD.available = true
+    return true
+  } catch (e) { handleCloudError(e); return false }
 }
 
 // 로컬/클라우드 중 더 최신(lastSeen 기준) 선택

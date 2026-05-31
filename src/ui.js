@@ -47,8 +47,7 @@ function buildShell() {
         <div class="lvbar" id="lvbar" title="레벨 경험치"><div id="lvfill"></div><span id="lvtext"></span></div>
       </div>
       <div class="topright">
-        <button class="hero" id="hero" title="신우 (탭)">${img(CHAR_ART.s1, 'hero-art', 'id="hero-art"')}<span class="hero-lv">Lv.<b id="hero-lvl">0</b><span id="hero-sp" class="hero-sp"></span></span></button>
-        <button class="ghost sm" id="btn-logout">로그아웃</button>
+        <button class="hero" id="hero" title="신우 (탭하면 약간의 칼로리)">${img(CHAR_ART.s1, 'hero-art', 'id="hero-art"')}<span class="hero-lv">Lv.<b id="hero-lvl">0</b><span id="hero-sp" class="hero-sp"></span></span></button>
       </div>
     </header>
     <nav class="tabs" id="tabs">${TABS.map(([id, n]) => `<button class="tab" data-tab="${id}">${n}</button>`).join('')}</nav>
@@ -59,7 +58,6 @@ function buildShell() {
   H.heroArt = $('#hero-art'); H.heroLvl = $('#hero-lvl'); H.heroSp = $('#hero-sp'); H.curHero = 's1'
   H.lvfill = $('#lvfill'); H.lvtext = $('#lvtext'); H.tabbody = $('#tabbody')
   $('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) switchTab(b.dataset.tab) })
-  $('#btn-logout').addEventListener('click', () => G.onLogout && G.onLogout())
   $('#hero').addEventListener('click', e => { const r = tap(G.state, G.stats, G.income); G.recompute(); spawnFloat(e.clientX, e.clientY, '+' + fmt(r.gain), 'tap') })
   H.tabbody.addEventListener('click', onBodyClick)
 }
