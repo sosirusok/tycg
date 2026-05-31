@@ -164,8 +164,8 @@ function buildSkill() {
   for (const n of nodes) for (const d of (n.deps || [])) { const p = SKILLS.byId[d.node]; if (p) lines += `<line x1="${X(p)}" y1="${Y(p)}" x2="${X(n)}" y2="${Y(n)}"/>` }
   const nodeHTML = nodes.map(n => {
     const isFood = n.eff && n.eff.k === 'fBoost'
-    const ic = isFood ? img(FOOD_ART[FOOD_BY_ID[n.eff.food].art], 'sk-art') : `<span class="sk-glyph" style="background:${branchColor(n)}">${glyph(n)}</span>`
-    return `<button class="sknode" data-act="sk" data-id="${n.id}" style="left:${X(n)}px;top:${Y(n)}px">${ic}<span class="sk-lv" data-r="lv"></span></button>`
+    const ic = isFood ? img(FOOD_ART[FOOD_BY_ID[n.eff.food].art], 'sk-art') : `<span class="sk-dot" style="background:${branchColor(n)}"></span>`
+    return `<button class="sknode" data-act="sk" data-id="${n.id}" style="left:${X(n)}px;top:${Y(n)}px">${ic}<span class="sk-name">${n.short || n.name}</span><span class="sk-lv" data-r="lv"></span></button>`
   }).join('')
   H.tabbody.innerHTML = `<div class="sk-bar">스킬 포인트 <b id="sk-sp">0</b> <span class="muted">· 노드를 누르면 설명·강화 창이 떠요</span></div>
     <div class="sk-scroll"><div class="sk-canvas" style="width:${W}px;height:${Hh}px"><svg class="sk-edges" width="${W}" height="${Hh}">${lines}</svg>${nodeHTML}</div></div>`

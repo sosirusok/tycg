@@ -6,7 +6,7 @@ import {
   RARITIES, RARITY_BY_ID, PET_GRADES, PET_GRADE_BY_ID, PET_STAR_MAX,
   foodBulkCost, foodMaxBuy, equipMilestoneMult, stageAdvanceCost,
   skillNodeCost, fameNodeCost, petStats, petKey, parsePetKey, petBuyPrice,
-  levelForRun, fameFromRun, buildGachaPool, dupeMult,
+  levelForRun, fameFromRun, buildGachaPool, dupeMult, spFromLevel,
 } from './data.js'
 
 export function defaultState() {
@@ -31,6 +31,7 @@ function food(s, id) { let f = s.foods[id]; if (!f) f = s.foods[id] = { equip: 0
 // ---- 파생 수치 -------------------------------------------------------------
 export function computeStats(state) {
   let allKcal = 0, allTime = 0, allEquip = 0, fameGainB = 0, offEff = 0, offHours = 0, xpMult = 0, cubeMult = 0, petSlot = 0
+  let milestonePow = 0, tapAdd = 0, luckAdd = 0
   const sKcal = {}, sTime = {}, sAuto = new Set(), fBoost = new Set()
   for (const node of SKILLS.nodes) {
     const lv = state.skills[node.id] || 0; if (lv <= 0 || !node.eff) continue
@@ -39,6 +40,9 @@ export function computeStats(state) {
       case 'allKcal': allKcal += amt; break
       case 'allTime': allTime += amt; break
       case 'allEquip': allEquip += amt; break
+      case 'mileBonus': milestonePow += amt; break
+      case 'tap': tapAdd += amt; break
+      case 'luck': luckAdd += amt; break
       case 'fameGain': fameGainB += amt; break
       case 'offline': offEff += 0.06 * lv; offHours += lv; break
       case 'xp': xpMult += amt; break
@@ -85,7 +89,8 @@ export function computeStats(state) {
     timeGlobal: allTime + fameTime + g.speed / 100 + petTime,
     offEff: BAL.offlineEffBase + offEff + petOffline, offHours: BAL.offlineCapHoursBase + offHours,
     xpMult, cubeMult: 1 + cubeMult + g.cube / 100 + petCube, fameGainB: fameGainB + g.fame / 100 + petFame,
-    luck: Math.min(0.45, g.luck / 100),
+    milestonePow, tapMult: 1 + tapAdd,
+    luck: Math.min(0.45, g.luck / 100 + luckAdd),
     petSlots: BAL.petSlotsBase + petSlot + famePetSlot, spBonus, distinct,
   }
 }
@@ -96,7 +101,7 @@ export function foodCalc(state, stats, f) {
   const kcalMult = (1 + kcalAdd) * stats.kcalGlobalMult
   const timeFrac = Math.max(0.04, 1 - (stats.timeGlobal + (stats.sTime[f.stage] || 0)))
   const cycle = Math.max(BAL.minCycleTime, f.time * timeFrac)
-  const perCycle = equip * f.kcal * equipMilestoneMult(equip) * stats.equipGlobal * kcalMult
+  const perCycle = equip * f.kcal * equipMilestoneMult(equip, stats.milestonePow) * stats.equipGlobal * kcalMult
   const auto = stats.sAuto.has(f.stage) || stats.fBoost.has(f.id) || stats.fameAutoStage.has(f.stage)
   return { equip, cycle, perCycle, perSec: cycle > 0 ? perCycle / cycle : 0, auto }
 }
@@ -119,7 +124,7 @@ export function canAdvance(state) { return state.stage + 1 < THEMES.length && st
 export function advanceStage(state) { if (!canAdvance(state)) return false; state.fat -= stageAdvanceCost(state.stage); state.stage++; if (state.stage > state.maxStage) state.maxStage = state.stage; state.cubes += 10; return true }
 
 // ---- 스킬 ------------------------------------------------------------------
-export function availablePoints(state, stats) { return state.level + (stats ? stats.spBonus : 0) - state.skillSpent }
+export function availablePoints(state, stats) { return spFromLevel(state.level) + (stats ? stats.spBonus : 0) - state.skillSpent }
 export function findSkill(id) { return SKILLS.byId[id] || null }
 export function isNodeUnlocked(state, node) {
   if (node.free) return true
@@ -194,7 +199,7 @@ export function pull(state, stats, n) {
   for (let i = 0; i < n; i++) { let rar = rollRarity(stats.luck); if (RARITIES.indexOf(rar) >= 2) rarePlus = true; if (n === 10 && i === n - 1 && !rarePlus) rar = RARITY_BY_ID.rare; const b = pool.byRarity[rar.id], it = b[Math.floor(Math.random() * b.length)]; const before = state.gacha[it.id] || 0; state.gacha[it.id] = before + 1; results.push({ item: it, isNew: before === 0, count: before + 1 }) }
   state.pulls += n; return results
 }
-export function tap(state, stats, income) { const gain = Math.max(1, income * 0.08) * stats.kcalGlobalMult; earn(state, gain); state.stats.taps++; return { gain } }
+export function tap(state, stats, income) { const gain = Math.max(1, income * 0.08) * stats.kcalGlobalMult * stats.tapMult; earn(state, gain); state.stats.taps++; return { gain } }
 export function earn(state, amt) { state.fat += amt; state.runFat += amt; state.lifetimeFat += amt }
 
 // ---- 틱 --------------------------------------------------------------------

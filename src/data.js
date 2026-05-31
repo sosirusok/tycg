@@ -108,48 +108,68 @@ function buildSkillTree() {
   const TAU = Math.PI * 2
   push({ id: 'root', name: '신우의 부엌', desc: '모든 강화의 시작점', x: 0, y: 0, max: 1, costBase: 0, grow: 1, eff: null, deps: [], free: true })
 
-  // 중앙 글로벌 라인 (안쪽 8방향)
+  // 중앙 글로벌 라인 (안쪽, 10방향) — 오프라인 제거 / 마일스톤·탭·행운 추가
   const G = [
     ['allKcal', '전체 칼로리', '모든 음식 칼로리 +7%', { k: 'allKcal', per: 0.07 }, 6, 2, 1.27],
     ['allTime', '전체 제작속도', '모든 음식 제작시간 -3%', { k: 'allTime', per: 0.03 }, 5, 3, 1.32],
     ['allEquip', '전체 장비효율', '모든 음식 장비효율 +5%', { k: 'allEquip', per: 0.05 }, 6, 3, 1.29],
-    ['fame', '명성가도', '환생 명성 +5%', { k: 'fameGain', per: 0.05 }, 8, 3, 1.3],
-    ['off', '신선 보관', '오프라인 효율+6%·상한+1h', { k: 'offline', per: 1 }, 6, 3, 1.3],
+    ['mile', '마일스톤 강화', '장비 ×2 보너스 +12%', { k: 'mileBonus', per: 0.12 }, 5, 4, 1.34],
+    ['tap', '먹이기 강화', '신우 탭 수익 +25%', { k: 'tap', per: 0.25 }, 6, 2, 1.30],
+    ['fame', '명성 가도', '환생 명성 +5%', { k: 'fameGain', per: 0.05 }, 8, 3, 1.30],
     ['xp', '경영 수업', '경험치 +8%', { k: 'xp', per: 0.08 }, 8, 2, 1.27],
     ['cube', '큐브 채굴', '큐브 +10%', { k: 'cube', per: 0.10 }, 6, 3, 1.32],
-    ['petslot', '펫 친화', '펫 슬롯 +1', { k: 'petSlot', per: 1 }, 4, 12, 1.8],
+    ['luck', '행운의 미식', '가챠 행운 +5%', { k: 'luck', per: 0.05 }, 6, 3, 1.32],
+    ['petslot', '펫 친화', '펫 슬롯 +1', { k: 'petSlot', per: 1 }, 4, 12, 1.80],
   ]
   G.forEach((g, gi) => {
-    const ang = (gi / 8) * TAU; let prev = 'root'
+    const ang = (gi / G.length) * TAU; let prev = 'root'
     for (let t = 0; t < g[4]; t++) {
-      const id = `g_${g[0]}_${t}`, r = 170 + t * 120
-      push({ id, name: g[1] + (t ? ` ${t + 1}` : ''), desc: g[2], x: Math.round(Math.cos(ang) * r), y: Math.round(Math.sin(ang) * r), max: 1 + Math.floor((g[4] - t)), costBase: Math.ceil(g[5] * Math.pow(1.5, t)), grow: g[6], eff: g[3], deps: [{ node: prev, lvl: t === 0 ? 0 : 1 }] })
+      const id = `g_${g[0]}_${t}`, r = 210 + t * 124
+      push({ id, name: g[1] + (t ? ` ${t + 1}` : ''), short: g[1], desc: g[2], x: Math.round(Math.cos(ang) * r), y: Math.round(Math.sin(ang) * r), max: 1 + Math.floor((g[4] - t)), costBase: Math.ceil(g[5] * Math.pow(1.5, t)), grow: g[6], eff: g[3], deps: [{ node: prev, lvl: t === 0 ? 0 : 1 }] })
       prev = id
     }
   })
 
-  // 테마별 가지 (9개) — 바깥쪽으로
+  // 테마별 가지 (9개) — 바깥쪽으로, 간격 넓게(겹침 방지)
   THEMES.forEach((th, s) => {
     const ang = (s / THEMES.length) * TAU - Math.PI / 2
-    const ux = Math.cos(ang), uy = Math.sin(ang), base = 560
-    const at = (k, off) => ({ x: Math.round(ux * (base + k * 92) - uy * off), y: Math.round(uy * (base + k * 92) + ux * off) })
+    const ux = Math.cos(ang), uy = Math.sin(ang), vx = -uy, vy = ux
+    const R0 = 1200, S = 130
+    const P = (rad, lat) => ({ x: Math.round(ux * rad + vx * lat), y: Math.round(uy * rad + vy * lat) })
+    const shortT = th.name.split(' ')[0]
     const gate = `s_gate_${s}`
-    push({ id: gate, name: `${th.name}`, desc: `${th.name} 특화 가지`, ...at(0, 0), max: 1, costBase: 3 + s * 2, grow: 1, eff: { k: 'sKcal', stage: s, per: 0.10 }, deps: [{ node: 'root', lvl: 0 }], cond: { stage: s }, branch: s, gate: true })
+    push({ id: gate, name: `${th.name} 특화`, short: `${shortT} 특화`, desc: `${th.name} 가지 입구`, ...P(R0, 0), max: 1, costBase: 3 + s * 2, grow: 1, eff: { k: 'sKcal', stage: s, per: 0.10 }, deps: [{ node: 'root', lvl: 0 }], cond: { stage: s }, branch: s, gate: true })
     let prev = gate
-    for (let t = 0; t < 5; t++) { const id = `s_kcal_${s}_${t}`; push({ id, name: `${th.name} 칼로리 ${t + 2}`, desc: `${th.name} 음식 칼로리 +12%`, ...at(1 + t, -30), max: 4, costBase: 2 + s * 2 + t, grow: 1.3, eff: { k: 'sKcal', stage: s, per: 0.12 }, deps: [{ node: prev, lvl: 1 }], branch: s }); prev = id }
+    for (let t = 0; t < 5; t++) { const id = `s_kcal_${s}_${t}`; push({ id, name: `${th.name} 칼로리 ${t + 2}`, short: `${shortT} 칼로리`, desc: `${th.name} 음식 칼로리 +12%`, ...P(R0 + (t + 1) * S, -1.55 * S), max: 4, costBase: 2 + s * 2 + t, grow: 1.30, eff: { k: 'sKcal', stage: s, per: 0.12 }, deps: [{ node: prev, lvl: 1 }], branch: s }); prev = id }
     let prev2 = gate
-    for (let t = 0; t < 4; t++) { const id = `s_time_${s}_${t}`; push({ id, name: `${th.name} 속도 ${t + 1}`, desc: `${th.name} 제작시간 -5%`, ...at(1 + t, 34), max: 3, costBase: 3 + s * 2 + t, grow: 1.34, eff: { k: 'sTime', stage: s, per: 0.05 }, deps: [{ node: prev2, lvl: 1 }], branch: s }); prev2 = id }
-    push({ id: `s_auto_${s}`, name: `${th.name} 자동화`, desc: `${th.name} 모든 음식 자동 획득`, ...at(5, 36), max: 1, costBase: 14 + s * 4, grow: 1, eff: { k: 'sAuto', stage: s, flag: true }, deps: [{ node: prev2, lvl: 1 }], branch: s })
-    // 음식별 개별 자동 노드 (조기 자동화)
+    for (let t = 0; t < 4; t++) { const id = `s_time_${s}_${t}`; push({ id, name: `${th.name} 속도 ${t + 1}`, short: `${shortT} 속도`, desc: `${th.name} 제작시간 -5%`, ...P(R0 + (t + 1) * S, 1.55 * S), max: 3, costBase: 3 + s * 2 + t, grow: 1.34, eff: { k: 'sTime', stage: s, per: 0.05 }, deps: [{ node: prev2, lvl: 1 }], branch: s }); prev2 = id }
+    push({ id: `s_auto_${s}`, name: `${th.name} 자동화`, short: `${shortT} 자동`, desc: `${th.name} 모든 음식 자동 획득`, ...P(R0 + 6 * S, 0), max: 1, costBase: 14 + s * 4, grow: 1, eff: { k: 'sAuto', stage: s, flag: true }, deps: [{ node: prev2, lvl: 1 }], branch: s })
+    // 음식별 개별 자동 노드 (조기 자동화) — 바깥에 2열로 넓게
     STAGE_FOODS[s].forEach((f, fi) => {
-      push({ id: `f_${f.id}`, name: `${f.name} 자동`, desc: `${f.name} 자동 획득 + 칼로리 +20%`, ...at(2 + (fi % 4), 70 + Math.floor(fi / 4) * 36 + (fi % 2) * 14), max: 1, costBase: 4 + s * 2, grow: 1, eff: { k: 'fBoost', food: f.id }, deps: [{ node: gate, lvl: 1 }], cond: { foodLevel: { food: f.id, equip: 1 } }, branch: s })
+      const row = Math.floor(fi / 2), col = fi % 2
+      push({ id: `f_${f.id}`, name: `${f.name} 자동`, short: f.name, desc: `${f.name} 자동 획득 + 칼로리 +20%`, ...P(R0 + (7.6 + row) * S, (col ? 1 : -1) * S), max: 1, costBase: 4 + s * 2, grow: 1, eff: { k: 'fBoost', food: f.id }, deps: [{ node: gate, lvl: 1 }], cond: { foodLevel: { food: f.id, equip: 1 } }, branch: s })
     })
   })
   return { nodes, byId: Object.fromEntries(nodes.map(n => [n.id, n])) }
 }
 export const SKILLS = buildSkillTree()
 export const SKILL_COUNT = SKILLS.nodes.length
-export function skillNodeCost(node, lvl) { return Math.ceil(node.costBase * Math.pow(node.grow, lvl)) }
+
+// 모든 스킬 만렙 총합 ≈ SKILL_TARGET 이 되도록 가격 계수를 자동 보정(개당 1~SKILL_CAP)
+const SKILL_TARGET = 25500, SKILL_CAP = 5000
+function _skillTotalAt(f) {
+  let t = 0
+  for (const n of SKILLS.nodes) { if (n.free || !n.max) continue; for (let l = 0; l < n.max; l++) t += Math.min(SKILL_CAP, Math.max(1, Math.ceil(n.costBase * f * Math.pow(n.grow, l)))) }
+  return t
+}
+let _lo = 0.0001, _hi = 3000
+for (let i = 0; i < 80; i++) { const m = (_lo + _hi) / 2; if (_skillTotalAt(m) < SKILL_TARGET) _lo = m; else _hi = m }
+export const SKILL_COST_FACTOR = (_lo + _hi) / 2
+export const SKILL_TOTAL = _skillTotalAt(SKILL_COST_FACTOR)
+export function skillNodeCost(node, lvl) { return Math.min(SKILL_CAP, Math.max(1, Math.ceil(node.costBase * SKILL_COST_FACTOR * Math.pow(node.grow, lvl)))) }
+
+// 레벨당 SP: n레벨 도달 시 누적 n(n+1)/2 (n레벨에서 n개 지급)
+export function spFromLevel(level) { return level * (level + 1) / 2 }
 
 // ---- 명성 상점 (영구) ------------------------------------------------------
 export const FAME_SHOP = [
