@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <defs>
+    <radialGradient id="g4" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#C79BF0"/>
+      <stop offset="100%" stop-color="#8E5BD8"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="48" cy="86" rx="19" ry="5" fill="#000" opacity="0.12"/>
+  <!-- wings -->
+  <path d="M30 48c-12-6-18-2-21 4 6-1 9 1 12 5 5-1 8-3 11-4z" fill="#A06FE0"/>
+  <path d="M66 48c12-6 18-2 21 4-6-1-9 1-12 5-5-1-8-3-11-4z" fill="#A06FE0"/>
+  <path d="M31 49c-7-3-11-2-14 1 4 0 6 1 8 4z" fill="#7E4FC8" opacity="0.6"/>
+  <path d="M65 49c7-3 11-2 14 1-4 0-6 1-8 4z" fill="#7E4FC8" opacity="0.6"/>
+  <!-- tail -->
+  <path d="M64 74c9 2 15-3 15-11-3 4-8 5-13 5z" fill="#8E5BD8"/>
+  <path d="M76 64l8-3-5 7z" fill="#C79BF0"/>
+  <!-- body -->
+  <path d="M31 70c-4-4-7-10-7-16 0-13 10-22 24-22s24 9 24 22c0 6-3 12-7 16z" fill="url(#g4)"/>
+  <!-- belly -->
+  <ellipse cx="48" cy="62" rx="11" ry="9" fill="#E4D2F7" opacity="0.85"/>
+  <!-- head -->
+  <circle cx="48" cy="46" r="19" fill="url(#g4)"/>
+  <!-- horns -->
+  <path d="M39 30l-2-8 6 5z" fill="#E4D2F7"/>
+  <path d="M57 30l2-8-6 5z" fill="#E4D2F7"/>
+  <!-- snout -->
+  <ellipse cx="48" cy="52" rx="9" ry="6" fill="#B98DEC"/>
+  <circle cx="44.5" cy="51" r="1.1" fill="#5B463A"/>
+  <circle cx="51.5" cy="51" r="1.1" fill="#5B463A"/>
+  <!-- eyes -->
+  <circle cx="42" cy="45" r="3.4" fill="#5B463A"/>
+  <circle cx="54" cy="45" r="3.4" fill="#5B463A"/>
+  <circle cx="43.3" cy="43.6" r="1.1" fill="#fff"/>
+  <circle cx="55.3" cy="43.6" r="1.1" fill="#fff"/>
+  <!-- smile -->
+  <path d="M44 55q4 3 8 0" fill="none" stroke="#5B463A" stroke-width="1.4" stroke-linecap="round"/>
+  <!-- cheeks -->
+  <circle cx="36" cy="50" r="2.4" fill="#FF9EC6" opacity="0.5"/>
+  <circle cx="60" cy="50" r="2.4" fill="#FF9EC6" opacity="0.5"/>
+</svg>

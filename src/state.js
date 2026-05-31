@@ -10,24 +10,20 @@ export const CLOUD = { available: true, lastError: null }
 export function migrate(raw) {
   const base = defaultState()
   if (!raw || typeof raw !== 'object') return base
-  if (raw.version === 2) {
+  if (raw.version === 4) {
     const s = { ...base, ...raw }
-    // foods: 알려진 음식만 복사
     s.foods = { ...base.foods }
-    if (raw.foods && typeof raw.foods === 'object') {
-      for (const id in base.foods) {
-        const f = raw.foods[id]
-        if (f && typeof f === 'object') s.foods[id] = { equip: Number(f.equip) || 0, prog: Number(f.prog) || 0, ready: !!f.ready }
-      }
-    }
+    if (raw.foods && typeof raw.foods === 'object') for (const id in base.foods) { const f = raw.foods[id]; if (f && typeof f === 'object') s.foods[id] = { equip: Number(f.equip) || 0, prog: Number(f.prog) || 0, ready: !!f.ready } }
     s.skills = (raw.skills && typeof raw.skills === 'object') ? raw.skills : {}
+    s.fameBuys = (raw.fameBuys && typeof raw.fameBuys === 'object') ? raw.fameBuys : {}
+    s.pets = (raw.pets && typeof raw.pets === 'object') ? raw.pets : {}
+    s.petEquip = Array.isArray(raw.petEquip) ? raw.petEquip : []
     s.gacha = (raw.gacha && typeof raw.gacha === 'object') ? raw.gacha : {}
     s.stats = { ...base.stats, ...(raw.stats || {}) }
     return s
   }
-  // 구버전 저장 → 가챠/별/큐브 정도만 계승하고 진행은 초기화
+  // 구버전 → 가챠/큐브만 계승, 진행 초기화
   if (raw.gacha && typeof raw.gacha === 'object') base.gacha = raw.gacha
-  if (typeof raw.stars === 'number') base.stars = raw.stars
   if (typeof raw.cubes === 'number') base.cubes = raw.cubes
   if (typeof raw.pulls === 'number') base.pulls = raw.pulls
   return base

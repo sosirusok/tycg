@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <ellipse cx="48" cy="85" rx="20" ry="5" fill="#000" opacity="0.12"/>
+  <!-- fluffy tail with white tip -->
+  <path d="M67 72c10 0 16-8 14-17-3 7-9 9-15 11z" fill="#3F8FE0"/>
+  <path d="M79 56c2 5 1 11-4 14 3-4 3-9 4-14z" fill="#EaF3FF"/>
+  <!-- ears -->
+  <path d="M31 32l-4 13 14-3z" fill="#357FD0"/>
+  <path d="M65 32l4 13-14-3z" fill="#357FD0"/>
+  <path d="M33 36l-2 7 7-2z" fill="#EaF3FF"/>
+  <path d="M63 36l2 7-7-2z" fill="#EaF3FF"/>
+  <!-- body -->
+  <path d="M31 69c-4-3-7-9-7-15 0-13 10-22 24-22s24 9 24 22c0 6-3 12-7 15z" fill="#4A97E6"/>
+  <!-- white chest/bib -->
+  <path d="M40 70c-3-4-4-9-4-13 0-6 5-10 12-10s12 4 12 10c0 4-1 9-4 13z" fill="#EaF3FF" opacity="0.9"/>
+  <!-- head -->
+  <circle cx="48" cy="49" r="20" fill="#4A97E6"/>
+  <!-- snout -->
+  <path d="M40 52c0 6 4 10 8 10s8-4 8-10z" fill="#EaF3FF"/>
+  <ellipse cx="41" cy="43" rx="6" ry="4" fill="#6FB0EE" opacity="0.7"/>
+  <!-- tiny crown (fancier) -->
+  <path d="M40 31l3 5 5-6 5 6 3-5 1 7H39z" fill="#FFD66B"/>
+  <circle cx="48" cy="30" r="1.4" fill="#FF8FA3"/>
+  <!-- eyes -->
+  <circle cx="42" cy="49" r="3.2" fill="#5B463A"/>
+  <circle cx="54" cy="49" r="3.2" fill="#5B463A"/>
+  <circle cx="43.2" cy="47.8" r="1" fill="#fff"/>
+  <circle cx="55.2" cy="47.8" r="1" fill="#fff"/>
+  <!-- nose + mouth -->
+  <path d="M46.5 54h3l-1.5 2z" fill="#5B463A"/>
+  <path d="M48 56q-3 3-5 1M48 56q3 3 5 1" fill="none" stroke="#5B463A" stroke-width="1.3" stroke-linecap="round"/>
+  <!-- cheeks -->
+  <circle cx="36" cy="55" r="2.4" fill="#FF8FA3" opacity="0.55"/>
+  <circle cx="60" cy="55" r="2.4" fill="#FF8FA3" opacity="0.55"/>
+</svg>

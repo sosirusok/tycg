@@ -7,6 +7,7 @@ const _food = import.meta.glob('./assets/food/*.svg', { eager: true, query: '?ur
 const _char = import.meta.glob('./assets/char/*.svg', { eager: true, query: '?url', import: 'default' })
 const _ui   = import.meta.glob('./assets/ui/*.svg',   { eager: true, query: '?url', import: 'default' })
 const _bg   = import.meta.glob('./assets/bg/*.svg',   { eager: true, query: '?url', import: 'default' })
+const _pet  = import.meta.glob('./assets/pet/*.svg',  { eager: true, query: '?url', import: 'default' })
 
 const stem = p => p.split('/').pop().replace('.svg', '')
 const toMap = glob => { const m = {}; for (const p in glob) m[stem(p)] = glob[p]; return m }
@@ -16,6 +17,7 @@ export const FOOD_ART = toMap(_food)
 export const CHAR_ART = toMap(_char)
 export const UI_ART   = toMap(_ui)
 export const BG_ART   = toMap(_bg)
+export const PET_ART  = toMap(_pet)
 
 // <img> 태그(없으면 폴백 span). cls 로 크기/모양 제어.
 export function img(url, cls = '', extra = '') {

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="cSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EAF3FF"/>
+      <stop offset="0.5" stop-color="#FFF7EC"/>
+      <stop offset="1" stop-color="#FBE6C7"/>
+    </linearGradient>
+    <linearGradient id="cTower" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#BBD6F2"/>
+      <stop offset="1" stop-color="#7FA8D6"/>
+    </linearGradient>
+    <linearGradient id="cTowerB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A9C8EC"/>
+      <stop offset="1" stop-color="#6E9BCB"/>
+    </linearGradient>
+    <linearGradient id="cFloor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F6E8CF"/>
+      <stop offset="1" stop-color="#E7CDA0"/>
+    </linearGradient>
+    <linearGradient id="cGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE7A8"/>
+      <stop offset="1" stop-color="#F2C062"/>
+    </linearGradient>
+    <radialGradient id="cGlow" cx="0.5" cy="0.32" r="0.6">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#cSky)"/>
+  <ellipse cx="800" cy="300" rx="760" ry="360" fill="url(#cGlow)"/>
+
+  <!-- distant skyline of glass towers seen through big windows -->
+  <g opacity="0.92">
+    <rect x="120" y="180" width="150" height="430" rx="14" fill="url(#cTower)"/>
+    <rect x="300" y="120" width="120" height="490" rx="14" fill="url(#cTowerB)"/>
+    <rect x="450" y="220" width="100" height="390" rx="12" fill="url(#cTower)"/>
+    <rect x="1050" y="150" width="135" height="460" rx="14" fill="url(#cTowerB)"/>
+    <rect x="1210" y="210" width="120" height="400" rx="12" fill="url(#cTower)"/>
+    <rect x="1360" y="120" width="150" height="490" rx="14" fill="url(#cTowerB)"/>
+  </g>
+  <!-- tower windows -->
+  <g fill="#FFFFFF" opacity="0.45">
+    <rect x="140" y="210" width="110" height="14" rx="4"/>
+    <rect x="140" y="250" width="110" height="14" rx="4"/>
+    <rect x="140" y="290" width="110" height="14" rx="4"/>
+    <rect x="140" y="330" width="110" height="14" rx="4"/>
+    <rect x="320" y="160" width="80" height="14" rx="4"/>
+    <rect x="320" y="200" width="80" height="14" rx="4"/>
+    <rect x="320" y="240" width="80" height="14" rx="4"/>
+    <rect x="1070" y="190" width="95" height="14" rx="4"/>
+    <rect x="1070" y="230" width="95" height="14" rx="4"/>
+    <rect x="1070" y="270" width="95" height="14" rx="4"/>
+    <rect x="1380" y="160" width="110" height="14" rx="4"/>
+    <rect x="1380" y="200" width="110" height="14" rx="4"/>
+    <rect x="1380" y="240" width="110" height="14" rx="4"/>
+  </g>
+
+  <!-- big lobby window frames (foreground architecture) -->
+  <g stroke="#FFFFFF" stroke-width="10" opacity="0.7" fill="none">
+    <rect x="60" y="80" width="1480" height="560" rx="8"/>
+    <line x1="560" y1="80" x2="560" y2="640"/>
+    <line x1="1040" y1="80" x2="1040" y2="640"/>
+    <line x1="60" y1="350" x2="1540" y2="350"/>
+  </g>
+
+  <!-- gold brand emblem (abstract food-brand signage, no text) -->
+  <g transform="translate(800 230)">
+    <circle r="78" fill="url(#cGold)"/>
+    <circle r="78" fill="none" stroke="#FFFFFF" stroke-width="6" opacity="0.8"/>
+    <circle r="40" fill="#FFFFFF" opacity="0.85"/>
+    <circle r="18" fill="#F2994A"/>
+    <g fill="#5B463A" opacity="0.55">
+      <rect x="-4" y="-66" width="8" height="20" rx="4"/>
+      <rect x="-4" y="46" width="8" height="20" rx="4"/>
+    </g>
+  </g>
+  <rect x="688" y="318" width="224" height="14" rx="7" fill="url(#cGold)" opacity="0.9"/>
+
+  <!-- polished lobby floor -->
+  <rect x="0" y="600" width="1600" height="300" fill="url(#cFloor)"/>
+  <path d="M0 600 L1600 600 L1600 650 L0 650 Z" fill="#FFFFFF" opacity="0.35"/>
+  <!-- floor reflections / perspective lines -->
+  <g stroke="#FFFFFF" stroke-width="4" opacity="0.3">
+    <line x1="800" y1="640" x2="320" y2="900"/>
+    <line x1="800" y1="640" x2="1280" y2="900"/>
+    <line x1="800" y1="640" x2="640" y2="900"/>
+    <line x1="800" y1="640" x2="960" y2="900"/>
+  </g>
+  <!-- soft reflected glow of emblem on floor -->
+  <ellipse cx="800" cy="690" rx="150" ry="26" fill="#F2C062" opacity="0.3"/>
+
+  <!-- reception / display plinths flanking center -->
+  <g>
+    <ellipse cx="250" cy="720" rx="120" ry="22" fill="#5B463A" opacity="0.12"/>
+    <rect x="170" y="560" width="160" height="160" rx="18" fill="#FFFFFF" opacity="0.92"/>
+    <rect x="170" y="560" width="160" height="44" rx="18" fill="url(#cGold)" opacity="0.85"/>
+    <circle cx="250" cy="540" r="34" fill="url(#cTower)"/>
+    <circle cx="250" cy="540" r="34" fill="none" stroke="#FFFFFF" stroke-width="4" opacity="0.7"/>
+  </g>
+  <g>
+    <ellipse cx="1350" cy="720" rx="120" ry="22" fill="#5B463A" opacity="0.12"/>
+    <rect x="1270" y="560" width="160" height="160" rx="18" fill="#FFFFFF" opacity="0.92"/>
+    <rect x="1270" y="560" width="160" height="44" rx="18" fill="url(#cGold)" opacity="0.85"/>
+    <circle cx="1350" cy="540" r="34" fill="url(#cTowerB)"/>
+    <circle cx="1350" cy="540" r="34" fill="none" stroke="#FFFFFF" stroke-width="4" opacity="0.7"/>
+  </g>
+</svg>
