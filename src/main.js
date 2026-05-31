@@ -6,6 +6,7 @@ import { buildGachaPool } from './data.js'
 import { defaultState, defaultRuntime, computeStats, incomePerSec, tick, applyOffline } from './engine.js'
 import { loadLocal, saveLocal, cloudLoad, cloudSave, pickNewer, CLOUD } from './state.js'
 import { initUI, render, applyTheme, toast, showOffline } from './ui.js'
+import { CHAR_ART, img } from './assets.js'
 import { signIn, signUp, signOut, getSession, emailToId, idToEmail, validateId, validatePw, authErrorKo } from './auth.js'
 
 const app = document.querySelector('#app')
@@ -32,7 +33,7 @@ function renderAuth(prefillMsg) {
   app.innerHTML = `
   <div class="auth-bg">
     <div class="auth-card">
-      <div class="auth-logo">🍳</div>
+      <div class="auth-logo">${img(CHAR_ART.s5, 'auth-char')}</div>
       <h1>신우 키우기</h1>
       <p class="auth-sub">아이디로 가입하면 어느 기기에서나 이어서 플레이!</p>
       <input id="a-id" placeholder="아이디 (2~20자)" autocomplete="username" />

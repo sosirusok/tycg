@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="nightsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3358"/>
+      <stop offset="0.5" stop-color="#564a72"/>
+      <stop offset="1" stop-color="#433a5e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0" stop-color="#7e6f9e" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#7e6f9e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#nightsky)"/>
+  <!-- soft center lightening -->
+  <rect width="1600" height="1000" fill="url(#glow)"/>
+  <!-- warm glowing lantern dots -->
+  <g fill="#ffd9a0">
+    <circle cx="230" cy="200" r="46" opacity="0.32"/>
+    <circle cx="230" cy="200" r="18" opacity="0.45"/>
+    <circle cx="500" cy="150" r="38" opacity="0.28"/>
+    <circle cx="500" cy="150" r="15" opacity="0.42"/>
+    <circle cx="1120" cy="170" r="42" opacity="0.3"/>
+    <circle cx="1120" cy="170" r="16" opacity="0.42"/>
+    <circle cx="1380" cy="230" r="50" opacity="0.3"/>
+    <circle cx="1380" cy="230" r="20" opacity="0.45"/>
+    <circle cx="150" cy="780" r="44" opacity="0.28"/>
+    <circle cx="150" cy="780" r="17" opacity="0.4"/>
+    <circle cx="1450" cy="800" r="48" opacity="0.3"/>
+    <circle cx="1450" cy="800" r="19" opacity="0.42"/>
+  </g>
+  <!-- faint warm bunting/stall line -->
+  <path d="M120 360 Q800 300 1480 360" stroke="#ffcaa0" stroke-width="3" fill="none" opacity="0.22"/>
+  <!-- soft ground glow -->
+  <rect x="0" y="870" width="1600" height="130" fill="#6b5d8a" opacity="0.3"/>
+</svg>

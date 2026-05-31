@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <ellipse cx="48" cy="84" rx="28" ry="5" fill="#3A2A1E" opacity="0.12"/>
+  <!-- bowl -->
+  <path d="M18 50 H78 C76 66 64 76 48 76 C32 76 20 66 18 50 Z" fill="#FFF3E2" stroke="#5B463A" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- red sauce -->
+  <ellipse cx="48" cy="50" rx="30" ry="9" fill="#E2574C" stroke="#5B463A" stroke-width="1.5"/>
+  <path d="M22 52 C30 58 40 60 48 60 C56 60 66 58 74 52 C72 60 62 66 48 66 C34 66 24 60 22 52 Z" fill="#E07B39"/>
+  <!-- rice cakes (cylinders) -->
+  <g stroke="#5B463A" stroke-width="1.3">
+    <rect x="30" y="40" width="9" height="16" rx="4.5" fill="#FFF7EC"/>
+    <rect x="43" y="36" width="9" height="16" rx="4.5" fill="#FFF7EC"/>
+    <rect x="56" y="41" width="9" height="16" rx="4.5" fill="#FFF7EC"/>
+    <rect x="37" y="47" width="9" height="16" rx="4.5" fill="#FFF7EC"/>
+    <rect x="49" y="48" width="9" height="16" rx="4.5" fill="#FFF7EC"/>
+  </g>
+  <!-- sauce sheen on tteok -->
+  <path d="M40 50 q4 3 8 0" fill="none" stroke="#E2574C" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+</svg>

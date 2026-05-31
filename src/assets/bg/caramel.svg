@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3e6"/>
+      <stop offset="0.55" stop-color="#ffe6cf"/>
+      <stop offset="1" stop-color="#fbd9bc"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <!-- soft warm bokeh -->
+  <g fill="#ffb877" opacity="0.18">
+    <circle cx="210" cy="180" r="120"/>
+    <circle cx="1410" cy="250" r="160"/>
+    <circle cx="1480" cy="760" r="110"/>
+    <circle cx="120" cy="820" r="90"/>
+  </g>
+  <!-- faint storefront block -->
+  <rect x="120" y="540" width="1360" height="300" rx="26" fill="#f3c39a" opacity="0.28"/>
+  <!-- soft striped awning silhouette -->
+  <g opacity="0.3">
+    <path d="M150 470 H1450 V520 L150 540 Z" fill="#f0a76e"/>
+    <g fill="#ffe9d4" opacity="0.55">
+      <path d="M230 475 h120 v54 l-120 4 z"/>
+      <path d="M470 475 h120 v50 l-120 4 z"/>
+      <path d="M710 475 h120 v48 l-120 3 z"/>
+      <path d="M950 475 h120 v50 l-120 4 z"/>
+      <path d="M1190 475 h120 v54 l-120 4 z"/>
+    </g>
+  </g>
+  <!-- gentle counter line -->
+  <rect x="0" y="860" width="1600" height="140" fill="#e8b488" opacity="0.32"/>
+</svg>

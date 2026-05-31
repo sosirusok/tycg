@@ -21,7 +21,8 @@ export function defaultState() {
     skills: {},         // nodeId -> level
     skillSpent: 0,
     level: 0,
-    gacha: {},          // itemId -> 보유수
+    milestonesHit: 0,   // 사업 마일스톤 누적(큐브 지급 추적)
+    gacha: {},          // itemId -> 보유수(중복 획득 가능, 중복마다 효과 강화)
     pulls: 0,
     buyMode: 1,         // 1 | 10 | 100 | 'max'
     theme: 'caramel',
@@ -318,6 +319,13 @@ export function tick(state, stats, rt, dtSec, now) {
     leveledUp = newLevel - state.level
     state.cubes += Math.max(1, Math.floor(leveledUp * BAL.cubePerLevel * stats.cubeMult))
     state.level = newLevel
+  }
+  // 사업 마일스톤 달성 시 큐브(가챠 주 공급원)
+  let mh = 0
+  for (let i = 0; i < GENERATORS.length; i++) { const c = state.generators[i]; for (const m of BAL.milestones) if (c >= m) mh++ }
+  if (mh > (state.milestonesHit || 0)) {
+    state.cubes += Math.floor((mh - (state.milestonesHit || 0)) * BAL.cubePerMilestone * stats.cubeMult)
+    state.milestonesHit = mh
   }
   return { income, buffed: buffed > 1, leveledUp }
 }

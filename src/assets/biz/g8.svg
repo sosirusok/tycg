@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <defs>
+    <linearGradient id="g8dome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF7EC"/>
+      <stop offset="1" stop-color="#FBEFD9"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="48" cy="84" rx="30" ry="5" fill="#3A2A1E" opacity="0.12"/>
+  <!-- plate -->
+  <ellipse cx="48" cy="66" rx="33" ry="11" fill="#FFF3E2" stroke="#5B463A" stroke-width="1.5"/>
+  <!-- cloche dome -->
+  <path d="M22 64 C22 44 34 32 50 32 C66 32 78 44 78 64 Z" fill="url(#g8dome)" stroke="#5B463A" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M32 60 C32 46 40 38 50 38" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <rect x="20" y="62" width="60" height="6" rx="3" fill="#FBEFD9" stroke="#5B463A" stroke-width="1.4"/>
+  <circle cx="50" cy="30" r="4" fill="#F2C14E" stroke="#5B463A" stroke-width="1.4"/>
+  <!-- shrimp beside -->
+  <path d="M64 60 C58 60 56 54 60 50 C64 46 72 46 76 50 C73 50 70 52 70 56" fill="#F4A6C0" stroke="#E07B39" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="61" cy="55" r="1.3" fill="#5B463A"/>
+  <path d="M76 50 L80 47 M75 52 L80 52" stroke="#E2574C" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

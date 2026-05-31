@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="cream" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fef7e9"/>
+      <stop offset="0.6" stop-color="#f8edd6"/>
+      <stop offset="1" stop-color="#f0e0c0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#cream)"/>
+  <!-- warm bokeh -->
+  <g fill="#e9c98f" opacity="0.16">
+    <circle cx="240" cy="170" r="130"/>
+    <circle cx="1380" cy="210" r="150"/>
+  </g>
+  <!-- faint shelf lines -->
+  <g fill="#dcbd86" opacity="0.3">
+    <rect x="140" y="300" width="1320" height="16" rx="8"/>
+    <rect x="140" y="560" width="1320" height="16" rx="8"/>
+  </g>
+  <!-- soft loaf silhouettes on top shelf -->
+  <g fill="#e3c590" opacity="0.34">
+    <ellipse cx="320" cy="270" rx="90" ry="34"/>
+    <ellipse cx="560" cy="272" rx="70" ry="30"/>
+    <rect x="770" y="232" width="150" height="40" rx="20"/>
+    <ellipse cx="1100" cy="270" rx="95" ry="34"/>
+    <ellipse cx="1330" cy="272" rx="68" ry="28"/>
+  </g>
+  <!-- soft loaf silhouettes on lower shelf -->
+  <g fill="#dcb87f" opacity="0.3">
+    <rect x="260" y="520" width="170" height="40" rx="20"/>
+    <ellipse cx="620" cy="532" rx="92" ry="30"/>
+    <ellipse cx="900" cy="530" rx="78" ry="30"/>
+    <rect x="1080" y="518" width="160" height="42" rx="21"/>
+    <ellipse cx="1360" cy="532" rx="70" ry="28"/>
+  </g>
+  <!-- gentle counter -->
+  <rect x="0" y="850" width="1600" height="150" fill="#e6cd9c" opacity="0.32"/>
+</svg>

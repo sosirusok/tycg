@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <defs>
+    <linearGradient id="aura" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F4B740" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFF7EC" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="48" cy="89" rx="27" ry="5" fill="#3A2A1E" opacity="0.12"/>
+  <circle cx="48" cy="48" r="40" fill="url(#aura)"/>
+  <circle cx="48" cy="48" r="38" fill="none" stroke="#F4B740" stroke-width="2" opacity="0.4"/>
+  <path d="M18 30 l1.4 3 3 .4 -2.2 2.1 .6 3 -2.8-1.5 -2.8 1.5 .6-3 -2.2-2.1 3-.4 Z" fill="#F2C14E"/>
+  <path d="M80 38 l1 2.1 2.3.3 -1.7 1.6 .4 2.2 -2-1.1 -2 1.1 .4-2.2 -1.7-1.6 2.3-.3 Z" fill="#FFFFFF"/>
+  <path d="M74 70 l.9 1.9 2 .3 -1.5 1.4 .4 2 -1.8-1 -1.8 1 .4-2 -1.5-1.4 2-.3 Z" fill="#F4B740"/>
+  <path d="M26 56 Q48 50 70 56 Q72 82 48 86 Q24 82 26 56 Z" fill="#B07BD6" stroke="#5B463A" stroke-width="1.2"/>
+  <ellipse cx="48" cy="56" rx="25" ry="26" fill="#FAD7B0"/>
+  <ellipse cx="48" cy="54" rx="21" ry="21" fill="#FFF7EC"/>
+  <path d="M30 50 Q48 44 66 50 L62 56 Q48 51 34 56 Z" fill="#9AD9C9" stroke="#5B463A" stroke-width="1"/>
+  <circle cx="34" cy="52" r="4.5" fill="#F4A6C0"/>
+  <circle cx="62" cy="52" r="4.5" fill="#F4A6C0"/>
+  <circle cx="42" cy="46" r="2.9" fill="#3A2A1E"/>
+  <circle cx="54" cy="46" r="2.9" fill="#3A2A1E"/>
+  <circle cx="43" cy="45" r="0.9" fill="#FFFFFF"/>
+  <circle cx="55" cy="45" r="0.9" fill="#FFFFFF"/>
+  <path d="M42 53 Q48 59 54 53" fill="none" stroke="#5B463A" stroke-width="2" stroke-linecap="round"/>
+  <!-- gold crown -->
+  <path d="M33 32 L33 18 L40 24 L48 13 L56 24 L63 18 L63 32 Z" fill="#F4B740" stroke="#E07B39" stroke-width="1.2" stroke-linejoin="round"/>
+  <rect x="33" y="31" width="30" height="4" rx="1.5" fill="#F2C14E" stroke="#E07B39" stroke-width="0.8"/>
+  <circle cx="48" cy="15" r="2" fill="#FFFFFF"/>
+</svg>

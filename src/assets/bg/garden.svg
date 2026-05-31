@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="gardensky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef9e6"/>
+      <stop offset="0.55" stop-color="#f5fae8"/>
+      <stop offset="1" stop-color="#fdf9e8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#gardensky)"/>
+  <!-- soft sun bokeh -->
+  <g fill="#cfe89a" opacity="0.2">
+    <circle cx="1330" cy="190" r="150"/>
+    <circle cx="260" cy="150" r="90"/>
+  </g>
+  <!-- gentle rolling hills -->
+  <path d="M0 760 C360 660 700 720 1000 690 C1280 662 1460 700 1600 680 V1000 H0 Z" fill="#b7df8e" opacity="0.3"/>
+  <path d="M0 850 C320 790 640 840 980 810 C1300 782 1500 830 1600 810 V1000 H0 Z" fill="#9fd472" opacity="0.3"/>
+  <!-- pale leaves -->
+  <g fill="#8fce6a" opacity="0.26">
+    <path d="M-20 1010 C100 900 230 910 300 1010 Z"/>
+    <path d="M1640 1010 C1520 890 1380 910 1320 1010 Z"/>
+    <path d="M150 -10 C260 70 250 200 190 280 C140 190 110 80 150 -10 Z"/>
+  </g>
+</svg>

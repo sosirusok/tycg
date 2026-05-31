@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="mintsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8faf1"/>
+      <stop offset="0.6" stop-color="#f3fbf2"/>
+      <stop offset="1" stop-color="#fdfbf0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#mintsky)"/>
+  <!-- airy bokeh -->
+  <g fill="#a7e3c4" opacity="0.16">
+    <circle cx="300" cy="220" r="140"/>
+    <circle cx="1320" cy="180" r="100"/>
+    <circle cx="820" cy="120" r="70"/>
+  </g>
+  <!-- rounded leaves top-left -->
+  <g fill="#8fd9b2" opacity="0.3">
+    <path d="M-30 -20 C160 40 200 230 120 360 C40 250 -60 150 -30 -20 Z"/>
+    <path d="M120 -20 C260 90 250 240 180 330 C130 230 80 110 120 -20 Z" opacity="0.8"/>
+  </g>
+  <!-- rounded leaves bottom-right -->
+  <g fill="#9bdcbb" opacity="0.28">
+    <path d="M1640 1020 C1450 960 1410 770 1500 640 C1580 760 1700 850 1640 1020 Z"/>
+    <path d="M1500 1020 C1360 910 1370 760 1450 670 C1500 770 1560 900 1500 1020 Z" opacity="0.8"/>
+  </g>
+  <!-- soft leaf bottom-left -->
+  <path d="M-20 1020 C120 940 250 960 320 1020 Z" fill="#a7e3c4" opacity="0.28"/>
+</svg>
