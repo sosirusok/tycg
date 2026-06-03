@@ -48,6 +48,7 @@ function buildShell() {
       </div>
       <div class="topright">
         <button class="hero" id="hero" title="신우 (탭하면 약간의 칼로리)">${img(CHAR_ART.s1, 'hero-art', 'id="hero-art"')}<span class="hero-lv">Lv.<b id="hero-lvl">0</b><span id="hero-sp" class="hero-sp"></span></span></button>
+        <button class="ghost sm" id="btn-switch" title="계정 선택으로">계정 ${G.slot} ⇄</button>
       </div>
     </header>
     <nav class="tabs" id="tabs">${TABS.map(([id, n]) => `<button class="tab" data-tab="${id}">${n}</button>`).join('')}</nav>
@@ -59,6 +60,7 @@ function buildShell() {
   H.lvfill = $('#lvfill'); H.lvtext = $('#lvtext'); H.tabbody = $('#tabbody')
   $('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) switchTab(b.dataset.tab) })
   $('#hero').addEventListener('click', e => { const r = tap(G.state, G.stats, G.income); G.recompute(); spawnFloat(e.clientX, e.clientY, '+' + fmt(r.gain), 'tap') })
+  $('#btn-switch').addEventListener('click', () => G.onSwitch && G.onSwitch())
   H.tabbody.addEventListener('click', onBodyClick)
 }
 function switchTab(tab) { activeTab = tab; document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab)); FOODUI = null; SKILLUI = null; renderBody() }

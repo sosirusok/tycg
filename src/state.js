@@ -80,25 +80,25 @@ function handleCloudError(e) {
   console.warn('[cloud]', msg)
 }
 
-// ---- 공유 저장(모두 같은 진행상황) : Supabase shared_save 테이블의 단일 행 ----
-const SHARED_ID = 1
-export async function sharedLoad() {
+// ---- 슬롯별 공유 저장 : Supabase shared_save 테이블의 행 id=슬롯번호(1/2/3) ----
+// 각 슬롯은 독립 계정이며 기기 간 공유된다.
+export async function sharedLoad(slot = 1) {
   try {
-    const { data, error } = await supabase.from('shared_save').select('data, updated_at').eq('id', SHARED_ID).maybeSingle()
+    const { data, error } = await supabase.from('shared_save').select('data, updated_at').eq('id', slot).maybeSingle()
     if (error) { handleCloudError(error); return null }
     CLOUD.available = true
     return data && data.data ? { state: migrate(data.data), updatedAt: data.updated_at } : null
   } catch (e) { handleCloudError(e); return null }
 }
 let lastShared = 0
-export async function sharedSave(state, force = false) {
+export async function sharedSave(slot, state, force = false) {
   if (!CLOUD.available) return false   // 테이블 없으면 도배 방지(다음 로드 때 재시도)
   const now = Date.now()
   if (!force && now - lastShared < 12000) return false
   lastShared = now
   try {
     const { error } = await supabase.from('shared_save')
-      .upsert({ id: SHARED_ID, data: state, updated_at: new Date().toISOString() }, { onConflict: 'id' })
+      .upsert({ id: slot, data: state, updated_at: new Date().toISOString() }, { onConflict: 'id' })
     if (error) { handleCloudError(error); return false }
     CLOUD.available = true
     return true

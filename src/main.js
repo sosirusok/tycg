@@ -1,38 +1,61 @@
 // ============================================================================
-//  신우 키우기 — 진입점 (공유 저장: 누가 접속하든 같은 진행상황으로 이어짐)
+//  신우 키우기 — 진입점 (계정 1/2/3 선택 · 슬롯별 클라우드 공유)
 // ============================================================================
 import './style.css'
-import { buildGachaPool } from './data.js'
+import { buildGachaPool, THEMES } from './data.js'
 import { defaultState, defaultRuntime, computeStats, tick, applyOffline } from './engine.js'
 import { loadLocal, saveLocal, sharedLoad, sharedSave, pickNewer, CLOUD } from './state.js'
 import { initUI, render, applyStage, toast, showOffline } from './ui.js'
+import { CHAR_ART, img } from './assets.js'
 
 const app = document.querySelector('#app')
-let G = null, loopTimer = null, lastTick = 0, lastLocalSave = 0
+let G = null, loopTimer = null, lastTick = 0, lastLocalSave = 0, slot = 1
 
 boot()
 
 async function boot() {
-  app.innerHTML = `<div class="loading"><div class="spin"></div><p>불러오는 중…</p></div>`
-  const local = loadLocal('shared')
-  let cloud = null
-  try { const c = await sharedLoad(); if (c) cloud = c.state } catch {}
-  const state = pickNewer(local, cloud) || defaultState()
-  startGame(state)
+  if (loopTimer) { clearInterval(loopTimer); loopTimer = null }
+  window.removeEventListener('visibilitychange', vis)
+  window.removeEventListener('beforeunload', onUnload)
+  G = null
+  app.className = ''
+  app.innerHTML = `<div class="slot-bg"><div class="slot-card">
+    <div class="auth-logo">${img(CHAR_ART.s5, 'auth-char')}</div>
+    <h1>신우 키우기</h1>
+    <p class="auth-sub">계정을 선택하세요 · 어느 기기에서도 같은 계정으로 이어집니다</p>
+    <div class="slots" id="slots"><div class="slot-loading">계정 불러오는 중…</div></div>
+  </div></div>`
+
+  const states = {}
+  for (let s = 1; s <= 3; s++) {
+    const local = loadLocal('slot' + s)
+    let cloud = null
+    try { const c = await sharedLoad(s); if (c) cloud = c.state } catch {}
+    states[s] = pickNewer(local, cloud)
+  }
+  const slotsEl = document.querySelector('#slots')
+  slotsEl.innerHTML = [1, 2, 3].map(s => {
+    const st = states[s]
+    const info = st ? `Lv.${st.level} · ${THEMES[st.stage]?.name || ''}` : '비어있음 · 새로 시작'
+    return `<button class="slot-btn" data-slot="${s}"><span class="slot-n">계정 ${s}</span><span class="slot-info">${info}</span></button>`
+  }).join('')
+  if (!CLOUD.available) slotsEl.insertAdjacentHTML('beforeend', `<div class="slot-note">공유 저장 테이블이 아직 없어 이 기기에만 저장돼요.</div>`)
+  slotsEl.addEventListener('click', e => { const b = e.target.closest('.slot-btn'); if (!b) return; const s = +b.dataset.slot; startGame(states[s] || defaultState(), s) })
 }
 
 function noteText() {
   return CLOUD.available
-    ? '☁️ 공유 진행상황 — 어디서 접속해도 이어집니다 (자동 저장)'
-    : '이 기기에 저장 중 — 공유 저장 테이블 준비 후 모든 기기 동기화'
+    ? `☁️ 계정 ${slot} · 어느 기기에서도 이어집니다 (자동 저장)`
+    : `계정 ${slot} · 이 기기에 저장 중 (공유 테이블 준비 전)`
 }
 
-function startGame(state) {
+function startGame(state, s) {
+  slot = s
   G = {
-    state, rt: defaultRuntime(), stats: null, income: 0, user: null, userId: 'shared',
+    state, rt: defaultRuntime(), stats: null, income: 0, slot: s, userId: 'slot' + s,
     pool: buildGachaPool(), cloudNote: noteText(),
     recompute() { this.stats = computeStats(this.state) },
-    onLogout: null,
+    onSwitch: switchAccount,
   }
   G.recompute()
   applyStage(state.stage)
@@ -40,13 +63,21 @@ function startGame(state) {
   initUI(G)
   render()
   if (off) showOffline(off)
-  if (!CLOUD.available) toast('공유 저장 테이블이 아직 없어요 — 지금은 이 기기에만 저장돼요', 'warn')
+  if (!CLOUD.available) toast('공유 저장 테이블이 아직 없어요 — 이 기기에만 저장돼요', 'warn')
 
   lastTick = Date.now(); lastLocalSave = Date.now()
   if (loopTimer) clearInterval(loopTimer)
   loopTimer = setInterval(loop, 100)
-  window.addEventListener('visibilitychange', () => { if (document.hidden) saveNow() })
-  window.addEventListener('beforeunload', saveNow)
+  window.addEventListener('visibilitychange', vis)
+  window.addEventListener('beforeunload', onUnload)
+}
+
+function vis() { if (document.hidden) saveNow() }
+function onUnload() { saveNow() }
+
+function switchAccount() {
+  saveNow(true)
+  boot()
 }
 
 function loop() {
@@ -65,6 +96,6 @@ function saveNow(force = true) {
   if (!G) return
   G.state.lastSeen = Date.now()
   lastLocalSave = G.state.lastSeen
-  saveLocal('shared', G.state)
-  sharedSave(G.state, force).then(() => { const n = noteText(); if (n !== G.cloudNote) G.cloudNote = n })
+  saveLocal('slot' + slot, G.state)
+  sharedSave(slot, G.state, force).then(() => { const n = noteText(); if (n !== G.cloudNote) G.cloudNote = n })
 }
