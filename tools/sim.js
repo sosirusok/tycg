@@ -44,7 +44,7 @@ export function simulate(maxStage = 8, skillMult = 1) {
   return { themeTime, totalSec: t, lifetime }
 }
 
-for (const sm of [1, 4, 11]) {
+for (const sm of [1, 4, 30]) {
   const r = simulate(8, sm)
   console.log(`\n=== 러시·자동, 스킬배수 ×${sm} ===`)
   let prev = 0

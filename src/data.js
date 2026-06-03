@@ -14,7 +14,7 @@ export const BAL = {
   offlineCapHoursBase: 2,
   offlineEffBase: 0.5,
   petSlotsBase: 1,
-  equipMilestones: [10, 25, 50, 100, 150, 200, 300, 400, 500, 750, 1000, 1500, 2000],
+  equipMilestones: [20, 60, 150, 350, 700, 1200],   // 적게·드물게(폭주 방지)
 }
 
 // ---- 9단계 테마 (작은 노점 → 차원의 만찬) ---------------------------------
@@ -78,10 +78,10 @@ function buildFoods() {
   return ROSTER.map((r, i) => {
     const stage = Math.floor(i / 8)
     const baseCost = 12 * Math.pow(5.5, i)            // ×5.5/음식 (격차 큼)
-    const payback = 48 + i * 2.6                       // 첫 장비 회수시간(초) — 느리게
+    const payback = 62 + i * 3.2                       // 첫 장비 회수시간(초) — 느리게
     const time = Math.round(Math.min(600, 2.5 * Math.pow(1.125, i)) * 10) / 10
     const kcal = (baseCost / payback) * time
-    const equipMult = Math.max(1.075, 1.12 - i * 0.0005)
+    const equipMult = Math.max(1.12, 1.155 - i * 0.0004)  // 장비 누적 비용 가파르게(폭주 방지)
     return { id: r[0], name: r[1], art: r[2], index: i, stage, baseCost, kcal, time, equipMult }
   })
 }
@@ -92,13 +92,13 @@ export const STAGE_FOODS = THEMES.map((_, s) => FOODS.filter(f => f.stage === s)
 export function foodUnitCost(f, owned) { return f.baseCost * Math.pow(f.equipMult, owned) }
 export function foodBulkCost(f, owned, k) { if (k <= 0) return 0; const r = f.equipMult; return f.baseCost * Math.pow(r, owned) * (Math.pow(r, k) - 1) / (r - 1) }
 export function foodMaxBuy(f, owned, budget) { const r = f.equipMult, a = f.baseCost * Math.pow(r, owned); return Math.max(0, Math.floor(Math.log((budget * (r - 1)) / a + 1) / Math.log(r))) }
-export function equipMilestoneMult(owned, bonusPow = 0) { let n = 0; for (const m of BAL.equipMilestones) if (owned >= m) n++; return Math.pow(2, n) * (1 + bonusPow * n) }
+export function equipMilestoneMult(owned, bonusPow = 0) { let n = 0; for (const m of BAL.equipMilestones) if (owned >= m) n++; return Math.pow(1.45, n) * (1 + bonusPow * n) }
 export function nextEquipMilestone(owned) { let prev = 0; for (const m of BAL.equipMilestones) { if (owned < m) return { next: m, prev }; prev = m } return { next: null, prev } }
 
 // 테마 진행: 다음 테마로 넘어갈 때 지방을 "소모"
 export function stageAdvanceCost(stage) {
   if (stage + 1 >= THEMES.length) return Infinity
-  return FOODS[(stage + 1) * 8].baseCost * (14 + stage * 3)  // 후반 테마일수록 상대적으로 더 비쌈
+  return FOODS[(stage + 1) * 8].baseCost * (20 + stage * 4)  // 후반 테마일수록 상대적으로 더 비쌈
 }
 
 // ---- 스킬트리: 중심 기준 [왼쪽=공통 10종] / [오른쪽=테마 9가지], 지그재그 ----
@@ -119,7 +119,7 @@ function buildSkillTree() {
     ['xp', '경영 수업', '경험치 +5%/레벨', { k: 'xp', per: 0.05 }, 25, 3, 1.10],
     ['cube', '큐브 채굴', '큐브 +8%/레벨', { k: 'cube', per: 0.08 }, 20, 4, 1.12],
     ['luck', '행운의 미식', '가챠 행운 +3%/레벨', { k: 'luck', per: 0.03 }, 15, 6, 1.14],
-    ['petslot', '펫 슬롯', '펫 동시 착용 +1/레벨', { k: 'petSlot', per: 1 }, 6, 20, 1.90],
+    ['petslot', '펫 슬롯', '펫 동시 착용 +1/레벨', { k: 'petSlot', per: 1 }, 3, 30, 2.2],
   ]
   GLOB.forEach((g, i) => {
     const col = i % 2, row = Math.floor(i / 2)
@@ -167,30 +167,31 @@ export function skillNodeCost(node, lvl) { return Math.min(SKILL_CAP, Math.max(1
 export function spFromLevel(level) { return level * (level + 1) / 2 }
 
 // ---- 명성 상점 (영구) ------------------------------------------------------
+// 효과는 작게, 가격은 비싸게 → 여러 번 환생해 천천히 쌓는 영구 메타(풀강 ~×3.7)
 export const FAME_SHOP = [
-  { id: 'fa_kcal', name: '영구 칼로리', desc: '전체 칼로리 +10% (영구)', max: 50, costBase: 2, grow: 1.22, eff: { k: 'fameKcal', per: 0.10 } },
-  { id: 'fa_time', name: '영구 제작속도', desc: '전체 제작시간 -3% (영구)', max: 20, costBase: 3, grow: 1.28, eff: { k: 'fameTime', per: 0.03 } },
-  { id: 'fa_equip', name: '영구 장비효율', desc: '전체 장비효율 +6% (영구)', max: 30, costBase: 3, grow: 1.24, eff: { k: 'fameEquip', per: 0.06 } },
-  { id: 'fa_start', name: '재기의 자본', desc: '환생 시작 지방 ×8', max: 18, costBase: 2, grow: 1.3, eff: { k: 'fameStart', per: 1 } },
-  { id: 'fa_petslot', name: '펫 보유 +1', desc: '펫 동시 착용 +1', max: 8, costBase: 10, grow: 1.7, eff: { k: 'famePetSlot', per: 1 } },
-  { id: 'fa_offline', name: '영구 신선보관', desc: '오프라인 효율+8%·상한+2h', max: 12, costBase: 4, grow: 1.32, eff: { k: 'fameOffline', per: 1 } },
-  { id: 'fa_sp', name: '영재 교육', desc: '환생 후 시작 스킬포인트 +2', max: 20, costBase: 4, grow: 1.28, eff: { k: 'fameSP', per: 2 } },
-  { id: 'fa_fame', name: '명성 가도', desc: '명성 획득 +8%', max: 25, costBase: 5, grow: 1.3, eff: { k: 'fameGain', per: 0.08 } },
-  { id: 'fa_cube', name: '큐브 인맥', desc: '큐브 획득 +12%', max: 15, costBase: 4, grow: 1.3, eff: { k: 'fameCube', per: 0.12 } },
-  { id: 'fa_auto0', name: '자동 군것질', desc: '1단계(편의점) 음식 영구 자동', max: 1, costBase: 25, grow: 1, eff: { k: 'fameAutoStage', stage: 0, flag: true } },
-  { id: 'fa_auto1', name: '자동 분식', desc: '2단계(분식) 음식 영구 자동', max: 1, costBase: 60, grow: 1, eff: { k: 'fameAutoStage', stage: 1, flag: true } },
-  { id: 'fa_global', name: '미식 제국의 위엄', desc: '전체 칼로리 +25% (영구·강력)', max: 30, costBase: 12, grow: 1.33, eff: { k: 'fameKcal', per: 0.25 } },
+  { id: 'fa_kcal', name: '영구 칼로리', desc: '전체 칼로리 +3%/레벨 (영구)', max: 25, costBase: 3, grow: 1.20, eff: { k: 'fameKcal', per: 0.03 } },
+  { id: 'fa_equip', name: '영구 장비효율', desc: '장비 효율 +2.5%/레벨 (영구)', max: 20, costBase: 3, grow: 1.20, eff: { k: 'fameEquip', per: 0.025 } },
+  { id: 'fa_time', name: '영구 제작속도', desc: '제작시간 -2%/레벨 (영구)', max: 15, costBase: 4, grow: 1.22, eff: { k: 'fameTime', per: 0.02 } },
+  { id: 'fa_start', name: '재기의 자본', desc: '환생 시작 지방 ×3 (레벨당)', max: 12, costBase: 4, grow: 1.24, eff: { k: 'fameStart', per: 1 } },
+  { id: 'fa_petslot', name: '펫 보유 +1', desc: '펫 동시 착용 +1', max: 3, costBase: 30, grow: 2.2, eff: { k: 'famePetSlot', per: 1 } },
+  { id: 'fa_offline', name: '영구 신선보관', desc: '오프라인 효율+8%·상한+2h', max: 10, costBase: 5, grow: 1.22, eff: { k: 'fameOffline', per: 1 } },
+  { id: 'fa_sp', name: '영재 교육', desc: '환생 후 시작 SP +3', max: 15, costBase: 5, grow: 1.20, eff: { k: 'fameSP', per: 3 } },
+  { id: 'fa_fame', name: '명성 가도', desc: '명성 획득 +5%/레벨', max: 20, costBase: 6, grow: 1.20, eff: { k: 'fameGain', per: 0.05 } },
+  { id: 'fa_cube', name: '큐브 인맥', desc: '큐브 획득 +10%/레벨', max: 12, costBase: 5, grow: 1.20, eff: { k: 'fameCube', per: 0.10 } },
+  { id: 'fa_auto0', name: '자동 군것질', desc: '1단계(편의점) 음식 영구 자동', max: 1, costBase: 35, grow: 1, eff: { k: 'fameAutoStage', stage: 0, flag: true } },
+  { id: 'fa_auto1', name: '자동 분식', desc: '2단계(분식) 음식 영구 자동', max: 1, costBase: 90, grow: 1, eff: { k: 'fameAutoStage', stage: 1, flag: true } },
+  { id: 'fa_global', name: '미식 제국의 위엄', desc: '전체 칼로리 +5%/레벨 (영구)', max: 15, costBase: 12, grow: 1.24, eff: { k: 'fameKcal', per: 0.05 } },
 ]
 export function fameNodeCost(node, lvl) { return Math.ceil(node.costBase * Math.pow(node.grow, lvl)) }
 
 // ---- 펫 (6등급 × 1~10성) ---------------------------------------------------
 export const PET_GRADES = [
-  { id: 'common', name: '일반', color: '#9fb0c3', art: 'pet1', inc: 0.05, price1: 4e3, price6: 1.2e5 },
-  { id: 'uncommon', name: '희귀', color: '#5fd17a', art: 'pet2', inc: 0.12, price1: 1.5e5, price6: 4.5e6 },
-  { id: 'rare', name: '초희귀', color: '#4ea3ff', art: 'pet3', inc: 0.30, price1: 6e6, price6: 1.8e8 },
-  { id: 'epic', name: '에픽', color: '#b06bff', art: 'pet4', inc: 0.72, price1: 2.4e8, price6: 7e9 },
-  { id: 'legendary', name: '전설', color: '#ffb13d', art: 'pet5', inc: 1.7, price1: 9e9, price6: 2.7e11 },
-  { id: 'mythic', name: '신화', color: '#ff5d7a', art: 'pet6', inc: 4.0, price1: 3.5e11, price6: 1e13 },
+  { id: 'common', name: '일반', color: '#9fb0c3', art: 'pet1', inc: 0.03, price1: 2e4, price6: 8e5 },
+  { id: 'uncommon', name: '희귀', color: '#5fd17a', art: 'pet2', inc: 0.06, price1: 1e7, price6: 4e8 },
+  { id: 'rare', name: '초희귀', color: '#4ea3ff', art: 'pet3', inc: 0.12, price1: 6e9, price6: 2.4e11 },
+  { id: 'epic', name: '에픽', color: '#b06bff', art: 'pet4', inc: 0.24, price1: 3e12, price6: 1.2e14 },
+  { id: 'legendary', name: '전설', color: '#ffb13d', art: 'pet5', inc: 0.48, price1: 2e15, price6: 8e16 },
+  { id: 'mythic', name: '신화', color: '#ff5d7a', art: 'pet6', inc: 0.9, price1: 1e18, price6: 4e19 },
 ]
 export const PET_GRADE_BY_ID = Object.fromEntries(PET_GRADES.map((g, i) => [g.id, { ...g, idx: i }]))
 export const PET_STAR_MAX = 10
@@ -200,12 +201,12 @@ export function parsePetKey(k) { const [g, s] = k.split(':'); return { grade: g,
 export function petStats(grade, star) {
   const g = PET_GRADE_BY_ID[grade]; if (!g) return {}
   const gi = g.idx, k = star - 1
-  const st = { income: g.inc * (1 + 0.15 * k) }            // 모든 펫: 수익률%
-  if (gi >= 1) st.time = (0.01 + 0.004 * gi) * (1 + 0.12 * k)   // 제작시간 감소%
-  if (gi >= 2) st.offline = (0.04 + 0.02 * gi) * (1 + 0.1 * k)  // 오프라인 효율%
-  if (gi >= 3) st.cube = (0.05 + 0.03 * gi) * (1 + 0.1 * k)     // 큐브 획득%
-  if (gi >= 4) st.fame = (0.05 + 0.04 * gi) * (1 + 0.1 * k)     // 명성 획득%
-  if (gi >= 5) st.equip = (0.08) * (1 + 0.12 * k)               // 장비효율%
+  const st = { income: g.inc * (1 + 0.10 * k) }            // 모든 펫: 수익률%
+  if (gi >= 1) st.time = (0.008 + 0.003 * gi) * (1 + 0.10 * k)  // 제작시간 감소%
+  if (gi >= 2) st.offline = (0.03 + 0.015 * gi) * (1 + 0.1 * k) // 오프라인 효율%
+  if (gi >= 3) st.cube = (0.04 + 0.02 * gi) * (1 + 0.1 * k)     // 큐브 획득%
+  if (gi >= 4) st.fame = (0.04 + 0.03 * gi) * (1 + 0.1 * k)     // 명성 획득%
+  if (gi >= 5) st.equip = (0.05) * (1 + 0.10 * k)              // 장비효율%
   return st
 }
 export const PET_STAT_LABEL = { income: '수익률', time: '제작시간↓', offline: '오프라인', cube: '큐브', fame: '명성', equip: '장비효율' }
@@ -215,7 +216,8 @@ export function petBuyPrice(grade, star) { const g = PET_GRADE_BY_ID[grade]; ret
 // ---- 레벨(환생 후 누적 runFat) / 명성 -------------------------------------
 export function levelForRun(runFat, xpMult = 1) { return Math.floor(BAL.lvK * Math.log10(Math.max(0, runFat) * (1 + xpMult) + 1)) }
 export function runForLevel(level, xpMult = 1) { return (Math.pow(10, level / BAL.lvK) - 1) / (1 + xpMult) }
-export function fameFromRun(runFat, gain = 0) { return Math.floor(Math.sqrt(Math.max(0, runFat) / BAL.fameDivisor) * (1 + gain)) }
+// 명성: runFat 가 매우 커도(1e50급) 수십~수백 수준으로 유지(폭주 차단). 누적 보상은 환생 반복으로.
+export function fameFromRun(runFat, gain = 0) { return Math.floor(Math.pow(Math.max(1, runFat), 0.045) * (1 + gain)) }
 
 // ============================================================================
 //  가챠 (보조) — 결정적 풀

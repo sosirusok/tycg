@@ -168,15 +168,21 @@ export function fusePet(state, key) {
 }
 export function maxPetSlots(stats) { return stats.petSlots }
 export function equipPet(state, stats, key) {
-  if (!(state.pets[key] > 0)) return false
+  const owned = state.pets[key] || 0
+  if (owned <= 0) return false
   state.petEquip = state.petEquip || []
-  if (state.petEquip.includes(key)) return false
-  if (state.petEquip.length >= maxPetSlots(stats)) state.petEquip.shift()
+  const same = state.petEquip.filter(k => k === key).length
+  if (same >= owned) return false                          // 보유 수만큼만 착용 가능(중복 OK)
+  if (state.petEquip.length >= maxPetSlots(stats)) return false  // 슬롯 가득
   state.petEquip.push(key); return true
 }
-export function unequipPet(state, key) { state.petEquip = (state.petEquip || []).filter(k => k !== key) }
-// 보유 수보다 많이 착용돼 있지 않게 정리
-export function reconcileEquip(state) { state.petEquip = (state.petEquip || []).filter(k => (state.pets[k] || 0) > 0) }
+// key 하나만 빼기(중복 착용 중이면 한 개)
+export function unequipPet(state, key) { const i = (state.petEquip || []).indexOf(key); if (i >= 0) state.petEquip.splice(i, 1) }
+// 보유 수보다 많이 착용돼 있지 않게 정리(중복 포함)
+export function reconcileEquip(state) {
+  const cnt = {}
+  state.petEquip = (state.petEquip || []).filter(k => { cnt[k] = (cnt[k] || 0) + 1; return cnt[k] <= (state.pets[k] || 0) })
+}
 
 // ---- 환생 ------------------------------------------------------------------
 export function prestigeGain(state, stats) { return fameFromRun(state.runFat, stats.fameGainB) }
