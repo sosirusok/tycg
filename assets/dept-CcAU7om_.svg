@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="dpWall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff9f2"/>
+      <stop offset="0.55" stop-color="#fbeef0"/>
+      <stop offset="1" stop-color="#f3e2e6"/>
+    </linearGradient>
+    <linearGradient id="dpFloor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0e6e2"/>
+      <stop offset="1" stop-color="#ddcfca"/>
+    </linearGradient>
+    <linearGradient id="dpWin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eaf6ff"/>
+      <stop offset="1" stop-color="#d6ecf7"/>
+    </linearGradient>
+    <linearGradient id="dpCol" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbeede"/>
+      <stop offset="0.5" stop-color="#fff7ec"/>
+      <stop offset="1" stop-color="#ecdcc8"/>
+    </linearGradient>
+    <linearGradient id="dpCase" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8eef2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- airy hall wall -->
+  <rect width="1600" height="900" fill="url(#dpWall)"/>
+  <!-- ceiling cove -->
+  <rect x="0" y="0" width="1600" height="90" fill="#fffaf3"/>
+  <rect x="0" y="86" width="1600" height="6" fill="#e7c074" opacity="0.6"/>
+  <!-- recessed ceiling lights -->
+  <g fill="#ffe9b8" opacity="0.7">
+    <circle cx="220" cy="46" r="16"/>
+    <circle cx="500" cy="46" r="16"/>
+    <circle cx="800" cy="46" r="16"/>
+    <circle cx="1100" cy="46" r="16"/>
+    <circle cx="1380" cy="46" r="16"/>
+  </g>
+  <!-- soft pastel bloom -->
+  <g opacity="0.4">
+    <circle cx="300" cy="220" r="150" fill="#f7d7e0"/>
+    <circle cx="1300" cy="220" r="150" fill="#d7e8f7"/>
+  </g>
+
+  <!-- tall windows (back) -->
+  <g>
+    <rect x="430" y="110" width="740" height="360" rx="12" fill="#e7c074"/>
+    <rect x="446" y="126" width="708" height="328" rx="8" fill="url(#dpWin)"/>
+    <g stroke="#cdb88c" stroke-width="8" opacity="0.7">
+      <line x1="676" y1="126" x2="676" y2="454"/>
+      <line x1="906" y1="126" x2="906" y2="454"/>
+      <line x1="446" y1="290" x2="1154" y2="290"/>
+    </g>
+    <!-- light bloom through glass -->
+    <ellipse cx="800" cy="250" rx="280" ry="150" fill="#ffffff" opacity="0.4"/>
+  </g>
+
+  <!-- elegant columns -->
+  <g>
+    <rect x="120" y="110" width="70" height="470" rx="8" fill="url(#dpCol)"/>
+    <rect x="104" y="100" width="102" height="22" rx="8" fill="#ecdcc8"/>
+    <rect x="104" y="560" width="102" height="24" rx="8" fill="#e3cfb0"/>
+    <rect x="138" y="120" width="8" height="440" fill="#ffffff" opacity="0.5"/>
+
+    <rect x="1410" y="110" width="70" height="470" rx="8" fill="url(#dpCol)"/>
+    <rect x="1394" y="100" width="102" height="22" rx="8" fill="#ecdcc8"/>
+    <rect x="1394" y="560" width="102" height="24" rx="8" fill="#e3cfb0"/>
+    <rect x="1428" y="120" width="8" height="440" fill="#ffffff" opacity="0.5"/>
+  </g>
+
+  <!-- floor -->
+  <rect x="0" y="580" width="1600" height="320" fill="url(#dpFloor)"/>
+  <rect x="0" y="580" width="1600" height="8" fill="#cbbab2"/>
+  <!-- glossy floor reflections -->
+  <g fill="#ffffff" opacity="0.25">
+    <rect x="150" y="600" width="40" height="280"/>
+    <rect x="1410" y="600" width="40" height="280"/>
+  </g>
+  <!-- floor seams -->
+  <g stroke="#cdbcb4" stroke-width="3" opacity="0.5">
+    <line x1="0" y1="700" x2="1600" y2="700"/>
+    <line x1="400" y1="588" x2="320" y2="900"/>
+    <line x1="800" y1="588" x2="800" y2="900"/>
+    <line x1="1200" y1="588" x2="1280" y2="900"/>
+  </g>
+
+  <!-- LEFT glossy display case with cakes -->
+  <g>
+    <rect x="120" y="470" width="430" height="130" rx="12" fill="url(#dpCase)"/>
+    <rect x="120" y="470" width="430" height="130" rx="12" fill="#bcd7e8" opacity="0.25"/>
+    <rect x="120" y="590" width="430" height="60" rx="10" fill="#e7c074"/>
+    <rect x="120" y="590" width="430" height="14" rx="7" fill="#fff0cf" opacity="0.6"/>
+    <!-- glass top highlight -->
+    <polygon points="140,472 240,472 160,560 120,560" fill="#ffffff" opacity="0.3"/>
+    <!-- cakes -->
+    <g>
+      <rect x="150" y="510" width="70" height="60" rx="8" fill="#f7d7e0"/>
+      <rect x="150" y="510" width="70" height="14" rx="6" fill="#e88aa4"/>
+      <circle cx="185" cy="506" r="8" fill="#e85d6a"/>
+      <rect x="240" y="516" width="70" height="54" rx="8" fill="#fbe6c2"/>
+      <rect x="240" y="516" width="70" height="12" rx="6" fill="#f2c94c"/>
+      <ellipse cx="365" cy="540" rx="40" ry="32" fill="#fff7ec"/>
+      <path d="M325 540 a40 32 0 0 1 80 0 z" fill="#caa46a" opacity="0.4"/>
+      <circle cx="365" cy="520" r="8" fill="#e85d6a"/>
+      <rect x="430" y="514" width="64" height="56" rx="8" fill="#dff3e2"/>
+      <rect x="430" y="514" width="64" height="12" rx="6" fill="#5bbf7a"/>
+    </g>
+  </g>
+
+  <!-- RIGHT glossy display case with pastries -->
+  <g>
+    <rect x="1050" y="470" width="430" height="130" rx="12" fill="url(#dpCase)"/>
+    <rect x="1050" y="470" width="430" height="130" rx="12" fill="#bcdfe8" opacity="0.25"/>
+    <rect x="1050" y="590" width="430" height="60" rx="10" fill="#e7c074"/>
+    <rect x="1050" y="590" width="430" height="14" rx="7" fill="#fff0cf" opacity="0.6"/>
+    <polygon points="1070,472 1170,472 1090,560 1050,560" fill="#ffffff" opacity="0.3"/>
+    <!-- pastries -->
+    <g fill="#e0a85a">
+      <path d="M1080 556 q30 -34 60 0 q-30 14 -60 0 z"/>
+      <path d="M1150 556 q30 -34 60 0 q-30 14 -60 0 z"/>
+    </g>
+    <g>
+      <circle cx="1250" cy="546" r="24" fill="#f2b362"/>
+      <circle cx="1250" cy="546" r="14" fill="#e0913e"/>
+      <rect x="1300" y="516" width="64" height="54" rx="8" fill="#f7d7e0"/>
+      <rect x="1300" y="516" width="64" height="12" rx="6" fill="#e88aa4"/>
+      <rect x="1380" y="512" width="70" height="58" rx="8" fill="#fbe6c2"/>
+      <rect x="1380" y="512" width="70" height="12" rx="6" fill="#f2c94c"/>
+      <circle cx="1415" cy="508" r="8" fill="#e85d6a"/>
+    </g>
+  </g>
+
+  <!-- central low pastry island (calmer center) -->
+  <g>
+    <ellipse cx="800" cy="720" rx="240" ry="30" fill="#000000" opacity="0.06"/>
+    <rect x="620" y="600" width="360" height="100" rx="14" fill="#ffffff"/>
+    <rect x="620" y="600" width="360" height="100" rx="14" fill="#f7d7e0" opacity="0.25"/>
+    <rect x="620" y="676" width="360" height="40" rx="10" fill="#e7c074"/>
+    <rect x="620" y="676" width="360" height="10" rx="5" fill="#fff0cf" opacity="0.6"/>
+    <!-- a few cake domes -->
+    <g>
+      <path d="M680 644 a36 28 0 0 1 72 0 z" fill="#bcd7e8" opacity="0.5"/>
+      <ellipse cx="716" cy="644" rx="30" ry="14" fill="#f7d7e0"/>
+      <path d="M848 644 a36 28 0 0 1 72 0 z" fill="#bcd7e8" opacity="0.5"/>
+      <ellipse cx="884" cy="644" rx="30" ry="14" fill="#fbe6c2"/>
+    </g>
+  </g>
+</svg>
