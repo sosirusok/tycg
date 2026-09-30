@@ -4,10 +4,10 @@ import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, 
 import { dateText, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
-import { NameLine } from './ui';
+import { Modal, NameLine } from './ui';
 
 type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null };
-type Detail = { user: User & { username: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[] };
+type Detail = { user: User & { username: string; deleted_at?: number | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[] };
 
 // Manager tools for one member: verification switches, grade grants, applications.
 // `version` reloads the panel after changes made elsewhere (e.g. the chat's application card).
@@ -15,6 +15,8 @@ type Detail = { user: User & { username: string }; grants: Grant[]; badges: { ba
 export function MemberPanel({ userId, onChange, version = 0, inChat = false }: { userId: string; onChange?: () => void; version?: number; inChat?: boolean }) {
     const [data, setData] = useState<Detail | null>(null), [error, setError] = useState('');
     const [grade, setGrade] = useState<GradeId>('plus'), [plan, setPlan] = useState<PlanId>('permanent'), [busy, setBusy] = useState(false);
+    // Temporary password: confirm first, then show the result once (it is not stored anywhere readable).
+    const [resetting, setResetting] = useState(false), [temp, setTemp] = useState('');
     const load = useCallback(() => api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))), [userId]);
     useEffect(() => { void load(); }, [load, version]);
     const plans = gradeInfo(grade).plans;
@@ -25,6 +27,16 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         try { await task(); toast(message); await load(); onChange?.(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
+    };
+    const issue = async () => {
+        setBusy(true);
+        try { const d = await api<{ password: string }>(`manage/users/${userId}/password`, 'POST', {}); setResetting(false); setTemp(d.password); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    };
+    const copy = async () => {
+        try { await navigator.clipboard.writeText(temp); toast('복사 완료'); }
+        catch { toast.error('복사하지 못했습니다.'); }
     };
     if (error) return <p className="muted">{error}</p>;
     if (!data) return <div className="skeleton" style={{ height: 240 }} />;
@@ -73,5 +85,20 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>지난 신청</h4>
             {data.applications.filter(a => a.status !== 'pending').slice(0, 8).map(a => <div key={a.id} className="mp-row small"><span className="grow">{applicationTitle(a)}</span><span className="muted">{APPLICATION_STATUS_NAMES[a.status]}</span></div>)}
         </div>}
+        {u.role !== 'manager' && !u.deleted_at && <div className="mp-block">
+            <h4>계정</h4>
+            <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
+        </div>}
+        <Modal open={resetting} onClose={() => { if (!busy) setResetting(false); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setResetting(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void issue()}>발급</button></>}>
+            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+        </Modal>
+        <Modal open={!!temp} onClose={() => setTemp('')} title="임시 비밀번호"
+            footer={<button type="button" className="btn btn-primary" onClick={() => void copy()}>복사</button>}>
+            <div className="field">
+                <input className="input" readOnly value={temp} aria-label="임시 비밀번호" style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 20, letterSpacing: '0.08em' }} onFocus={e => e.currentTarget.select()} />
+                <span className="field-hint">회원에게 채팅으로 전달하세요.</span>
+            </div>
+        </Modal>
     </div>;
 }

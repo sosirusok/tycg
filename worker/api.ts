@@ -1,6 +1,7 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
-    digest, tokenOf, sessionCookie, memberColumns, withMember, nicknameField, isLegacyHash, DUMMY_HASH, MANAGER_USERNAME, SESSION_DAYS,
+    digest, tokenOf, sessionCookie, memberColumns, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, DUMMY_HASH,
+    MANAGER_USERNAME, SESSION_DAYS,
 } from './http';
 import { postsHandler } from './posts';
 import { filesHandler } from './files';
@@ -25,6 +26,55 @@ async function discardUnreadBody(req: Request) {
     finally { reader.releaseLock(); }
 }
 
+const DAY = 86400000;
+
+// An unknown id or a withdrawn member (empty stored hash) still costs one hash at the current
+// iteration count, so the response time does not reveal which ids exist. An empty stored hash
+// must not reach verifyPassword: it would take the 100,000-iteration legacy path.
+async function passwordMatches(password: unknown, row: { salt: string; password_hash: string } | null | undefined) {
+    const stored = row?.password_hash || '';
+    const ok = await verifyPassword(typeof password === 'string' ? password : '', stored ? row!.salt : 'invalid-user-constant-salt', stored || DUMMY_HASH);
+    return !!stored && ok;
+}
+
+const passwordRow = (id: string) => db().prepare('SELECT salt,password_hash FROM users WHERE id=?').bind(id).first<{ salt: string; password_hash: string }>();
+
+// Wrong passwords answer 400, not 401: the app treats every 401 as an ended session.
+async function changePassword(req: Request) {
+    const u = await requireUser(req);
+    await limit('pw:' + u.id, 10, 600000);
+    const b = await body(req);
+    if (!await passwordMatches(b.current, await passwordRow(u.id))) fail(400, '현재 비밀번호가 맞지 않습니다.');
+    if (typeof b.next !== 'string' || b.next.length < 8 || b.next.length > 128 || b.next === b.current) fail(400, '새 비밀번호는 8~128자, 현재와 다르게 입력해 주세요.');
+    const salt = random();
+    // Every other device is signed out; this one keeps its session.
+    await db().batch([
+        db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
+        db().prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').bind(u.id, await digest(tokenOf(req))),
+    ]);
+    return json({ ok: true });
+}
+
+// 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id and
+// nickname, removes the password, bio, badges, grades and saved data, hides every post and ends
+// open offers and applications.
+async function withdraw(req: Request) {
+    const u = await requireUser(req);
+    if (u.role === 'manager') fail(403, '매니저 계정은 탈퇴할 수 없습니다.');
+    await limit('pw:' + u.id, 10, 600000);
+    const b = await body(req);
+    if (!await passwordMatches(b.password, await passwordRow(u.id))) fail(400, '비밀번호가 맞지 않습니다.');
+    const now = Date.now();
+    await db().batch([
+        db().prepare("UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='탈퇴회원'||lower(hex(randomblob(4))),nickname_key=NULL,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?").bind(now, u.id),
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'user_badges', 'user_grades'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
+        db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE status IN('pending','accepted') AND (sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?))").bind(now, u.id, u.id),
+        db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
+    ]);
+    return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
+}
+
 async function authHandler(req: Request, p: string[]) {
     const method = req.method;
     if (p[1] === 'me' && method === 'GET') return json({ user: await currentUser(req) });
@@ -33,6 +83,8 @@ async function authHandler(req: Request, p: string[]) {
         await db().prepare('DELETE FROM sessions WHERE token=?').bind(await digest(tokenOf(req))).run();
         return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
     }
+    if (p[1] === 'password') return changePassword(req);
+    if (p[1] === 'withdraw') return withdraw(req);
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
     if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
@@ -44,22 +96,24 @@ async function authHandler(req: Request, p: string[]) {
     await initManager();
     let id: string;
     if (p[1] === 'register') {
-        if (username === MANAGER_USERNAME) fail(409, '이미 사용 중인 아이디입니다.');
-        const nickname = nicknameField(b.nickname);
-        const salt = random();
+        // 'deleted_' ids are what 회원 탈퇴 leaves behind.
+        if (username === MANAGER_USERNAME || username.startsWith('deleted_')) fail(409, '이미 사용 중인 아이디입니다.');
+        const nickname = nicknameField(b.nickname), key = nicknameKey(nickname);
+        await assertNicknameFree(nickname, '');
+        const salt = random(), hash = await storedHash(b.password, salt);
         id = crypto.randomUUID();
         try {
-            await db().prepare('INSERT INTO users (id,username,nickname,password_hash,salt,role,bio,created_at) VALUES (?,?,?,?,?,?,?,?)')
-                .bind(id, username, nickname, await storedHash(b.password, salt), salt, 'member', '', Date.now()).run();
+            // The key is checked again inside the insert, so two look-alike sign-ups at once cannot both pass.
+            const r = await db().prepare('INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?)')
+                .bind(id, username, nickname, key, hash, salt, 'member', '', Date.now(), key).run();
+            if (!r.meta.changes) fail(409, '비슷한 닉네임이 이미 있습니다.');
         } catch (e) {
             if (String(e).includes('UNIQUE')) fail(409, String(e).includes('users.nickname') ? '이미 사용 중인 닉네임입니다.' : '이미 사용 중인 아이디입니다.');
             throw e;
         }
     } else if (p[1] === 'login') {
         const found = await db().prepare('SELECT id,salt,password_hash FROM users WHERE username=?').bind(username).first<any>();
-        // Unknown ids still run one hash of the current cost so response time does not reveal which ids exist.
-        const ok = await verifyPassword(b.password, found?.salt || 'invalid-user-constant-salt', found?.password_hash || DUMMY_HASH);
-        if (!found || !ok) fail(401, '아이디 또는 비밀번호가 맞지 않습니다.');
+        if (!await passwordMatches(b.password, found)) fail(401, '아이디 또는 비밀번호가 맞지 않습니다.');
         id = found.id;
         // Older 100,000-iteration hashes are replaced once the password is known.
         if (isLegacyHash(found.password_hash)) await db().prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await storedHash(b.password, found.salt), id).run();
@@ -79,10 +133,13 @@ async function usersHandler(req: Request, p: string[]) {
         const viewer = await currentUser(req);
         // Counts skip 대리(진행) posts whose author lost 대리 인증, as the board list does (the author still counts them).
         const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))";
-        const row = await db().prepare(`SELECT u.id,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
+        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.role,u.bio,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
             .bind(viewer?.id || '', viewer?.id || '', p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
-        const user: Record<string, unknown> = withMember(row);
+        const { prev_nickname, nickname_changed_at, ...rest } = row;
+        const user: Record<string, unknown> = withMember(rest);
+        // The nickname before the latest change stays on the profile for 90 days.
+        if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
         if (viewer?.id !== user.id && viewer?.role !== 'manager') user.grade_expires_at = null;
         // Whether the viewer blocked this member, for the profile's block button.
         if (viewer) user.blocked = !!await db().prepare('SELECT 1 FROM blocks WHERE user_id=? AND target_id=?').bind(viewer.id, user.id).first();
@@ -95,8 +152,28 @@ async function usersHandler(req: Request, p: string[]) {
     // An unchanged nickname is kept even if it predates the current nickname rules.
     const nickname = b.nickname === u.nickname ? u.nickname : nicknameField(b.nickname, u.role === 'manager');
     const bio = typeof b.bio === 'string' ? b.bio.trim().slice(0, 300) : '';
+    if (nickname === u.nickname) {
+        await db().prepare('UPDATE users SET bio=? WHERE id=?').bind(bio, u.id).run();
+        return json({ ok: true });
+    }
+    // A member may change their nickname once every 30 days; the first change after sign-up is always allowed.
+    // (The manager's nickname is fixed, so nicknameField never lets the manager reach this point.)
+    const now = Date.now(), key = nicknameKey(nickname);
+    const refuseTooSoon = async () => {
+        const r = await db().prepare('SELECT nickname_changed_at FROM users WHERE id=?').bind(u.id).first<{ nickname_changed_at: number | null }>();
+        const next = (r?.nickname_changed_at || 0) + 30 * DAY;
+        if (next > now) fail(409, `닉네임은 30일에 한 번 바꿀 수 있습니다. (${new Date(next).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' })}부터 가능)`);
+    };
+    await refuseTooSoon();
+    await assertNicknameFree(nickname, u.id);
     try {
-        await db().prepare('UPDATE users SET nickname=?,bio=? WHERE id=?').bind(nickname, bio, u.id).run();
+        // Both rules are checked again inside the update, so two changes at once cannot both pass.
+        const r = await db().prepare('UPDATE users SET prev_nickname=nickname,nickname=?,nickname_key=?,nickname_changed_at=?,bio=? WHERE id=? AND (nickname_changed_at IS NULL OR nickname_changed_at<=?) AND NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=? AND id!=?)')
+            .bind(nickname, key, now, bio, u.id, now - 30 * DAY, key, u.id).run();
+        if (!r.meta.changes) {
+            await refuseTooSoon();
+            fail(409, '비슷한 닉네임이 이미 있습니다.');
+        }
     } catch (e) {
         if (String(e).includes('UNIQUE')) fail(409, '이미 사용 중인 닉네임입니다.');
         throw e;
@@ -107,7 +184,7 @@ async function usersHandler(req: Request, p: string[]) {
 async function stats() {
     await initManager();
     const r = await db().batch([
-        db().prepare('SELECT COUNT(*) AS count FROM users'),
+        db().prepare('SELECT COUNT(*) AS count FROM users WHERE deleted_at IS NULL'),
         db().prepare('SELECT COUNT(*) AS count FROM posts WHERE hidden=0'),
         db().prepare("SELECT kind,category,COUNT(*) AS count FROM posts WHERE hidden=0 AND status!='closed' GROUP BY kind,category"),
     ]);

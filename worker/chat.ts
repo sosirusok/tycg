@@ -13,7 +13,9 @@ export async function chatMember(id: string, uid: string) {
 
 export async function ensureChat(a: string, b: string) {
     if (a === b) fail(400, '자신과는 채팅할 수 없습니다.');
-    if (!await db().prepare('SELECT id FROM users WHERE id=?').bind(b).first()) fail(404, '회원을 찾을 수 없습니다.');
+    const partner = await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(b).first<{ deleted_at: number | null }>();
+    if (!partner) fail(404, '회원을 찾을 수 없습니다.');
+    if (partner.deleted_at) fail(404, '없는 회원입니다.');
     if (await blocked(a, b)) fail(403, '차단된 회원입니다.');
     const pair = [a, b].sort(), now = Date.now();
     await db().prepare('INSERT OR IGNORE INTO conversations(id,user_a,user_b,created_at,updated_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), ...pair, now, now).run();

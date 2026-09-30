@@ -1,4 +1,4 @@
-import { db, fail, requireUser, json, body, limit, initManager, memberColumns, withMember, setting, MANAGER_ID } from './http';
+import { db, fail, requireUser, json, body, limit, initManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import {
@@ -142,7 +142,18 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
     fail(405, '지원하지 않는 요청입니다.');
 }
 
-// Manager-only member administration: search, badges, grades and applications.
+// Temporary passwords avoid look-alike characters (i, l, o, 0, 1). 248 is the largest multiple
+// of 31 below 256, so every character is equally likely.
+const TEMP_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789';
+function tempPassword(length = 10) {
+    let out = '';
+    while (out.length < length) {
+        for (const byte of crypto.getRandomValues(new Uint8Array(16))) if (byte < 248 && out.length < length) out += TEMP_CHARS[byte % TEMP_CHARS.length];
+    }
+    return out;
+}
+
+// Manager-only member administration: search, badges, grades, applications and temporary passwords.
 export async function manageMembers(req: Request, u: User, p: string[], url: URL): Promise<Response | null> {
     const method = req.method;
     if (p[1] === 'applications' && method === 'GET') {
@@ -163,7 +174,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         return json({ users: r.results.map(row => withMember(row as any)) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
             const [grants, badges, apps] = await db().batch([
@@ -189,6 +200,18 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             const { statement } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
             await statement.run();
             return json({ ok: true }, 201);
+        }
+        // A member who forgot their password gets a temporary one through the manager's chat.
+        // It replaces the old password and signs the member out everywhere; it is shown only in this response.
+        if (p[3] === 'password' && !p[4] && method === 'POST') {
+            if (target.role === 'manager') fail(400, '매니저 계정에는 임시 비밀번호를 발급하지 않습니다.');
+            if (target.deleted_at) fail(400, '탈퇴한 회원입니다.');
+            const password = tempPassword(), salt = random();
+            await db().batch([
+                db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(password, salt), salt, target.id),
+                db().prepare('DELETE FROM sessions WHERE user_id=?').bind(target.id),
+            ]);
+            return json({ password });
         }
         if (p[3] === 'grades' && p[4] && method === 'DELETE') {
             const r = await db().prepare('DELETE FROM user_grades WHERE id=? AND user_id=?').bind(p[4], p[2]).run();

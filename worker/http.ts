@@ -181,7 +181,7 @@ export function textField(v: unknown, min: number, max: number, label: string) {
 // Nicknames are stored in NFKC form without invisible characters, so a look-alike
 // of the manager nickname (e.g. with a zero-width space or Hangul filler) is refused.
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/u;
-const RESERVED_WORDS = ['매니저', '운영자', '관리자', '운영진', '운영팀', 'admin', 'manager'];
+const RESERVED_WORDS = ['매니저', '운영자', '관리자', '운영진', '운영팀', '탈퇴회원', 'admin', 'manager'];
 export function nicknameField(v: unknown, isManager = false) {
     if (typeof v !== 'string') fail(400, '닉네임은 2~16자로 입력해 주세요.');
     const normalized = v.normalize('NFKC');
@@ -194,6 +194,34 @@ export function nicknameField(v: unknown, isManager = false) {
     const compact = nickname.replace(/[\s._\-·]/g, '').toLowerCase();
     if (compact.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => compact.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
     return nickname;
+}
+
+// Look-alike key: 'ab12', 'a b12', 'AB12_' and 'ab12!' share one key, so only the first of them
+// can be registered. U+119E is where NFKC puts 'ㆍ' (U+318D), so both forms are removed.
+const NICKNAME_NOISE = /[\s._\-·ㆍ\u119E~!@#$%^&*()[\]{}'`|/\\:;,?<>+="]/gu;
+export function nicknameKey(nickname: string) {
+    return nickname.normalize('NFKC').toLowerCase().replace(NICKNAME_NOISE, '');
+}
+
+// Members written before nickname_key existed (or by the previous Worker while a deploy is in
+// progress, or by SQL in tests) get their key here, 200 rows per round. The probe is an indexed
+// lookup that returns nothing once every row has a key, so it runs before every look-alike check
+// instead of being skipped by a per-isolate flag that would miss rows written after it was set.
+// At most 10 rounds (2,000 members) per request keep the D1 calls bounded; the next request continues.
+export async function ensureNicknameKeys() {
+    for (let round = 0; round < 10; round++) {
+        const r = await db().prepare('SELECT id,nickname FROM users WHERE nickname_key IS NULL AND deleted_at IS NULL LIMIT 200').all<{ id: string; nickname: string }>();
+        if (r.results.length) await db().batch(r.results.map(u => db().prepare('UPDATE users SET nickname_key=? WHERE id=? AND nickname=?').bind(nicknameKey(u.nickname), u.id, u.nickname)));
+        if (r.results.length < 200) return;
+    }
+}
+
+// Refuses a nickname that another member already uses, exactly or as a look-alike.
+export async function assertNicknameFree(nickname: string, exceptId: string) {
+    await ensureNicknameKeys();
+    const r = await db().prepare('SELECT nickname FROM users WHERE nickname_key=? AND id!=? LIMIT 5').bind(nicknameKey(nickname), exceptId).all<{ nickname: string }>();
+    if (r.results.some(x => x.nickname === nickname)) fail(409, '이미 사용 중인 닉네임입니다.');
+    if (r.results.length) fail(409, '비슷한 닉네임이 이미 있습니다.');
 }
 
 // The cookie outlives the server session; the session row decides whether it is valid.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, type Post, type User } from '../../shared/market';
@@ -9,14 +9,15 @@ import { useApp } from '../app/state';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 
-type Profile = User & { postCount: number; closedCount: number };
+type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string };
 
 export default function ProfilePage({ id }: { id?: string }) {
-    const { me, refreshMe, requireLogin, openApply, logout } = useApp();
+    const { me, setMe, refreshMe, requireLogin, openApply, logout } = useApp();
     // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
     const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false);
+    const [account, setAccount] = useState<'' | 'password' | 'withdraw'>('');
     const mine = me?.id === id;
 
     useEffect(() => {
@@ -61,6 +62,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             <Avatar name={user.nickname} size="lg" />
             <div className="grow">
                 <NameLine nickname={user.nickname} grade={user.grade} role={user.role} badges={user.badges} size="lg" />
+                {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount} · 거래완료 {user.closedCount}</p>
                 {user.bio && <p className="profile-bio">{user.bio}</p>}
             </div>
@@ -110,8 +112,67 @@ export default function ProfilePage({ id }: { id?: string }) {
             <div className="form-stack">
                 <label className="field"><span className="field-label">닉네임</span><input className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager'} /></label>
                 <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="예: 래더계 위주 거래, 밤에 답장 빠름" /></label>
+                <div className="row">
+                    <button type="button" className="btn btn-line btn-sm" onClick={() => { setEditing(false); setAccount('password'); }}>비밀번호 변경</button>
+                    {user.role !== 'manager' && <button type="button" className="btn btn-text small" style={{ marginLeft: 'auto' }} onClick={() => { setEditing(false); setAccount('withdraw'); }}>회원 탈퇴</button>}
+                </div>
             </div>
         </Modal>
+        <PasswordModal open={account === 'password'} onClose={() => setAccount('')} />
+        <WithdrawModal open={account === 'withdraw'} onClose={() => setAccount('')} onDone={() => { setAccount(''); setMe(null); void navigate('/'); toast('탈퇴 완료'); }} />
     </div>;
+}
+
+// Other devices are signed out by the change; this one stays signed in.
+function PasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+    const [current, setCurrent] = useState(''), [next, setNext] = useState(''), [again, setAgain] = useState('');
+    const [error, setError] = useState(''), [busy, setBusy] = useState(false);
+    useEffect(() => { if (!open) { setCurrent(''); setNext(''); setAgain(''); setError(''); } }, [open]);
+    const mismatch = again !== '' && again !== next;
+    const ready = current !== '' && next.length >= 8 && again === next;
+    async function submit(e: FormEvent) {
+        e.preventDefault();
+        if (busy || !ready) return;
+        setBusy(true); setError('');
+        try { await api('auth/password', 'POST', { current, next }); toast('비밀번호 변경 완료'); onClose(); }
+        catch (err) { setError(errorText(err)); }
+        finally { setBusy(false); }
+    }
+    return <Modal open={open} onClose={() => { if (!busy) onClose(); }} title="비밀번호 변경"
+        footer={<button type="submit" form="password-form" className="btn btn-primary btn-lg" disabled={busy || !ready}>변경</button>}>
+        <form id="password-form" className="form-stack" onSubmit={submit}>
+            <label className="field"><span className="field-label">현재 비밀번호</span>
+                <input className="input" type="password" autoComplete="current-password" value={current} onChange={e => setCurrent(e.target.value)} maxLength={128} required autoFocus /></label>
+            <label className="field"><span className="field-label">새 비밀번호</span>
+                <input className="input" type="password" autoComplete="new-password" value={next} onChange={e => setNext(e.target.value)} placeholder="8자 이상" minLength={8} maxLength={128} required /></label>
+            <div className="field"><label className="field-label" htmlFor="password-again">새 비밀번호 확인</label>
+                <input id="password-again" className="input" type="password" autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} minLength={8} maxLength={128} required
+                    aria-invalid={mismatch} aria-describedby={mismatch ? 'password-again-error' : undefined} />
+                {mismatch && <span id="password-again-error" className="field-error" role="alert">비밀번호가 서로 다릅니다.</span>}</div>
+            {error && <p className="field-error" role="alert">{error}</p>}
+        </form>
+    </Modal>;
+}
+
+// The server signs the member out everywhere; `onDone` clears the app state and goes home.
+function WithdrawModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+    const [password, setPassword] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+    useEffect(() => { if (!open) { setPassword(''); setError(''); } }, [open]);
+    async function submit(e: FormEvent) {
+        e.preventDefault();
+        if (busy || !password) return;
+        setBusy(true); setError('');
+        try { await api('auth/withdraw', 'POST', { password }); onDone(); }
+        catch (err) { setError(errorText(err)); }
+        finally { setBusy(false); }
+    }
+    return <Modal open={open} onClose={() => { if (!busy) onClose(); }} title="회원 탈퇴" description="작성한 글은 모두 숨겨지고 복구할 수 없습니다."
+        footer={<><button type="button" className="btn btn-line btn-lg" disabled={busy} onClick={onClose}>취소</button><button type="submit" form="withdraw-form" className="btn btn-danger-solid btn-lg" disabled={busy || !password}>탈퇴</button></>}>
+        <form id="withdraw-form" className="form-stack" onSubmit={submit}>
+            <label className="field"><span className="field-label">비밀번호</span>
+                <input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} maxLength={128} required autoFocus /></label>
+            {error && <p className="field-error" role="alert">{error}</p>}
+        </form>
+    </Modal>;
 }
 
