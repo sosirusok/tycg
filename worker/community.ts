@@ -1,6 +1,7 @@
 import { db, fail, requireUser, json, body, limit, textField, memberColumns, withMember } from './http';
+import { priceText } from '../shared/market';
 import { amount, parse, visiblePost } from './posts';
-import { blocked, ensureChat } from './chat';
+import { blocked, ensureChat, guardedMessageStatements } from './chat';
 
 // Badge and grade columns for a listed member, without the grade's end date.
 export function publicMember(row: any, prefix = '') {
@@ -89,14 +90,16 @@ async function offersHandler(req: Request, p: string[]) {
     if (method === 'POST' && !p[1]) {
         await limit('offer:' + u.id, 20, 600000);
         const b = await body(req), post = await visiblePost(b.postId, u);
+        if (post.kind !== 'sell') fail(400, '판매 글에만 제시할 수 있습니다.');
         if (post.hidden || post.status !== 'open') fail(409, '제시를 받지 않는 글입니다.');
         if (!post.accepts_offers && post.price_mode !== 'offer') fail(400, '제시를 받지 않는 글입니다.');
         if (post.author_id === u.id) fail(400, '내 글에는 제시할 수 없습니다.');
         const n = amount(b.amount, false), note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : '';
+        if (n === null || n < 1000) fail(400, '제시가는 1,000원 이상입니다.');
         if (await db().prepare("SELECT id FROM offers WHERE post_id=? AND sender_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '대기 중인 제시를 먼저 취소해 주세요.');
         const chat = await ensureChat(u.id, post.author_id), id = crypto.randomUUID(), now = Date.now();
         const result = await db().batch([
-            db().prepare("INSERT INTO offers(id,post_id,sender_id,recipient_id,conversation_id,amount,note,created_at,updated_at) SELECT ?,p.id,?,p.author_id,?,?,?,?,? FROM posts p WHERE p.id=? AND p.hidden=0 AND p.status='open' AND (p.accepts_offers=1 OR p.price_mode='offer') AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=p.author_id) OR (target_id=? AND user_id=p.author_id)) AND NOT EXISTS(SELECT 1 FROM offers WHERE post_id=p.id AND sender_id=? AND status='pending')")
+            db().prepare("INSERT INTO offers(id,post_id,sender_id,recipient_id,conversation_id,amount,note,created_at,updated_at) SELECT ?,p.id,?,p.author_id,?,?,?,?,? FROM posts p WHERE p.id=? AND p.kind='sell' AND p.hidden=0 AND p.status='open' AND (p.accepts_offers=1 OR p.price_mode='offer') AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=p.author_id) OR (target_id=? AND user_id=p.author_id)) AND NOT EXISTS(SELECT 1 FROM offers WHERE post_id=p.id AND sender_id=? AND status='pending')")
                 .bind(id, u.id, chat, n, note, now, now, post.id, u.id, u.id, u.id),
             db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,created_at) SELECT ?,?,?,'offer',?,? WHERE EXISTS(SELECT 1 FROM offers WHERE id=?)").bind(chat, u.id, '가격 제시', id, now, id),
             db().prepare('UPDATE conversations SET updated_at=? WHERE id=?').bind(now, chat),
@@ -113,16 +116,25 @@ async function offersHandler(req: Request, p: string[]) {
         if (action === 'withdrawn' ? offer.sender_id !== u.id : offer.recipient_id !== u.id) fail(403, '권한이 없습니다.');
         if (action === 'accepted' && await blocked(offer.sender_id, offer.recipient_id)) fail(403, '차단된 회원의 제시는 수락할 수 없습니다.');
         const now = Date.now();
+        // The decision leaves a line in the chat, written only when this request made the change
+        // (the offer carries this decision's status and time), so a lost race adds nothing.
+        const text = action === 'accepted' ? `제시 수락 · ${priceText(offer.amount)}. 글이 예약중으로 바뀌었습니다.`
+            : action === 'declined' ? `제시 거절 · ${priceText(offer.amount)}` : `제시 취소 · ${priceText(offer.amount)}`;
+        const notice = guardedMessageStatements(offer.conversation_id, u.id, text, 'system', offer.id, 'EXISTS(SELECT 1 FROM offers WHERE id=? AND status=? AND updated_at=?)', [offer.id, action, now], now);
         if (action === 'accepted') {
             const r = await db().batch([
                 db().prepare("UPDATE offers SET status='accepted',updated_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM posts WHERE id=offers.post_id AND status='open' AND hidden=0) AND NOT EXISTS(SELECT 1 FROM offers x WHERE x.post_id=offers.post_id AND x.status='accepted')").bind(now, offer.id),
                 db().prepare("UPDATE posts SET status='reserved',updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM offers WHERE id=? AND status='accepted')").bind(now, offer.post_id, offer.id),
                 db().prepare("UPDATE offers SET status='declined',updated_at=? WHERE post_id=? AND status='pending' AND EXISTS(SELECT 1 FROM offers x WHERE x.id=? AND x.status='accepted')").bind(now, offer.post_id, offer.id),
+                ...notice,
             ]);
             if (!r[0].meta.changes) fail(409, '다른 제시를 이미 수락했거나 글 상태가 바뀌었습니다.');
         } else {
-            const r = await db().prepare("UPDATE offers SET status=?,updated_at=? WHERE id=? AND status='pending'").bind(action, now, offer.id).run();
-            if (!r.meta.changes) fail(409, '이미 처리된 제시입니다.');
+            const r = await db().batch([
+                db().prepare("UPDATE offers SET status=?,updated_at=? WHERE id=? AND status='pending'").bind(action, now, offer.id),
+                ...notice,
+            ]);
+            if (!r[0].meta.changes) fail(409, '이미 처리된 제시입니다.');
         }
         return json({ ok: true });
     }

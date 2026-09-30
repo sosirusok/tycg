@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, relativeTime, type Post, type User } from '../../shared/market';
+import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -101,7 +101,7 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
             <span className="small">{r.details}</span>
             <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</span>
         </span>
-        {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden }), r.hidden ? '공개 처리' : '숨김 처리')}>{r.hidden ? '공개' : '숨기기'}</button>}
+        {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 처리' : '숨김 처리')}>{r.hidden ? '공개' : '숨기기'}</button>}
         <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
     </li>)}</ul>;
 }

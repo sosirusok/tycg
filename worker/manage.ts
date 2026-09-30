@@ -1,5 +1,7 @@
-import { db, requireUser, requireManager, json, body, textField, memberColumns, withMember } from './http';
-import { decorate, postSelect } from './posts';
+import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, MANAGER_ID } from './http';
+import { REPORT_REASONS } from '../shared/market';
+import { decorate, endOffersStatements, postSelect } from './posts';
+import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
 
 export async function manageHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
@@ -11,14 +13,28 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             db().prepare(postSelect + ' WHERE p.hidden=1 ORDER BY p.updated_at DESC LIMIT 100'),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
         ]);
-        return json({ reports: r[0].results.map(row => withMember(row as any)), hidden: await decorate(r[1].results, u.id), pendingApplications: (r[2].results[0] as any).n });
+        return json({ reports: r[0].results.map(row => withMember(row as any)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n });
     }
+    // Hiding keeps updated_at, stores an optional report reason for the author, and ends the post's
+    // open offers. Unhiding clears the reason.
     if (p[1] === 'visibility' && method === 'POST') {
-        const b = await body(req);
+        const b = await body(req), hidden = b.hidden ? 1 : 0, reason = hidden && typeof b.reason === 'string' ? b.reason : '';
+        if (reason && !(REPORT_REASONS as readonly string[]).includes(reason)) fail(400, '숨김 사유를 확인해 주세요.');
+        if (typeof b.postId !== 'number' && typeof b.postId !== 'string') fail(404, '게시글을 찾을 수 없습니다.');
+        const post = await db().prepare('SELECT id,author_id,title,hidden FROM posts WHERE id=?').bind(b.postId).first<any>();
+        if (!post) fail(404, '게시글을 찾을 수 없습니다.');
+        const now = Date.now();
         await db().batch([
-            db().prepare('UPDATE posts SET hidden=?,updated_at=? WHERE id=?').bind(b.hidden ? 1 : 0, Date.now(), b.postId),
-            db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND status IN('pending','accepted') AND ?=1").bind(Date.now(), b.postId, b.hidden ? 1 : 0),
+            db().prepare('UPDATE posts SET hidden=?,hidden_reason=? WHERE id=?').bind(hidden, reason, post.id),
+            ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now) : [],
         ]);
+        // The author hears about it in their chat with the manager. Best-effort: the author may have
+        // blocked the manager (ensureChat then throws 403), and a failed notice never undoes the change.
+        if (post.author_id !== MANAGER_ID && post.hidden !== hidden) {
+            const text = hidden ? `‘${post.title}’ 글이 숨김 처리되었습니다.${reason ? ' 사유: ' + reason : ''}` : `‘${post.title}’ 글이 다시 공개되었습니다.`;
+            try { await db().batch(messageStatements(await ensureChat(MANAGER_ID, post.author_id), MANAGER_ID, text, 'system')); }
+            catch (e) { console.warn('Hide notice not sent', e instanceof Error ? e.message : 'unknown'); }
+        }
         return json({ ok: true });
     }
     if (p[1] === 'report' && method === 'POST') {

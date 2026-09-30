@@ -63,21 +63,19 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             .bind(u.id, u.id, u.id, u.id).all();
         return json({ chats: r.results.map(partner) });
     }
+    // Opening a chat from a post only checks the post and makes sure the chat exists. The post's
+    // card is written with the first message (see below), so an unused 채팅하기 notifies nobody.
     if (!p[1] && method === 'POST') {
         await limit('chat-new:' + u.id, 30, 60000);
         const b = await body(req);
-        if (typeof b.userId !== 'string') fail(400, '회원을 확인해 주세요.');
-        let post: any;
-        if (b.postId) {
-            post = await visiblePost(b.postId, u);
-            if (post.author_id !== b.userId) fail(400, '게시글 작성자를 확인해 주세요.');
+        let partnerId: unknown = b.userId;
+        if (b.postId !== undefined && b.postId !== null) {
+            const post = await visiblePost(b.postId, u);
+            partnerId ??= post.author_id;
+            if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
         }
-        const id = await ensureChat(u.id, b.userId);
-        if (post) {
-            const exists = await db().prepare("SELECT id FROM messages WHERE conversation_id=? AND type='listing' AND reference_id=?").bind(id, String(post.id)).first();
-            if (!exists) await db().batch(messageStatements(id, u.id, post.title, 'listing', String(post.id)));
-        }
-        return json({ id });
+        if (typeof partnerId !== 'string') fail(400, '회원을 확인해 주세요.');
+        return json({ id: await ensureChat(u.id, partnerId) });
     }
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
@@ -113,8 +111,21 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
                 if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 보낼 수 있습니다.');
             }
-            const r = await db().batch(messageStatements(p[1], u.id, text, 'text', null, images as string[]));
-            return json({ id: r[0].meta.last_row_id }, 201);
+            // A message sent about a post (the first one after 채팅하기) is preceded by that post's card,
+            // unless the chat's latest card already shows it. Asking about B and then A again gives A, B, A,
+            // so the latest card is always the post being discussed.
+            let post: any = null;
+            if (b.postId !== undefined && b.postId !== null) {
+                post = await visiblePost(b.postId, u);
+                if (post.author_id !== (c.user_a === u.id ? c.user_b : c.user_a)) fail(400, '게시글 작성자를 확인해 주세요.');
+            }
+            const now = Date.now(), ref = post ? String(post.id) : '';
+            const r = await db().batch([
+                ...post ? [db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?")
+                    .bind(p[1], u.id, post.title, ref, now, p[1], ref)] : [],
+                ...messageStatements(p[1], u.id, text, 'text', null, images as string[], now),
+            ]);
+            return json({ id: r[post ? 1 : 0].meta.last_row_id }, 201);
         }
     }
     if (p[1] && p[2] === 'read' && method === 'POST') {

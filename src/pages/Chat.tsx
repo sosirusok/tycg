@@ -3,8 +3,8 @@ import { ArrowLeft, Ban, ImagePlus, LoaderCircle, Send, UserCog, X } from 'lucid
 import { toast } from 'sonner';
 import { priceText, relativeTime, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
-import { api, errorText, imageUrl, uploadPhoto } from '../lib/api';
-import { Link } from '../lib/router';
+import { ApiError, api, errorText, imageUrl, uploadPhoto } from '../lib/api';
+import { Link, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
@@ -68,6 +68,10 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
     const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
     const [panel, setPanel] = useState(false);
+    // Opened from a post's 채팅하기 (/chat/:id?post=N): the first message carries that post, so the
+    // server puts its card right before it. The param is then dropped from the address.
+    const { params } = useLocation();
+    const aboutPost = useRef(params.get('post'));
     const scroller = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), idle = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
 
     const merge = (incoming: Message[]) => setMessages(prev => {
@@ -126,12 +130,24 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         e?.preventDefault();
         if (sending || uploading || (!text.trim() && !photos.length)) return;
         setSending(true);
+        const postId = aboutPost.current && /^\d+$/.test(aboutPost.current) ? Number(aboutPost.current) : undefined;
         try {
-            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos });
+            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId });
+            if (postId !== undefined) forgetPost();
             setText(''); setPhotos([]); stick.current = true;
             await poll(); activity.current();
-        } catch (err) { toast.error(errorText(err)); }
+        } catch (err) {
+            // A post that is gone must not block the chat: the next try goes without it.
+            if (postId !== undefined && err instanceof ApiError && (err.status === 400 || err.status === 404)) forgetPost();
+            toast.error(errorText(err));
+        }
         finally { setSending(false); input.current?.focus(); }
+    }
+    // The post goes with one message only; the address loses the param too.
+    function forgetPost() {
+        aboutPost.current = null;
+        const url = new URL(location.href);
+        if (url.searchParams.has('post')) { url.searchParams.delete('post'); history.replaceState(history.state, '', url.pathname + url.search + url.hash); }
     }
     function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send(); }

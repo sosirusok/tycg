@@ -89,7 +89,7 @@ export function Detail({ id }: { id: string }) {
 
     async function startChat() {
         requireLogin(async () => {
-            try { const d = await api<{ id: string }>('chats', 'POST', { userId: post!.author_id, postId: post!.id }); refreshUnread(); void navigate('/chat/' + d.id); }
+            try { const d = await api<{ id: string }>('chats', 'POST', { userId: post!.author_id, postId: post!.id }); refreshUnread(); void navigate(`/chat/${d.id}?post=${post!.id}`); }
             catch (e) { toast.error(errorText(e)); }
         });
     }
