@@ -33,14 +33,25 @@ function sqlFails(command) {
     throw new Error('expected the SQL to fail: ' + command);
 }
 
+// A pooled keep-alive socket can be closed by the local dev server while a suite waits on
+// `wrangler d1 execute` (about 1.7 s per call). The request never reached the Worker then, so it
+// is sent once more on a new connection.
+async function send(url, init) {
+    try { return await fetch(url, init()); }
+    catch (error) {
+        if (error?.cause?.code !== 'UND_ERR_SOCKET') throw error;
+        return fetch(url, init());
+    }
+}
+
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data) => {
-        const response = await fetch(base + '/api/' + path, {
+        const response = await send(base + '/api/' + path, () => ({
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: data === undefined ? undefined : JSON.stringify(data),
-        });
+        }));
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         const raw = await response.text();

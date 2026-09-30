@@ -108,3 +108,29 @@ export function applicationTemplate(kind: ApplicationKind, target: string, plan?
 }
 
 export const APPLICATION_STATUS_NAMES: Record<ApplicationStatus, string> = { pending: '대기', approved: '지급 완료', rejected: '반려', cancelled: '취소' };
+
+// Grade benefits (see the Guide table and the apply modal, which render from this object).
+// The Worker enforces them; the manager account has no caps.
+export type Perks = { bumpsPerDay: number; bumpGapHours: number; openPosts: number; postsPerDay: number; photos: number; boardSlots: number; homeShelf: boolean };
+
+const ELITE_PERKS: Perks = { bumpsPerDay: 20, bumpGapHours: 1, openPosts: 50, postsPerDay: 50, photos: 12, boardSlots: 3, homeShelf: true };
+export const PERKS: Record<GradeId, Perks> = {
+    normal: { bumpsPerDay: 3, bumpGapHours: 6, openPosts: 10, postsPerDay: 10, photos: 6, boardSlots: 0, homeShelf: false },
+    plus: { bumpsPerDay: 6, bumpGapHours: 3, openPosts: 20, postsPerDay: 20, photos: 8, boardSlots: 0, homeShelf: false },
+    premium: { bumpsPerDay: 10, bumpGapHours: 2, openPosts: 30, postsPerDay: 30, photos: 10, boardSlots: 1, homeShelf: false },
+    elite: ELITE_PERKS,
+    // 관리자 has the same limits as 엘리트 and no extra permissions.
+    admin: { ...ELITE_PERKS },
+};
+export const MANAGER_PERKS: Perks = { bumpsPerDay: Infinity, bumpGapHours: 0, openPosts: Infinity, postsPerDay: Infinity, photos: 12, boardSlots: 3, homeShelf: true };
+
+export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
+    if (u.role === 'manager') return MANAGER_PERKS;
+    return PERKS[u.grade as GradeId] || PERKS.normal;
+}
+
+// Start of the current day on the Korean calendar (daily caps reset at KST midnight).
+export const kstDayStart = (now: number) => now - ((now + 9 * 3600000) % 86400000);
+
+// Same-title check: letters and digits only, so '28 챌린저 계정 팝니다' and '28챌린저  계정팝니다!' match.
+export const titleKey = (t: string) => t.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');

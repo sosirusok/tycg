@@ -9,6 +9,7 @@ import { chatHandler } from './chat';
 import { communityHandler } from './community';
 import { membershipHandler } from './membership';
 import { manageHandler } from './manage';
+import { usageHandler } from './perks';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -211,6 +212,7 @@ export async function handleApi(req: Request) {
             case 'chats': { const r = await chatHandler(req, p, url); if (r) return r; break; }
             case 'config': case 'applications': { const r = await membershipHandler(req, p); if (r) return r; break; }
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
+            case 'me': if (p[1] === 'usage' && method === 'GET') return await usageHandler(req); break;
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

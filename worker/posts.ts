@@ -1,9 +1,30 @@
+import { env } from 'cloudflare:workers';
 import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
+import { perksOf, kstDayStart, titleKey } from '../shared/membership';
+
+const HOUR = 3600000, DAY = 86400000;
+
+// "15:40" on the Korean clock, rounded up to the minute so the time shown is never early.
+export function clock(t: number) {
+    const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * HOUR);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+
+// The same-title key. A title with no letters or digits ('!!') keeps its symbols, so it never
+// shares the empty key of rows that the daily cleanup has not filled in yet.
+export const postTitleKey = (title: string) => titleKey(title) || '#' + title.normalize('NFKC').replace(/\s+/g, '');
+
+// Test only: POST_LIMITS=relaxed lifts the open-post, daily-post and same-title caps, and only for
+// requests to 127.0.0.1 or localhost, so the API suites can create many posts. Bump caps still apply.
+function relaxedLimits(req: Request) {
+    const host = new URL(req.url).hostname;
+    return (env as Partial<Env>).POST_LIMITS === 'relaxed' && (host === '127.0.0.1' || host === 'localhost');
+}
 
 export const postSelect = `SELECT p.*,u.nickname,u.role,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
 
@@ -44,6 +65,9 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         delete p.author_grade_expires_at;
         // Why the manager hid a post is shown to its author and the manager only.
         if (p.author_id !== viewer?.id && viewer?.role !== 'manager') delete p.hidden_reason;
+        const featured = p.featured_at !== null && p.featured_at !== undefined;
+        delete p.featured_at;
+        delete p.title_key;
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -52,6 +76,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })) : [],
+            featured,
         };
     });
 }
@@ -194,8 +219,10 @@ async function validatePost(b: any, u: User, existing?: any) {
         if (typeof legacySkins === 'string' && legacySkins) details.rareSkins = legacySkins;
     }
     const images = b.images || [];
-    if (!Array.isArray(images) || images.length > 6 || images.some(x => typeof x !== 'string') || new Set(images).size !== images.length)
-        fail(400, '사진은 최대 6장까지 첨부할 수 있습니다.');
+    if (!Array.isArray(images) || images.some(x => typeof x !== 'string') || new Set(images).size !== images.length) fail(400, '사진을 확인해 주세요.');
+    // The cap follows the author's grade; an edit may keep the photos a post already has after a grade ends.
+    const maxPhotos = Math.max(perksOf(u).photos, existing ? parse(existing.images, []).length : 0);
+    if (images.length > maxPhotos) fail(400, `사진은 한 글에 ${maxPhotos}장까지입니다.`);
     if (images.length) {
         const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
         if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 쓸 수 있습니다.');
@@ -205,7 +232,28 @@ async function validatePost(b: any, u: User, existing?: any) {
     return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0 };
 }
 
+// Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
+// slots for their grade when the list is read (프리미엄 1, 엘리트 and above 3, the manager 3), newest
+// featured first. A grade that ended loses its slots at once; nothing is deleted.
+function featuredCte(now: number) {
+    return {
+        sql: `WITH f AS (SELECT p.id,ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.featured_at DESC) AS n,
+            CASE WHEN u.role='manager' THEN 3 ELSE (SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=p.author_id AND (g.expires_at IS NULL OR g.expires_at>?)) END AS r
+            FROM posts p JOIN users u ON u.id=p.author_id WHERE p.featured_at IS NOT NULL AND p.status='open' AND p.hidden=0 AND p.bumped_at>?),
+            shown AS (SELECT id,r FROM f WHERE n<=CASE WHEN r>=3 THEN 3 WHEN r=2 THEN 1 ELSE 0 END) `,
+        args: [now, now - 72 * HOUR],
+    };
+}
+
+// Posts the previous Worker wrote during a deploy have bumped_at=0 and would sort last. The first
+// list in each isolate copies created_at into them (an indexed lookup); the daily cleanup does too.
+let bumpBackfilled = false;
+
 async function listPosts(req: Request, url: URL) {
+    if (!bumpBackfilled) {
+        await db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0').run();
+        bumpBackfilled = true;
+    }
     const u = await currentUser(req), s = url.searchParams, where: string[] = [], values: any[] = [];
     const author = s.get('author');
     // Authors see their own hidden posts in their own list; nobody else sees hidden posts in a list.
@@ -341,19 +389,111 @@ async function listPosts(req: Request, url: URL) {
         where.push(`p.id IN(SELECT post_id FROM ${scope === 'favorites' ? 'favorites' : 'history'} WHERE user_id=?)`);
         values.push(u.id);
     }
-    let order = s.get('sort') === 'price-low' ? 'p.price IS NULL,p.price ASC' : s.get('sort') === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.created_at DESC';
+    // 최신순 follows 끌올; created_at stays the time the post was written.
+    const sort = s.get('sort');
+    let order = sort === 'price-low' ? 'p.price IS NULL,p.price ASC' : sort === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.bumped_at DESC';
     if (scope === 'recent') order = '(SELECT created_at FROM history WHERE post_id=p.id AND user_id=?) DESC';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
+    const cte = featuredCte(Date.now());
+    // Home '추천 매물': featured posts of 엘리트 and above across every tab, with the same hidden,
+    // block and 대리 인증 rules as the boards.
+    if (s.get('featured') === 'home') {
+        const r = await db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown WHERE r>=3) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6)).all();
+        return json({ posts: await decorate(r.results, u), total: r.results.length, page: 1, size });
+    }
+    // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
+    // posts stay in the list, so counts and paging do not change.
+    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope;
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
     const r = await db().batch([
         db().prepare('SELECT COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause).bind(...values),
         db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
+        ...withFeatured ? [db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown) ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
     ]);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
-    return json({ posts: await decorate(r[1].results, u), total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {} });
+    const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
+    return json({ posts: await decorate(r[1].results, u), total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+}
+
+// 끌올: moves an open post to the top of 최신순. The gap per post and the daily count (all of the
+// member's posts, reset at KST midnight) are checked inside the UPDATE, so parallel taps cannot pass
+// the caps. The manager has neither cap.
+async function bumpPost(u: User, post: any) {
+    if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 끌올할 수 있습니다.');
+    const perks = perksOf(u), now = Date.now(), dayStart = kstDayStart(now), gapMs = perks.bumpGapHours * HOUR;
+    const capped = Number.isFinite(perks.bumpsPerDay);
+    const today = "(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='bump' AND created_at>=?)";
+    const r = await db().batch([
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1 WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?${capped ? ` AND ${today}<?` : ''}`)
+            .bind(now, post.id, u.id, now - gapMs, ...capped ? [u.id, dayStart, perks.bumpsPerDay] : []),
+        db().prepare("INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,?,'bump',? WHERE EXISTS(SELECT 1 FROM posts WHERE id=? AND bumped_at=?)").bind(u.id, post.id, now, post.id, now),
+        db().prepare(`SELECT ${today} AS n`).bind(u.id, dayStart),
+    ]);
+    if (!r[0].meta.changes) {
+        const row = await db().prepare(`SELECT status,hidden,bumped_at,${today} AS n FROM posts WHERE id=?`).bind(u.id, dayStart, post.id).first<any>();
+        if (!row || row.status !== 'open' || row.hidden) fail(409, '거래중인 글만 끌올할 수 있습니다.');
+        if (row.bumped_at > now - gapMs) fail(429, `같은 글은 ${perks.bumpGapHours}시간마다 끌올할 수 있습니다. (${clock(row.bumped_at + gapMs)}부터 가능)`);
+        if (capped && row.n >= perks.bumpsPerDay) fail(429, `오늘 끌올 ${perks.bumpsPerDay}번을 모두 썼습니다. 자정에 초기화됩니다.`);
+        fail(429, '잠시 후 다시 시도해 주세요.');
+    }
+    const used = Number((r[2].results[0] as any)?.n) || 0;
+    return json({
+        bumpedAt: now, bumpsLeft: capped ? Math.max(0, perks.bumpsPerDay - used) : null, bumpsPerDay: capped ? perks.bumpsPerDay : null,
+        nextBumpAt: now + gapMs, resetAt: dayStart + DAY,
+    });
+}
+
+// 게시판 상단 노출 on or off. Turning one on while every slot is used drops the author's oldest
+// featured posts in the same batch. Which featured posts are shown is decided when lists are read
+// (featuredCte), against the author's grade at that time.
+async function featurePost(req: Request, u: User, post: any) {
+    const b = await body(req), perks = perksOf(u), now = Date.now(), active = !!b.active;
+    const mine = "author_id=? AND featured_at IS NOT NULL AND status!='closed'";
+    if (active) {
+        if (!perks.boardSlots) fail(403, '게시판 상단 노출은 프리미엄부터 가능합니다.');
+        if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 상단에 노출할 수 있습니다.');
+        if (post.status !== 'open' || post.hidden) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+    }
+    const dropped = active
+        ? (await db().prepare(`SELECT id,title FROM posts WHERE ${mine} AND id!=? ORDER BY featured_at DESC LIMIT -1 OFFSET ?`).bind(u.id, post.id, perks.boardSlots - 1).all<{ id: number; title: string }>()).results
+        : [];
+    const openNow = "EXISTS(SELECT 1 FROM posts WHERE id=? AND status='open' AND hidden=0)";
+    const r = await db().batch([
+        ...dropped.length ? [db().prepare(`UPDATE posts SET featured_at=NULL WHERE id IN (SELECT value FROM json_each(?)) AND ${openNow}`).bind(JSON.stringify(dropped.map(d => d.id)), post.id)] : [],
+        active ? db().prepare(`UPDATE posts SET featured_at=? WHERE id=? AND ${openNow}`).bind(now, post.id, post.id) : db().prepare('UPDATE posts SET featured_at=NULL WHERE id=?').bind(post.id),
+        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${mine}`).bind(u.id),
+    ]);
+    if (active && !r[r.length - 2].meta.changes) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+    return json({
+        featured: active, slots: perks.boardSlots, used: Number((r[r.length - 1].results[0] as any)?.n) || 0,
+        replaced: dropped.length ? { id: dropped[0].id, title: dropped[0].title } : null,
+    });
+}
+
+// Quick 즉거가 and 현젯 change for a 판매 post, without the editor. It never bumps the post.
+// currentOffer '' or null removes 현젯.
+async function patchPrice(req: Request, u: User, post: any) {
+    if (post.kind !== 'sell') fail(400, '판매 글만 가격을 수정할 수 있습니다.');
+    const b = await body(req), now = Date.now();
+    const hasPrice = b.price !== undefined, hasOffer = b.currentOffer !== undefined;
+    if (!hasPrice && !hasOffer) fail(400, '가격을 입력해 주세요.');
+    const price: number | null = hasPrice ? amount(b.price, false) : post.price;
+    if (hasPrice && price! < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
+    const stored = parse(post.details, {}).currentOffer;
+    const offer: number | null = hasOffer ? (b.currentOffer === '' || b.currentOffer === null ? null : amount(b.currentOffer, false)) : stored ? Number(stored) : null;
+    if (price !== null && offer !== null && offer >= price) fail(400, '현젯은 즉거가보다 낮게 입력해 주세요.');
+    const sets: string[] = [], args: unknown[] = [];
+    if (hasPrice) { sets.push("price=?,price_mode='fixed'"); args.push(price); }
+    if (hasOffer && offer === null) sets.push("details=json_remove(details,'$.currentOffer')");
+    if (hasOffer && offer !== null) { sets.push("details=json_set(details,'$.currentOffer',?)"); args.push(String(offer)); }
+    await db().batch([
+        ...hasPrice ? priceHistoryStatements(post.id, 'sell', price, now) : [],
+        db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=? WHERE id=? AND kind='sell'`).bind(...args, now, post.id),
+    ]);
+    return json({ post: (await decorate([await rawPost(post.id)], u))[0] });
 }
 
 export async function postsHandler(req: Request, p: string[], url: URL): Promise<Response> {
@@ -384,34 +524,61 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
     }
+    if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
+    if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
+    if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);
     if (p[2] === 'status' && method === 'PATCH') {
         const b = await body(req);
         if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
         if (existing.kind === 'proxy_offer' && b.status !== 'closed' && !canOfferProxy(u)) fail(403, '대리 인증이 없으면 대리(진행) 글은 거래완료로만 바꿀 수 있습니다.');
         const now = Date.now();
         await db().batch([
-            db().prepare('UPDATE posts SET status=?,updated_at=? WHERE id=?').bind(b.status, now, existing.id),
+            // 거래완료 also ends 게시판 상단 노출.
+            db().prepare("UPDATE posts SET status=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?").bind(b.status, now, b.status, existing.id),
             ...endOffersStatements(existing.id, existing.author_id, STATUS_ENDS_OFFERS, [b.status, b.status], now),
         ]);
         return json({ ok: true });
     }
     if (!['POST', 'PUT'].includes(method) || p[2]) fail(405, '지원하지 않는 요청입니다.');
     if (method === 'POST' && p[1] || method === 'PUT' && !existing) fail(400, '게시글 번호를 확인해 주세요.');
-    const v = await validatePost(await body(req), u, existing), now = Date.now();
+    const v = await validatePost(await body(req), u, existing), now = Date.now(), key = postTitleKey(v.title);
     if (!existing) {
+        // Caps by grade: 거래중·예약중 posts (hidden included), new posts today (deleting one does not
+        // give it back), the same title as an open post of the same kind, and the same title as a
+        // post deleted within the bump gap. A title that only matches 거래완료 posts is allowed.
+        const perks = perksOf(u), strict = u.role !== 'manager' && !relaxedLimits(req), dayStart = kstDayStart(now);
+        if (strict) {
+            const gapMs = perks.bumpGapHours * HOUR;
+            const c = await db().prepare(`SELECT (SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed') AS openCount,
+                (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?) AS postsToday,
+                EXISTS(SELECT 1 FROM posts WHERE author_id=? AND kind=? AND status!='closed' AND title_key=?) AS openDup,
+                (SELECT MAX(e.created_at) FROM post_events e WHERE e.user_id=? AND e.kind='post' AND e.title_key=? AND e.created_at>? AND NOT EXISTS(SELECT 1 FROM posts WHERE id=e.post_id)) AS deletedAt`)
+                .bind(u.id, u.id, dayStart, u.id, v.kind, key, u.id, key, now - gapMs).first<any>();
+            if (c.openCount >= perks.openPosts) fail(429, `거래중·예약중 글은 ${perks.openPosts}개까지입니다. 거래완료로 바꾸거나 삭제해 주세요.`);
+            if (c.postsToday >= perks.postsPerDay) fail(429, `오늘 새 글은 ${perks.postsPerDay}개까지입니다.`);
+            if (c.openDup) fail(409, '같은 제목의 거래중 글이 있습니다. 그 글을 끌올해 주세요.');
+            if (c.deletedAt) fail(429, `삭제한 글과 같은 제목은 ${clock(c.deletedAt + gapMs)}부터 다시 올릴 수 있습니다.`);
+        }
+        // The insert repeats both counts so parallel requests cannot pass them. The follow-up rows
+        // select the new post's id and insert nothing when the insert was refused.
+        const guard = strict ? "(SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed')<? AND (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?)<?" : '1';
+        const newPost = '(SELECT id FROM posts WHERE author_id=? AND created_at=? AND title_key=? ORDER BY id DESC LIMIT 1)', newArgs = [u.id, now, key];
         const r = await db().batch([
-            db().prepare('INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now),
-            ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
-            ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
-            db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT (SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),value FROM json_each(?)').bind(u.id, now, v.images),
+            db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${guard}`)
+                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now, now, key, ...strict ? [u.id, perks.openPosts, u.id, dayStart, perks.postsPerDay] : []),
+            ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
+            ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
+            db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
+            db().prepare(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT ?,id,'post',?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(u.id, key, now, ...newArgs),
         ]);
+        if (!r[0].meta.changes) fail(429, '잠시 후 다시 시도해 주세요.');
         return json({ id: r[0].meta.last_row_id }, 201);
     }
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
-        db().prepare('UPDATE posts SET kind=?,title=?,body=?,price=?,status=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=? WHERE id=?')
-            .bind(v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, existing.id),
+        // Editing never bumps. 거래완료 ends 게시판 상단 노출.
+        db().prepare("UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,status=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?")
+            .bind(v.kind, v.title, key, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, v.status, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
