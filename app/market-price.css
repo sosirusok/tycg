@@ -1,0 +1,18 @@
+.market-price { display:flex; flex-direction:column; gap:8px; min-width:0; color:#191F28; }
+.market-price-label { font-size:13px; font-weight:600; color:#333D4B; }
+.market-price-line { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 10px; }
+.market-price-before { color:#6B7280; font-size:14px; font-weight:400; text-decoration-thickness:1px; }
+.market-price .market-price-current { font-size:28px; font-weight:750; letter-spacing:-.7px; line-height:1.3; color:#191F28; overflow-wrap:anywhere; }
+.market-current-offer { display:flex; gap:10px; align-items:baseline; color:#333D4B; font-size:14px; }
+.market-current-offer b { font-weight:600; }
+.market-price.compact { gap:4px; }
+.market-price.compact .market-price-current { font-size:20px; letter-spacing:-.4px; }
+.market-price.compact .market-price-before { font-size:12px; }
+.market-price.compact .market-current-offer { font-size:12px; }
+.exchange-detail-title { font-size:20px; font-weight:700; margin-bottom:22px; }
+.exchange-wanted { margin-top:28px; padding-top:24px; border-top:1px solid #D1D6DB; }
+.exchange-wanted h4 { font-size:17px; margin:0 0 18px; }
+@media(max-width:640px){.market-price .market-price-current{font-size:24px}.market-price.compact .market-price-current{font-size:18px}.mobile-trade-bar .market-price-label{font-size:11px}.mobile-trade-bar .market-price-line{gap:4px 7px}.mobile-trade-bar .market-price-before{font-size:11px}.mobile-trade-bar .market-current-offer{display:none}}
+
+.detail-mobile-price{display:none}
+@media(max-width:700px){.detail-mobile-price{display:block;margin-top:22px}.price-box>.market-price{display:none}}

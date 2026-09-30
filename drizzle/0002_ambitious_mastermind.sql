@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX `offers_pending_unique` ON `offers` (`post_id`,`sender_id`) WHERE status = 'pending';--> statement-breakpoint
+CREATE UNIQUE INDEX `offers_accepted_unique` ON `offers` (`post_id`) WHERE status = 'accepted';
