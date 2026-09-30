@@ -133,7 +133,7 @@ function Notices() {
             </div>
         </Modal>
         <Modal open={!!deleting} onClose={() => setDeleting(null)} title="공지 삭제" description={deleting?.title}
-            footer={<><button className="btn btn-line" onClick={() => setDeleting(null)}>취소</button><button className="btn btn-dark" onClick={() => deleting && remove(deleting.id)}>삭제</button></>}><span /></Modal>
+            footer={<><button className="btn btn-line" onClick={() => setDeleting(null)}>취소</button><button className="btn btn-danger-solid" onClick={() => deleting && remove(deleting.id)}>삭제</button></>} />
     </>;
 }
 

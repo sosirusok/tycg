@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
-import { BadgeCheck, House, LayoutList, MessageCircle, PenLine, UserRound } from 'lucide-react';
+import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound } from 'lucide-react';
 import { Link, navigate, useLocation } from './lib/router';
 import { KIND_NAMES, TRADE_KINDS, type User } from '../shared/market';
 import { AppProvider, useApp } from './app/state';
@@ -53,9 +53,13 @@ function Shell() {
         else void navigate(write);
     });
 
+    // On phones the apply button shows only on home and profiles, and never for the manager
+    // (who does not apply); desktop keeps it on every page (shell.css).
+    const showApply = me?.role !== 'manager' && (page === '' || page === 'profile');
+
     return <>
         <Toaster position="top-center" toastOptions={{ className: 'toast' }} />
-        <header className="header">
+        <header className={'header' + (showApply ? ' show-apply' : '')}>
             <div className="container header-inner">
                 <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} />좀비고 거래소</Link>
                 <nav className="nav" aria-label="주 메뉴">
@@ -64,7 +68,7 @@ function Shell() {
                 </nav>
                 <div className="header-right">
                     {me?.role !== 'manager' && <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
-                        <BadgeCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증/등급 신청</span>
+                        <ShieldCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증/등급 신청</span>
                     </button>}
                     <button type="button" className="header-link header-chat" aria-label={`채팅${unread ? `, 읽지 않은 메시지 ${unread}개` : ''}`} onClick={() => go('/chat')}>
                         <MessageCircle size={20} /><span className="header-link-text">채팅</span>
@@ -84,7 +88,7 @@ function Shell() {
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void logout()}>로그아웃</DropdownMenu.Item>
                             </DropdownMenu.Content>
                         </DropdownMenu.Portal>
-                    </DropdownMenu.Root> : <button type="button" className="header-link header-login" onClick={() => openAuth('login')}>로그인 / 회원가입</button>}
+                    </DropdownMenu.Root> : <button type="button" className="header-link header-login" onClick={() => openAuth('login')}><span className="label-long">로그인 / 회원가입</span><span className="label-short">로그인</span></button>}
                     <button type="button" className="btn btn-primary btn-sm header-write" onClick={compose}><PenLine size={16} />글쓰기</button>
                 </div>
             </div>

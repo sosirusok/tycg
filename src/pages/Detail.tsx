@@ -197,7 +197,7 @@ export function Detail({ id }: { id: string }) {
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
-            footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-dark" onClick={remove}>삭제</button></>}><span /></Modal>
+            footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-danger-solid" onClick={remove}>삭제</button></>} />
     </div>;
 }
 

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
 import { X } from 'lucide-react';
 import { BADGES, gradeInfo, type BadgeId, type GradeId } from '../../shared/membership';
@@ -42,7 +42,7 @@ export function NameLine({ nickname, grade, role, badges, size = '' }: { nicknam
 }
 
 export function Modal({ open, onClose, title, description, children, footer, wide = false }: {
-    open: boolean; onClose: () => void; title: string; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean;
+    open: boolean; onClose: () => void; title: string; description?: ReactNode; children?: ReactNode; footer?: ReactNode; wide?: boolean;
 }) {
     return <Dialog.Root open={open} onOpenChange={o => { if (!o) onClose(); }}>
         <Dialog.Portal>
@@ -52,10 +52,11 @@ export function Modal({ open, onClose, title, description, children, footer, wid
                     <Dialog.Title asChild><h2>{title}</h2></Dialog.Title>
                     <Dialog.Close className="icon-btn" aria-label="닫기"><X size={22} /></Dialog.Close>
                 </div>
-                <div className="modal-body">
+                {/* A confirm with only a title and buttons gets no body, so no blank band sits above the footer. */}
+                {(description || children) && <div className="modal-body">
                     {description && <p className="modal-desc">{description}</p>}
                     {children}
-                </div>
+                </div>}
                 {footer && <div className="modal-foot">{footer}</div>}
             </Dialog.Content>
         </Dialog.Portal>
@@ -73,22 +74,39 @@ export function SkeletonRows({ count = 4, height = 132 }: { count?: number; heig
 
 export function Tabs<T extends string>({ items, value, onChange, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (v: T) => void; label: string }) {
     const row = useRef<HTMLDivElement>(null);
-    // On phones the row scrolls sideways: keep the selected tab in view. Only the row
-    // scrolls, never the page, so a tab row below the fold does not move the page.
+    const [hasMore, setHasMore] = useState(false);
+    // More tabs off to the right: the row fades out (.tabs.has-more) until it is scrolled to the end.
+    const measure = useCallback(() => {
+        const box = row.current;
+        setHasMore(!!box && box.scrollLeft + box.clientWidth < box.scrollWidth - 1);
+    }, []);
+    // On phones the row scrolls sideways: keep the selected tab in view on mount and on every change.
+    // scrollIntoView runs only while the row is on screen, so block 'nearest' never moves the page;
+    // a row below the fold scrolls itself instead.
     useEffect(() => {
         const show = () => {
             const box = row.current, tab = box?.querySelector<HTMLElement>('[aria-selected=true]');
-            if (!box || !tab || box.scrollWidth <= box.clientWidth) return;
-            const b = box.getBoundingClientRect(), t = tab.getBoundingClientRect();
-            if (t.left < b.left || t.right > b.right) box.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+            if (box && tab && box.scrollWidth > box.clientWidth) {
+                const b = box.getBoundingClientRect();
+                if (b.top >= 0 && b.bottom <= window.innerHeight) tab.scrollIntoView({ inline: 'center', block: 'nearest' });
+                else {
+                    const t = tab.getBoundingClientRect();
+                    if (t.left < b.left || t.right > b.right) box.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+                }
+            }
+            measure();
         };
         show();
         // The web font widens the labels after first paint; measure again once it is in.
         let alive = true;
         void document.fonts?.ready.then(() => { if (alive) show(); });
         return () => { alive = false; };
-    }, [value]);
-    return <div ref={row} className="tabs" role="tablist" aria-label={label}>
+    }, [value, measure]);
+    useEffect(() => {
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+    }, [measure]);
+    return <div ref={row} className={'tabs' + (hasMore ? ' has-more' : '')} role="tablist" aria-label={label} onScroll={measure}>
         {items.map(item => <button key={item.id} role="tab" type="button" className="tab" aria-selected={item.id === value} onClick={() => onChange(item.id)}>{item.label}</button>)}
     </div>;
 }
