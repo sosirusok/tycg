@@ -63,9 +63,7 @@ try {
   ], { stdio: "inherit" }), 60000);
 
   const server = child([
-    "--import", "./scripts/runtime-env.mjs", "./node_modules/wrangler/bin/wrangler.js",
-    "dev", "--config", "dist/server/wrangler.json", "--local", "--persist-to", ".wrangler/state",
-    "--ip", "127.0.0.1", "--port", "8790", "--inspector-port", "0",
+    "--import", "./scripts/runtime-env.mjs", "./scripts/start-test-worker.mjs",
   ], { stdio: ["ignore", "pipe", "pipe"] });
   server.stdout.pipe(process.stdout);
   server.stderr.pipe(process.stderr);
