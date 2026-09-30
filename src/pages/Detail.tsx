@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, Pencil, Trash2, X } fr
 import { Dialog } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, STATUS_NAMES, categoryName, manToWon, parseList, relativeTime, skinDisplay, skinTags, tagName,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, STATUS_NAMES, categoryName, choiceLabel, manToWon, parseList, rankText, relativeTime, skinDisplay, skinTags, tagName,
     type Post,
 } from '../../shared/market';
 import { api, errorText, imageUrl } from '../lib/api';
@@ -32,12 +32,12 @@ function nicknameRange(d: Record<string, string>, prefix = '') {
 // Seller-side account facts (판매, and the offered side of 교환).
 function OfferedAccount({ post }: { post: Post }) {
     const d = post.details, skins = skinDisplay(skinTags(d.skinTags));
-    const nick = [d.nicknameChars ? d.nicknameChars + '글자' : '', d.nicknameRank ? d.nicknameRank + ' 등급' : ''].filter(Boolean).join(' · ');
+    const nick = [d.nicknameChars ? d.nicknameChars + '글자' : '', d.nicknameRank ? rankText([d.nicknameRank]) : ''].filter(Boolean).join(' · ');
     return <>
         <SpecList rows={[
             ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['팬텀', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
             ['가스', num(d.gas)], ['미네랄', num(d.minerals)],
-            ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k]] as Row),
+            ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['계정 레벨', num(d.level)], ['연구실 레벨', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
         ]} />
         {post.tags.length > 0 && <><h3>래더 기록</h3><div className="tags">{[...post.tags].sort((a, b) => b.season - a.season).map(t => <span className="tag tag-line" key={t.tier + t.season}>{tagName(t)}</span>)}</div></>}

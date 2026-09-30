@@ -8,36 +8,42 @@ export type PlanId = 'permanent' | '6m';
 export type BadgeInfo = {
     id: BadgeId;
     name: string;
+    // Name for compact name lines; it is shown with the check mark, never dropped.
+    short: string;
     icon: string;
     summary: string;
     requirements: string[];
     template: string;
 };
 
+// Display order is 본인 인증, 대리 인증, 신용인; sortBadges in the Worker follows it.
 export const BADGES: BadgeInfo[] = [
-    {
-        id: 'proxy',
-        name: '대리 인증',
-        icon: 'video-game',
-        summary: '대리(진행) 게시판에 글을 올릴 수 있어요.',
-        requirements: ['본인 인증 (전화번호·계좌번호)', '대리 진행 거래 내역', '그 밖의 인증 자료'],
-        template: '[대리 인증 신청]\n본인 인증: 보유 / 이번에 함께 신청\n대리 거래 내역: (캡처를 사진으로 보내 주세요)\n기타 인증: ',
-    },
     {
         id: 'identity',
         name: '본인 인증',
+        short: '본인',
         icon: 'identification-card',
-        summary: '매니저가 전화번호와 계좌번호를 확인하고 지급해요.',
-        requirements: ['전화번호', '본인 명의 계좌 (은행, 계좌번호, 예금주)'],
+        summary: '전번, 계좌 확인 후 지급',
+        requirements: ['전화번호', '본인 명의 계좌'],
         template: '[본인 인증 신청]\n전화번호: \n은행: \n계좌번호: \n예금주: ',
+    },
+    {
+        id: 'proxy',
+        name: '대리 인증',
+        short: '대리',
+        icon: 'trophy',
+        summary: '대리(진행) 글쓰기',
+        requirements: ['본인 인증', '대리 거래내역', '기타 인증'],
+        template: '[대리 인증 신청]\n본인 인증: 있음 / 같이 신청\n대리 거래내역: 캡처 첨부\n기타 인증: ',
     },
     {
         id: 'credit',
         name: '신용인',
-        icon: 'trophy',
-        summary: '거래 내역과 거래 금액을 보고 매니저가 지급해요.',
-        requirements: ['거래 내역', '누적 거래 금액', '활동 닉네임 또는 커뮤니티'],
-        template: '[신용인 신청]\n주요 거래 내역: (캡처를 사진으로 보내 주세요)\n누적 거래 금액: \n활동 닉네임: ',
+        short: '신용인',
+        icon: 'handshake',
+        summary: '거래내역, 거래 금액 보고 지급',
+        requirements: ['거래내역', '누적 거래 금액', '활동 카페/닉네임'],
+        template: '[신용인 신청]\n거래내역: 캡처 첨부\n누적 거래 금액: \n활동 카페/닉네임: ',
     },
 ];
 
@@ -45,11 +51,11 @@ export type GradePlan = { id: PlanId; label: string; price: number; months?: num
 export type GradeInfo = { id: GradeId; name: string; rank: number; icon: string; plans: GradePlan[]; note: string };
 
 export const GRADES: GradeInfo[] = [
-    { id: 'normal', name: '일반', rank: 0, icon: 'seedling', plans: [], note: '가입하면 받는 기본 등급' },
+    { id: 'normal', name: '일반', rank: 0, icon: 'seedling', plans: [], note: '기본 등급' },
     { id: 'plus', name: '플러스', rank: 1, icon: 'star', plans: [{ id: 'permanent', label: '영구', price: 30000 }], note: '영구 구매만 가능' },
     { id: 'premium', name: '프리미엄', rank: 2, icon: 'gem-stone', plans: [{ id: 'permanent', label: '영구', price: 50000 }, { id: '6m', label: '6개월', price: 30000, months: 6 }], note: '영구 또는 6개월' },
     { id: 'elite', name: '엘리트', rank: 3, icon: 'crown', plans: [{ id: 'permanent', label: '영구', price: 100000 }, { id: '6m', label: '6개월', price: 60000, months: 6 }], note: '영구 또는 6개월' },
-    { id: 'admin', name: '관리자', rank: 4, icon: 'military-medal', plans: [], note: '매니저가 직접 지정' },
+    { id: 'admin', name: '관리자', rank: 4, icon: 'shield', plans: [], note: '매니저 지정' },
 ];
 
 export const PURCHASABLE_GRADES: GradeId[] = ['plus', 'premium', 'elite'];

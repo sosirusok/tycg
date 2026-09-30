@@ -43,7 +43,7 @@ function client() {
     equal(hits, [], 'no worker template joins a variable to 은/는/이/가/을/를/으로');
 }
 
-const member = client(), manager = client();
+const member = client(), manager = client(), guest = client();
 const username = `c_${run}_a`, nickname = `copy${run}`;
 const joined = await member('auth/register', 'POST', { username, password, nickname });
 equal(joined.status, 200, 'member registers');
@@ -84,5 +84,37 @@ messages = await member(`chats/${cancelled.data.chatId}/messages`);
 const cancelNote = messages.data.messages.find(m => m.type === 'system' && m.reference_id === cancelled.data.id);
 check(cancelNote?.body.startsWith('신청 취소: 프리미엄 등급 신청'), `cancel reads 신청 취소: … (${cancelNote?.body})`);
 
-equal((await member('posts/' + post.data.id, 'DELETE')).status, 200, 'test post removed');
+// Cafe vocabulary: 영전 is a stored choice, 미통합 keeps its stored value (shown as 미통).
+const account = (title, details) => member('posts', 'POST', { kind: 'sell', category: 'account', title: `[QA] ${title} ${run}`, body: '자동 검증용 게시글입니다.', price: 10000, status: 'open', tags: [], images: [], details });
+const moved = await account('영전', { ownerCount: '3', phoneChange: '영전', passwordChange: '가능' });
+equal(moved.status, 201, 'phoneChange 영전 is accepted');
+check((await guest(`posts?kind=sell&category=account&phoneChange=${encodeURIComponent('영전')}&size=40`)).data.posts.some(p => p.id === moved.data.id), 'phoneChange=영전 filter finds the post');
+const unlinked = await account('미통', { integrated: '미통합' });
+equal(unlinked.status, 201, 'integrated 미통합 is still accepted');
+equal((await guest('posts/' + unlinked.data.id)).data.post.details.integrated, '미통합', 'stored value stays 미통합');
+check((await guest(`posts?kind=sell&category=account&integrated=${encodeURIComponent('미통합')}&size=40`)).data.posts.some(p => p.id === unlinked.data.id), 'integrated=미통합 filter finds the post');
+equal((await account('미통 값', { integrated: '미통' })).status, 400, 'the display word 미통 is not a stored value');
+
+// Skin aliases from trade posts find the listed skin.
+const yeseul = await account('스킨 A', { skinTags: JSON.stringify(['냥냥 정예슬']) });
+const junho = await account('스킨 B', { skinTags: JSON.stringify(['냥냥 김준호']) });
+const plum = await account('스킨 C', { skinTags: JSON.stringify(['홍매화 정예슬']) });
+equal([yeseul.status, junho.status, plum.status], [201, 201, 201], 'skin test posts created');
+const search = async q => (await guest(`posts?kind=sell&q=${encodeURIComponent(q)}&size=40`)).data.posts.map(p => p.id);
+for (const q of ['냥예', '냥예슬', '냥슬']) {
+    const ids = await search(q);
+    check(ids.includes(yeseul.data.id) && !ids.includes(junho.data.id), `q=${q} finds 냥냥 정예슬 only`);
+}
+check((await search('냥준호')).includes(junho.data.id), 'q=냥준호 finds 냥냥 김준호');
+check((await search('홍매화')).includes(plum.data.id), 'q=홍매화 finds 홍매화 정예슬');
+
+// Badges read 본인 인증, 대리 인증, 신용인 in that order whatever the grant order.
+for (const badge of ['proxy', 'identity']) {
+    equal((await manager(`manage/users/${me.id}/badges`, 'POST', { badge, active: true })).status, 200, `manager grants ${badge}`);
+}
+equal((await guest('users/' + me.id)).data.user.badges, ['identity', 'proxy'], 'profile lists badges as identity, proxy');
+
+for (const id of [post.data.id, moved.data.id, unlinked.data.id, yeseul.data.id, junho.data.id, plum.data.id]) {
+    equal((await member('posts/' + id, 'DELETE')).status, 200, `test post ${id} removed`);
+}
 console.log(`Copy verification passed: ${checks} checks`);

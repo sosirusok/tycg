@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'luc
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, RECORD_PREFERENCES, STATUS_NAMES, TRADE_KINDS,
-    categoriesForKind, categoryName, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, wonToMan,
+    categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText, imageUrl, uploadPhoto } from '../lib/api';
@@ -209,7 +209,7 @@ export default function Editor({ id }: { id?: string }) {
         <details className="ed-more" open={['integrated', 'passwordChange', 'phoneChange', 'backupEmail', 'level', 'labLevel', 'humanSkins', 'zombieSkins', 'closet'].some(k => d[k])}>
             <summary>추가 정보 <span>전번·비번 변경, 보멜, 레벨 등 (선택)</span></summary>
             <div className="ed-grid mt-16">
-                {(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => <div className="field" key={k}><span className="field-label">{ACCOUNT_CHOICES[k].label}</span><Segmented name={ACCOUNT_CHOICES[k].label} options={ACCOUNT_CHOICES[k].options} value={d[k] || ''} onChange={v => setDetail(k, v)} /></div>)}
+                {(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => <div className="field" key={k}><span className="field-label">{ACCOUNT_CHOICES[k].label}</span><Segmented name={ACCOUNT_CHOICES[k].label} options={ACCOUNT_CHOICES[k].options} label={v => choiceLabel(k, v)} value={d[k] || ''} onChange={v => setDetail(k, v)} /></div>)}
                 <Num label="계정 레벨" value={d.level || ''} onChange={v => setDetail('level', v)} max={999} />
                 <Num label="연구실 레벨" value={d.labLevel || ''} onChange={v => setDetail('labLevel', v)} max={99} />
                 <Num label="인간 스킨 수" value={d.humanSkins || ''} onChange={v => setDetail('humanSkins', v)} unit="개" />

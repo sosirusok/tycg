@@ -71,12 +71,12 @@ export function RankPicker({ value, onChange, multiple = false }: { value: strin
     </div>;
 }
 
-export function Segmented<T extends string>({ options, value, onChange, name, allowEmpty = true }: { options: readonly T[]; value: string; onChange: (v: T | '') => void; name: string; allowEmpty?: boolean }) {
+export function Segmented<T extends string>({ options, value, onChange, name, allowEmpty = true, label }: { options: readonly T[]; value: string; onChange: (v: T | '') => void; name: string; allowEmpty?: boolean; label?: (v: T) => string }) {
     return <div className="seg" role="radiogroup" aria-label={name}>
         {options.map(option => <label key={option}>
             <input type="radio" name={name} checked={value === option} onChange={() => onChange(option)}
                 onClick={e => { if (allowEmpty && value === option) { e.preventDefault(); onChange(''); } }} />
-            {option}
+            {label ? label(option) : option}
         </label>)}
     </div>;
 }

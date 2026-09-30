@@ -121,7 +121,7 @@ const proxyCreated = await applicant('posts', 'POST', proxyPost);
 equal(proxyCreated.status, 201, '대리(진행) allowed after 대리 인증');
 const listed = await guest('posts?kind=proxy_offer&category=ladder');
 const listedPost = listed.data.posts.find(p => p.id === proxyCreated.data.id);
-equal(listedPost?.author_badges, ['proxy', 'identity'], 'listing shows author badges in display order');
+equal(listedPost?.author_badges, ['identity', 'proxy'], 'listing shows author badges in display order');
 equal(listedPost?.author_grade, 'normal', 'listing shows author grade');
 check((await guest('posts?kind=proxy_offer&badge=proxy')).data.posts.some(p => p.id === proxyCreated.data.id), 'filter by author badge');
 

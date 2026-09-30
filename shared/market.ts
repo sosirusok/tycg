@@ -107,12 +107,12 @@ export const CATEGORIES = [
     { id: 'goods_coupon', name: '굿즈 및 쿠폰', icon: 'admission-tickets' },
     { id: 'other', name: '기타', icon: 'package' },
     { id: 'ladder', name: '래더', icon: 'trophy' },
-    { id: 'story', name: '스토리 및 재화', icon: 'open-book' },
+    { id: 'story', name: '스토리 및 재화', icon: 'bookmark' },
     { id: 'event', name: '이벤트', icon: 'party-popper' },
 ] as const;
 
 export const KIND_NAMES: Record<TradeKind, string> = { buy: '구매', sell: '판매', exchange: '교환', proxy_request: '대리(구함)', proxy_offer: '대리(진행)' };
-export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'money-bag', exchange: 'handshake', proxy_request: 'joystick', proxy_offer: 'video-game' };
+export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'money-bag', exchange: 'handshake', proxy_request: 'key', proxy_offer: 'trophy' };
 export const STATUS_NAMES: Record<string, string> = { open: '거래중', reserved: '예약중', closed: '거래완료' };
 
 export function isProxyKind(kind: string) { return kind === 'proxy_request' || kind === 'proxy_offer'; }
@@ -138,13 +138,13 @@ export function exchangeLabel(category: string, wantedCategory?: string) {
 export type DetailField = { id: string; label: string; type?: 'number' | 'text' | 'date'; placeholder?: string };
 
 const PROXY_FIELDS: DetailField[] = [
-    { id: 'mode', label: '모드 / 콘텐츠' },
-    { id: 'current', label: '현재 상태', placeholder: '예: 31시즌 플래티넘 II' },
-    { id: 'target', label: '목표 / 작업 범위', placeholder: '예: 다이아몬드 달성' },
-    { id: 'schedule', label: '가능 시간 / 희망 일정', placeholder: '예: 평일 저녁' },
-    { id: 'duration', label: '예상 소요 기간' },
-    { id: 'priceUnit', label: '가격 기준', placeholder: '예: 1티어당, 전체 작업' },
-    { id: 'conditions', label: '진행 조건' },
+    { id: 'mode', label: '종목', placeholder: '예: 래더 솔큐, 엘프고' },
+    { id: 'current', label: '현재', placeholder: '예: 플래 3.6 (36,000점)' },
+    { id: 'target', label: '목표', placeholder: '예: 5.8까지, 다이아 달성' },
+    { id: 'schedule', label: '가능 시간', placeholder: '예: 평일 저녁, 점검 후' },
+    { id: 'duration', label: '기간', placeholder: '예: 3일' },
+    { id: 'priceUnit', label: '가격 기준', placeholder: '예: 천점당 0.7, 판당, 챕터당 0.3' },
+    { id: 'conditions', label: '조건', placeholder: '예: 선입금, 동접 시 중단' },
 ];
 
 export const DETAIL_FIELDS: Record<string, DetailField[]> = {
@@ -166,16 +166,16 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
         { id: 'recordStatus', label: '전적' },
     ],
     clan: [
-        { id: 'clanName', label: '클랜 이름' },
+        { id: 'clanName', label: '클랜명' },
         { id: 'clanLevel', label: '클랜 레벨', type: 'number' },
         { id: 'clanMembers', label: '클랜원 수', type: 'number' },
         { id: 'clanCapacity', label: '최대 인원', type: 'number' },
     ],
     goods_coupon: [
-        { id: 'goodsName', label: '상품 이름' },
-        { id: 'condition', label: '상품 상태' },
-        { id: 'delivery', label: '거래 방법', placeholder: '예: 택배, 쿠폰 코드 전달' },
-        { id: 'couponName', label: '쿠폰 이름' },
+        { id: 'goodsName', label: '상품명' },
+        { id: 'condition', label: '상태', placeholder: '예: 미개봉' },
+        { id: 'delivery', label: '거래 방법', placeholder: '예: 택배, 입금 후 코드 전달' },
+        { id: 'couponName', label: '쿠폰명', placeholder: '예: 코믹스 1권 미쿺, 유루미 스쿺' },
         { id: 'expires', label: '유효기간', type: 'date' },
         { id: 'quantity', label: '수량', type: 'number' },
         { id: 'used', label: '사용 여부' },
@@ -188,12 +188,12 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
 
 export function listingPrice(p: Pick<Post, 'price' | 'price_mode' | 'kind'>) {
     if (p.kind === 'exchange') return '교환 글';
-    if (p.price === null) return p.kind === 'buy' ? '예산 협의' : p.price_mode === 'offer' ? '가격 제시' : '가격 협의';
+    if (p.price === null) return p.kind === 'buy' || p.kind === 'sell' ? '가격 제시' : '가격 협의';
     return priceText(p.price);
 }
 
 export function priceLabel(kind: string) {
-    return kind === 'sell' ? '즉거가' : kind === 'buy' ? '최대 사용 가능 금액(MAX)' : kind === 'exchange' ? '교환' : kind === 'proxy_request' ? '희망 비용' : '진행 비용';
+    return kind === 'sell' ? '즉거가' : kind === 'buy' ? 'MAX' : kind === 'exchange' ? '교환' : kind === 'proxy_request' ? '희망 가격' : '가격';
 }
 
 export function relativeTime(t: number) {
@@ -216,14 +216,17 @@ const LEGACY_SKINS = [LEGACY_SKELETON, '파자마 고나래', '펭귄 맹규리'
 export const SKIN_TAGS: readonly string[] = [...SKIN_OPTIONS, ...LEGACY_SKINS];
 
 // Other names for the same skin: in-game names and short forms used in trade posts
-// (악주, 뱀동, 냥준, 냥슬, 붉박 …). Searching any of them finds the listed skin.
+// (악주, 뱀동, 냥준, 냥예, 홍매화, 풀강, 펭규리, 붉박 …). Searching any of them finds the listed skin.
 export const SKIN_ALIASES: Record<string, readonly string[]> = {
     '송편좀비': ['송편 좀비'],
     '악몽주인': ['악몽의 주인', '악주'],
     '서큐 날개': ['서큐버스 날개', '서큐'],
-    '뱀파이어 정동석': ['뱀동'],
-    '냥냥 김준호': ['냥준'],
-    '냥냥 정예슬': ['냥슬'],
+    '뱀파이어 정동석': ['뱀동', '뱀파동석'],
+    '냥냥 김준호': ['냥준', '냥준호'],
+    '냥냥 정예슬': ['냥슬', '냥예', '냥예슬'],
+    '홍매화 정예슬': ['홍매화'],
+    '마법고 5강': ['5강', '풀강', '마법고 풀강'],
+    '펭귄 맹규리': ['펭규리'],
     '붉은 박스 좀비': ['붉박'],
     '끝주홍 나비날개': ['끝주홍'],
     [FULL_SET]: ['해골기사 남동진 풀세트'],
@@ -247,24 +250,29 @@ export function expandSkins(chosen: string[]) {
 
 export const NICK_RANKS = ['R', 'S', 'A', 'B', '잡'] as const;
 
-export const ACCOUNT_CHOICES: Record<string, { label: string; options: readonly string[]; legacy?: readonly string[] }> = {
+export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;
+
+// Stored values never change; `labels` only gives some of them the cafe word on screen.
+export const ACCOUNT_CHOICES: Record<string, { label: string; options: readonly string[]; legacy?: readonly string[]; labels?: Record<string, string> }> = {
     nicknameRank: { label: '닉 등급', options: NICK_RANKS },
     recordStatus: { label: '전적', options: ['무전적', '전적 있음'] },
-    integrated: { label: '통합 계정', options: ['통합', '미통합'], legacy: ['모름'] },
-    passwordChange: { label: '비번 변경', options: ['가능', '불가'], legacy: ['확인 필요'] },
-    phoneChange: { label: '전번 변경', options: ['가능', '쿨타임 남음', '불가'], legacy: ['확인 필요'] },
-    backupEmail: { label: '보조 메일 (보멜)', options: ['없음', '있음', '있음 (변경 불가)'] },
+    integrated: { label: '통합', options: ['통합', '미통합'], legacy: ['모름'], labels: { '미통합': '미통' } },
+    passwordChange: { label: '비번 변경 (비변)', options: ['가능', '불가'], legacy: ['확인 필요'] },
+    // 영전: the phone number goes with the account ('31 다야 3대주 영전').
+    phoneChange: { label: '전번 변경 (전변)', options: ['가능', '영전', '쿨타임 남음', '불가'], legacy: ['확인 필요'], labels: { '영전': '영전 (같이 넘김)' } },
+    backupEmail: { label: '보안 메일 (보멜)', options: ['없음', '있음', '있음 (변경 불가)'] },
 };
 export function choiceAllowed(key: string, value: string) {
     const f = ACCOUNT_CHOICES[key];
     return !!f && (f.options.includes(value) || !!f.legacy?.includes(value));
 }
+export function choiceLabel(key: string, value: string) { return ACCOUNT_CHOICES[key]?.labels?.[value] || value; }
 
 export const RECORD_PREFERENCES = ['무전적', '전적 있어도 괜찮음'] as const;
 
 export const BUYER_DETAIL_FIELDS: DetailField[] = [
-    { id: 'maxOwners', label: '허용 대주 수', type: 'number' },
-    { id: 'recordPreference', label: '전적 조건' },
+    { id: 'maxOwners', label: '대주 수', type: 'number' },
+    { id: 'recordPreference', label: '전적' },
     { id: 'nicknameCharsMin', label: '닉네임 최소 글자 수', type: 'number' },
     { id: 'nicknameCharsMax', label: '닉네임 최대 글자 수', type: 'number' },
     { id: 'nicknameRanks', label: '원하는 닉 등급' },
@@ -289,18 +297,29 @@ export function skinDisplay(tags: string[]) {
     return tags.filter(v => v !== LEGACY_SKELETON || !tags.includes(FULL_SET));
 }
 
-// Short condition list for cards: owners, record, nickname, skins, currency.
+// Nickname grades as the cafes write them: S급, R/S급; 잡 has no 급.
+export function rankText(ranks: readonly string[]) {
+    const graded = ranks.filter(r => r !== '잡');
+    return [graded.length ? graded.join('/') + '급' : '', ranks.includes('잡') ? '잡' : ''].filter(Boolean).join('/');
+}
+
+// Short condition list for cards: owners, record, 전비변/영전/보멜/미통, nickname, skins, currency.
 export function accountSummary(d: Record<string, string>) {
     const wantedRanks = parseList(d.nicknameRanks, NICK_RANKS);
     const min = d.nicknameCharsMin, max = d.nicknameCharsMax;
     const wantedChars = min && max ? (min === max ? `${min}글자 닉` : `${min}~${max}글자 닉`) : min ? `${min}글자 이상 닉` : max ? `${max}글자 이하 닉` : '';
     const skins = skinDisplay(skinTags(d.skinTags));
+    const rank = d.nicknameRank ? rankText([d.nicknameRank]) : '';
     return [
         d.ownerCount ? `${d.ownerCount}대주` : '',
         d.maxOwners ? `${d.maxOwners}대주 이하` : '',
         d.recordStatus || d.recordPreference || '',
-        wantedChars + (wantedRanks.length ? `${wantedChars ? ' · ' : '닉 '}${wantedRanks.join('/')}` : ''),
-        d.nicknameChars ? `${d.nicknameChars}글자 닉${d.nicknameRank ? ' · ' + d.nicknameRank : ''}` : d.nicknameRank ? `닉 ${d.nicknameRank}` : '',
+        d.passwordChange === '가능' && (d.phoneChange === '가능' || d.phoneChange === '영전') ? '전비변O' : '',
+        d.phoneChange === '영전' ? '영전' : '',
+        d.backupEmail === '없음' ? '보멜X' : '',
+        d.integrated === '미통합' ? '미통' : '',
+        wantedChars + (wantedRanks.length ? `${wantedChars ? ' · ' : '닉 '}${rankText(wantedRanks)}` : ''),
+        d.nicknameChars ? `${d.nicknameChars}글자 닉${rank ? ' · ' + rank : ''}` : rank ? `닉 ${rank}` : '',
         skins.length ? skins[0] + (skins.length > 1 ? ` 외 ${skins.length - 1}` : '') : '',
         d.phantom ? `팬텀 ${d.phantom}%` : '',
         d.gas ? `가스 ${Number(d.gas).toLocaleString('ko-KR')}` : '',
