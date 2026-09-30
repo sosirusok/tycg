@@ -51,7 +51,7 @@ export default function Chat({ id }: { id?: string }) {
                     </Link></li>)}</ul>}
             </aside>
             {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
-                : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="대화를 선택해 주세요" text="인증·등급 신청도 매니저와의 채팅에서 진행돼요." /></section>}
+                : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="대화를 선택해 주세요" text="인증/등급 신청도 매니저와의 채팅에서 진행돼요." /></section>}
         </div>
     </div>;
 }

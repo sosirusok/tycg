@@ -94,7 +94,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const logout = useCallback(async () => {
-        try { await api('auth/logout', 'POST', {}); setMe(null); void navigate('/'); toast('로그아웃했습니다.'); }
+        try { await api('auth/logout', 'POST', {}); setMe(null); void navigate('/'); toast('로그아웃 완료'); }
         catch (e) { toast.error(errorText(e)); }
     }, []);
 

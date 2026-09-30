@@ -38,12 +38,12 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span>
         </div>
         {pending.length > 0 && !inChat && <div className="mp-block">
-            <h4>확인 중인 신청</h4>
+            <h4>대기 중인 신청</h4>
             {pending.map(a => <div key={a.id} className="mp-app">
                 <span>{applicationTitle(a)}</span>
                 <div className="row">
-                    <button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'approve' }), '지급했어요.')}>승인하고 지급</button>
-                    <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'reject' }), '반려했어요.')}>반려</button>
+                    <button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'approve' }), '지급 완료')}>승인</button>
+                    <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'reject' }), '반려 완료')}>반려</button>
                 </div>
             </div>)}
         </div>}
@@ -53,7 +53,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 const on = u.badges.includes(b.id);
                 return <label key={b.id} className="mp-row switch">
                     <span className="grow">{b.name}{on && <span className="muted small"> · {dateText(data.badges.find(x => x.badge === b.id)?.granted_at || now)}</span>}</span>
-                    <input type="checkbox" checked={on} disabled={busy} onChange={() => run(() => api(`manage/users/${u.id}/badges`, 'POST', { badge: b.id, active: !on }), on ? `${b.name}을 회수했어요.` : `${b.name}을 지급했어요.`)} />
+                    <input type="checkbox" checked={on} disabled={busy} onChange={() => run(() => api(`manage/users/${u.id}/badges`, 'POST', { badge: b.id, active: !on }), on ? `${b.name} 회수 완료` : `${b.name} 지급 완료`)} />
                 </label>;
             })}
         </div>
@@ -61,12 +61,12 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>등급 <span className="muted small">현재 {gradeInfo(u.grade).name}{u.grade_expires_at ? ` · ${dateText(u.grade_expires_at)}까지` : ''}</span></h4>
             {active.length > 0 ? active.map(g => <div key={g.id} className="mp-row">
                 <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${dateText(g.expires_at)}까지` : '영구'}</span></span>
-                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), '등급을 회수했어요.')}>회수</button>
-            </div>) : <p className="muted small">지급된 등급이 없어요 (일반).</p>}
+                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), '등급 회수 완료')}>회수</button>
+            </div>) : <p className="muted small">일반 (지급 내역 없음)</p>}
             <div className="mp-grant">
                 <select className="select" aria-label="지급할 등급" value={grade} onChange={e => setGrade(e.target.value as GradeId)}>{GRADES.filter(g => g.id !== 'normal').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select className="select" aria-label="기간" value={plan} onChange={e => setPlan(e.target.value as PlanId)}>{(plans.length ? plans : [{ id: 'permanent', label: '영구' }]).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
-                <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades`, 'POST', { grade, plan }), `${gradeInfo(grade).name} 등급을 지급했어요.`)}>지급</button>
+                <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades`, 'POST', { grade, plan }), `${gradeInfo(grade).name} 등급 지급 완료`)}>지급</button>
             </div>
         </div>}
         {data.applications.length > pending.length && <div className="mp-block">

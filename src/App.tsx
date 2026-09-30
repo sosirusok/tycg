@@ -64,7 +64,7 @@ function Shell() {
                 </nav>
                 <div className="header-right">
                     <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
-                        <BadgeCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증·등급 신청</span>
+                        <BadgeCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증/등급 신청</span>
                     </button>
                     <button type="button" className="header-link header-chat" aria-label={`채팅${unread ? `, 읽지 않은 메시지 ${unread}개` : ''}`} onClick={() => go('/chat')}>
                         <MessageCircle size={20} /><span className="header-link-text">채팅</span>
@@ -78,8 +78,8 @@ function Shell() {
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/profile/' + me.id)}>내 프로필</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/posts')}>내 거래</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/favorites')}>찜한 글</DropdownMenu.Item>
-                                <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/applications')}>인증·등급 신청 내역</DropdownMenu.Item>
-                                {me.role === 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/manage')}>매니저 관리</DropdownMenu.Item>}
+                                <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/applications')}>신청 내역</DropdownMenu.Item>
+                                {me.role === 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/manage')}>매니저 메뉴</DropdownMenu.Item>}
                                 <DropdownMenu.Separator className="menu-sep" />
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void logout()}>로그아웃</DropdownMenu.Item>
                             </DropdownMenu.Content>
@@ -106,8 +106,8 @@ function Shell() {
         </main>
         {page !== 'chat' && <footer className="footer">
             <div className="container footer-inner">
-                <div><strong>좀비고 거래소</strong>회원끼리 직접 거래하는 커뮤니티입니다. 게임 운영사와 관계가 없으며 결제나 거래 보증을 하지 않습니다.</div>
-                <div className="footer-links"><Link to="/guide">공지·이용 안내</Link><button type="button" onClick={() => openApply()}>인증·등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
+                <div><strong>좀비고 거래소</strong>게임사와 무관한 유저 거래 커뮤니티입니다. 거래 책임은 거래 당사자에게 있습니다.</div>
+                <div className="footer-links"><Link to="/guide">공지</Link><button type="button" onClick={() => openApply()}>인증/등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
             </div>
         </footer>}
         {!hideBottomNav && <nav className="bottom-nav" aria-label="하단 메뉴">
@@ -123,5 +123,5 @@ function Shell() {
 }
 
 function NotFound() {
-    return <div className="container page"><div className="empty"><CIcon name="warning" size={56} /><h3>페이지를 찾을 수 없습니다</h3><p>주소가 바뀌었거나 삭제된 페이지입니다.</p><Link className="btn btn-primary" to="/">홈으로</Link></div></div>;
+    return <div className="container page"><div className="empty"><CIcon name="warning" size={56} /><h3>없는 페이지입니다</h3><Link className="btn btn-primary" to="/">홈으로</Link></div></div>;
 }

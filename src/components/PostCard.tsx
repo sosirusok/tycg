@@ -12,7 +12,7 @@ import { CIcon, NameLine } from './ui';
 export function postSummary(post: Post) {
     const d = post.details;
     if (post.category === 'account') return accountSummary(d);
-    if (post.category === 'clan') return [d.clanName, d.clanLevel ? `클랜 ${d.clanLevel}레벨` : '', d.clanMembers ? `${d.clanMembers}명` : ''].filter(Boolean);
+    if (post.category === 'clan') return [d.clanName, d.clanLevel ? `${d.clanLevel}렙 클랜` : '', d.clanMembers ? `${d.clanMembers}명` : ''].filter(Boolean);
     if (post.category === 'goods_coupon') return [d.goodsName || d.couponName, d.quantity ? `${d.quantity}개` : '', d.condition].filter(Boolean);
     if (post.kind === 'proxy_request' || post.kind === 'proxy_offer') return [d.current, d.target, d.schedule].filter(Boolean);
     return [];
@@ -39,7 +39,7 @@ export function PriceLine({ post, large = false }: { post: Post; large?: boolean
         const wanted = wantedSummary(post);
         return <div className={'price price-exchange' + (large ? ' price-lg' : '')}>
             <span className="price-label">원하는 {categoryName(post.details.wantedCategory || 'account')}</span>
-            <span className="price-want">{wanted.length > 1 || post.details.wantedCategory !== 'account' ? wanted.join(' · ') : '조건은 본문을 확인해 주세요'}</span>
+            <span className="price-want">{wanted.length > 1 || post.details.wantedCategory !== 'account' ? wanted.join(' · ') : '본문 참고'}</span>
         </div>;
     }
     const history = post.kind === 'sell' ? post.price_history || [] : [];
@@ -69,7 +69,7 @@ export function PostCard({ post, highlight = [], onChange }: { post: Post; highl
     async function save() {
         try {
             await api(`posts/${post.id}/favorite`, 'POST', { active: !post.favorite });
-            toast(post.favorite ? '찜을 해제했습니다.' : '찜한 글에 저장했습니다.');
+            toast(post.favorite ? '찜 해제' : '찜 완료');
             onChange?.();
         } catch (e) { toast.error(errorText(e)); }
     }

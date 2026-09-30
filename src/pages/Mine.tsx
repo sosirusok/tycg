@@ -10,7 +10,7 @@ import { PostCard } from '../components/PostCard';
 
 const TABS = [
     { id: 'posts', label: '내 글' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제안' },
-    { id: 'recent', label: '최근 본 글' }, { id: 'applications', label: '인증·등급 신청' }, { id: 'blocks', label: '차단' },
+    { id: 'recent', label: '최근 본 글' }, { id: 'applications', label: '신청 내역' }, { id: 'blocks', label: '차단' },
 ] as const;
 type TabId = typeof TABS[number]['id'];
 
@@ -59,7 +59,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     <span className="grow"><strong>{applicationTitle(a)}</strong><span className="muted small">{relativeTime(a.created_at)}{a.note ? ` · ${a.note}` : ''}</span></span>
                     <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
                     {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
-                </li>)}</ul> : <EmptyState icon="check-mark-button" title="신청 내역이 없어요" action={me.role !== 'manager' ? <button className="btn btn-primary" onClick={() => openApply()}>인증·등급 신청하기</button> : undefined} />)
+                </li>)}</ul> : <EmptyState icon="check-mark-button" title="신청 내역이 없어요" action={me.role !== 'manager' ? <button className="btn btn-primary" onClick={() => openApply()}>인증/등급 신청하기</button> : undefined} />)
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 풀기</button></li>)}</ul>
                     : <EmptyState icon="shield" title="차단한 회원이 없어요" />)}
         </div>

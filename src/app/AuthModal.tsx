@@ -21,13 +21,12 @@ export function AuthModal() {
             const d = await api<{ user: User }>('auth/' + (register ? 'register' : 'login'), 'POST', { username, password, nickname });
             setPassword('');
             finishAuth(d.user);
-            toast(register ? `${d.user.nickname}님, 가입을 환영합니다.` : `${d.user.nickname}님, 반갑습니다.`);
+            if (register) toast('가입 완료');
         } catch (err) { setError(errorText(err)); }
         finally { setBusy(false); }
     }
 
-    return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title={register ? '회원가입' : '로그인'}
-        description={register ? '아이디, 비밀번호, 닉네임만 있으면 바로 거래할 수 있어요.' : '로그인하면 30일 동안 유지됩니다.'}>
+    return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title={register ? '회원가입' : '로그인'}>
         <form className="form-stack" onSubmit={submit}>
             <label className="field"><span className="field-label">아이디</span>
                 <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="영문 소문자, 숫자, 밑줄 4~24자" minLength={4} maxLength={24} required autoFocus /></label>

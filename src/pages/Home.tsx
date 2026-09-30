@@ -66,7 +66,7 @@ export function Home() {
             <nav className="quick-row" aria-label="거래 종류">
                 {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={44} /><span>{KIND_NAMES[kind]}</span></Link>)}
                 <Link to="/guide" className="quick-item"><CIcon name="megaphone" size={44} /><span>공지</span></Link>
-                <button type="button" className="quick-item" onClick={() => openApply()}><CIcon name="check-mark-button" size={44} /><span>인증·등급</span></button>
+                <button type="button" className="quick-item" onClick={() => openApply()}><CIcon name="check-mark-button" size={44} /><span>인증/등급</span></button>
             </nav>
         </section>
 

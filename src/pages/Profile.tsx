@@ -61,7 +61,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             <div className="profile-actions">
                 {mine ? <>
                     <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
-                    {user.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" onClick={() => openApply()}>인증·등급 신청</button>}
+                    {user.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" onClick={() => openApply()}>인증/등급 신청</button>}
                 </> : <>
                     <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
                     {user.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" onClick={block}><Ban size={15} />차단</button>}
@@ -90,7 +90,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         </section>
 
         {mine && <nav className="my-menu" aria-label="내 메뉴">
-            {([['/me/posts', '내 거래'], ['/me/favorites', '찜한 글'], ['/me/applications', '인증·등급 신청 내역'], ...(me?.role === 'manager' ? [['/manage', '매니저 관리']] : [])] as [string, string][]).map(([to, label]) =>
+            {([['/me/posts', '내 거래'], ['/me/favorites', '찜한 글'], ['/me/applications', '신청 내역'], ...(me?.role === 'manager' ? [['/manage', '매니저 메뉴']] : [])] as [string, string][]).map(([to, label]) =>
                 <Link key={to} to={to}>{label}<ChevronRight size={18} /></Link>)}
             <button type="button" onClick={() => void logout()}>로그아웃</button>
         </nav>}

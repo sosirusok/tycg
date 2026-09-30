@@ -43,6 +43,20 @@ function client() {
     equal(hits, [], 'no worker template joins a variable to 은/는/이/가/을/를/으로');
 }
 
+// Screens write '인증/등급' with a slash, keep the owner's header label, and never greet on login.
+{
+    const root = new URL('../src/', import.meta.url), slash = [], greetings = [];
+    for (const file of (await readdir(root, { recursive: true })).filter(f => /\.(tsx?|css)$/.test(f))) {
+        (await readFile(new URL(file, root), 'utf8')).split('\n').forEach((line, i) => {
+            if (line.includes('인증·등급')) slash.push(`src/${file}:${i + 1}`);
+            if (/반갑습니다|환영합니다/.test(line)) greetings.push(`src/${file}:${i + 1}`);
+        });
+    }
+    equal(slash, [], "src writes '인증/등급' with a slash");
+    equal(greetings, [], 'src has no login or sign-up greeting');
+    check((await readFile(new URL('App.tsx', root), 'utf8')).includes('인증/등급 신청하기'), "header keeps '인증/등급 신청하기'");
+}
+
 const member = client(), manager = client(), guest = client();
 const username = `c_${run}_a`, nickname = `copy${run}`;
 const joined = await member('auth/register', 'POST', { username, password, nickname });

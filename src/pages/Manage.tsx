@@ -27,7 +27,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
     return <div className="container page">
         <h1 className="page-title">매니저 관리</h1>
         <div className="mt-16"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
-            { id: 'applications', label: <>인증·등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
+            { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
             { id: 'members', label: '회원' },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
@@ -151,7 +151,7 @@ function Settings() {
     return <form className="settings-form" onSubmit={save}>
         <label className="field"><span className="field-label">등급 입금 안내</span>
             <textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={notice} onChange={e => setNotice(e.target.value)} placeholder="예: 국민은행 000000-00-000000 (예금주 ○○○)" />
-            <span className="field-hint">인증·등급 신청 창의 ‘입금 안내’에 그대로 보여요. 비워 두면 “채팅에서 안내”로 표시돼요.</span></label>
+            <span className="field-hint">신청 창 입금 안내에 표시. 비우면 ‘채팅으로 안내’로 표시.</span></label>
         <label className="field"><span className="field-label">현재 래더 시즌</span>
             <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={32} max={200} value={season} onChange={e => setSeason(e.target.value)} /><span>시즌</span></div>
             <span className="field-hint">새 시즌이 열리면 올려 주세요. 글쓰기와 검색의 시즌 선택지가 이 숫자까지 늘어나요. 낮출 수는 없어요.</span></label>

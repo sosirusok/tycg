@@ -119,7 +119,7 @@
 .auth-switch { margin-top: 18px; text-align: center; color: var(--ink-3); font-size: 14px; }
 .auth-switch button { margin-left: 6px; color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
-/* 인증·등급 신청 dialog */
+/* 인증/등급 신청 dialog */
 .apply-pane { display: grid; gap: 16px; padding-top: 20px; }
 .apply-intro { color: var(--ink-2); font-size: 14px; line-height: 1.6; }
 .apply-intro b { color: var(--ink); }
