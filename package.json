@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit",
     "test:v9": "node scripts/run-local-verification-v9.mjs",
     "db:migrate:local": "node --import ./scripts/runtime-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 migrations apply DB --local --persist-to .wrangler/state --config wrangler.jsonc",
-    "db:migrate:remote": "node scripts/migrate-remote.mjs"
+    "db:migrate:remote": "node scripts/migrate-remote.mjs",
+    "cloudflare:check": "node scripts/setup-cloudflare.mjs --check",
+    "cloudflare:deploy": "node scripts/setup-cloudflare.mjs --deploy"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

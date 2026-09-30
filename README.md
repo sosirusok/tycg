@@ -48,6 +48,17 @@ pnpm test:v9
 
 아래 명령은 운영자가 자신의 Cloudflare 계정에서 실행하는 절차입니다. 저장소의 CI는 이 명령을 자동 실행하지 않습니다.
 
+GitHub 연결과 Cloudflare 인증은 별개입니다. 이 프로젝트는 GitHub에서 소스를 관리하고 Cloudflare에서 서버, 데이터베이스와 사진 저장소를 실행합니다. 먼저 `pnpm exec wrangler login`으로 배포할 계정에 인증해야 합니다. 인증 정보를 코드나 GitHub 공개 파일에 넣지 않습니다.
+
+인증과 자원 설정이 끝나면 다음 명령으로 운영 연결을 검사하고 배포할 수 있습니다.
+
+```bash
+pnpm cloudflare:check
+pnpm cloudflare:deploy
+```
+
+검사 명령은 서버를 배포하지 않습니다. 배포 명령은 실제 D1 데이터베이스와 R2 버킷을 확인한 뒤 실행하며, 로컬용 DB 자리표시자나 잘못된 계정 설정이 남아 있으면 중단합니다. 계정이 여러 개라면 `CLOUDFLARE_ACCOUNT_ID`로 사용할 계정을 지정합니다. 처음 자원을 만드는 절차는 아래와 같습니다.
+
 먼저 Cloudflare에 인증하고 사용할 D1 데이터베이스와 R2 버킷을 만듭니다.
 
 ```bash
@@ -78,7 +89,7 @@ pnpm exec wrangler deploy --config dist/server/wrangler.json
 
 ## 초기 매니저 설정
 
-예약된 매니저 아이디는 `sosirusok`, 닉네임은 `우와오`입니다. 실제 비밀번호는 저장소에 포함하지 않습니다. 서버 비밀값 `MANAGER_PASSWORD_HASH`, `MANAGER_PASSWORD_SALT`가 설정된 후 최초 요청에서 매니저를 생성합니다. 이미 존재하는 매니저의 비밀번호는 이 설정을 바꿔도 덮어쓰지 않습니다.
+예약된 매니저 아이디는 `sosirusok`, 닉네임은 `우와오`입니다. 실제 비밀번호는 저장소에 포함하지 않습니다. 서버 비밀값 `MANAGER_PASSWORD_HASH`, `MANAGER_PASSWORD_SALT`가 설정된 후 형식에 맞는 로그인 또는 회원가입 요청이 들어오면 매니저를 생성합니다. 이미 존재하는 매니저의 비밀번호는 이 설정을 바꿔도 덮어쓰지 않습니다.
 
 해시는 PBKDF2 SHA-256, 100000회, 32바이트입니다. salt는 임의 32바이트의 16진수 문자열이며 해시 계산에는 그 문자열의 UTF-8 바이트를 사용합니다.
 
@@ -114,6 +125,10 @@ pnpm exec wrangler secret bulk .dev.vars --config wrangler.jsonc
 ```
 
 `.dev.vars`에는 이 두 설정만 넣고 원문 비밀번호를 넣지 않습니다. `.env*`, `.dev.vars*`, 로컬 DB와 업로드는 Git에서 제외됩니다. GitHub Actions 검증에는 매니저 비밀값이나 Cloudflare API 토큰이 필요하지 않습니다.
+
+`pnpm cloudflare:deploy`는 `.dev.vars` 또는 환경 변수에 있는 매니저 해시와 salt를 첫 배포에 함께 등록합니다. 둘 다 없으면 기존 Worker에 두 비밀값이 등록됐는지 확인하고, 없을 경우 배포를 중단합니다. 기존 매니저의 비밀번호를 자동 변경하지는 않습니다.
+
+운영 배포 후에는 `/api/posts?kind=sell`이 정상 응답하는지 확인해야 실제 DB 연결을 확인할 수 있습니다. 비로그인 상태의 `/api/auth/me`만으로는 DB 연결을 검증할 수 없습니다. 사진 저장소는 로그인 후 사진 업로드와 조회까지 확인합니다.
 
 ## 구성
 
