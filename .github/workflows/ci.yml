@@ -1,4 +1,4 @@
-name: Check and build
+name: Check, build and test
 
 on:
   push:
@@ -26,4 +26,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
-      - run: pnpm test:v9
+      - run: pnpm test

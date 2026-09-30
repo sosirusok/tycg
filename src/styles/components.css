@@ -1,0 +1,99 @@
+/* Trade list card (Soomgo pro-list style) */
+.post-list { display: grid; gap: 12px; }
+.post-card { position: relative; display: flex; gap: 20px; padding: 22px 24px; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-l); transition: box-shadow .15s, border-color .15s; }
+.post-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-card); }
+.post-card.is-closed .post-card-title a, .post-card.is-closed .price strong { color: var(--ink-3); }
+.post-card-body { flex: 1; min-width: 0; display: grid; gap: 10px; cursor: pointer; }
+.post-card-meta { display: flex; align-items: center; gap: 6px; padding-right: 36px; color: var(--ink-3); font-size: 13px; font-weight: 500; }
+.post-card-title { font-size: 17px; font-weight: 700; line-height: 1.4; padding-right: 36px; }
+.post-card-title a { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.post-card-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.post-card-specs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 6px; }
+.post-card-specs .spec { color: var(--ink-2); font-size: 13px; }
+.post-card-specs .tag + .spec { margin-left: 4px; }
+.post-card-bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-top: 2px; }
+.post-card-author { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.post-card-author .nick { font-size: 13px; font-weight: 600; }
+.post-card-thumb { flex: none; align-self: flex-start; width: 88px; height: 88px; margin-top: 26px; border-radius: 10px; overflow: hidden; background: var(--fill); }
+.post-card-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.post-card-fav { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: var(--ink-4); }
+.post-card-fav:hover { background: var(--fill); color: var(--ink-2); }
+.post-card-fav.on { color: var(--brand); }
+@media (max-width: 640px) {
+  .post-card { padding: 18px 16px; gap: 14px; }
+  .post-card-title { font-size: 16px; }
+  .post-card-thumb { width: 72px; height: 72px; margin-top: 24px; }
+  .post-card-fav { top: 10px; right: 8px; }
+  .post-card-bottom { flex-direction: column; align-items: flex-start; gap: 10px; }
+}
+
+/* Price */
+.price { display: grid; gap: 2px; }
+.price-label { color: var(--ink-3); font-size: 12px; font-weight: 500; }
+.price-values { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.price-values del { color: var(--ink-4); font-size: 13px; text-decoration-thickness: 1px; }
+.price-values strong { color: var(--ink); font-size: 18px; font-weight: 800; letter-spacing: -0.4px; }
+.price-offer { color: var(--ink-2); font-size: 13px; }
+.price-offer b { font-weight: 700; }
+.price-want { color: var(--ink); font-size: 15px; font-weight: 700; line-height: 1.45; }
+.price-lg .price-want { font-size: 18px; }
+.price-lg .price-label { font-size: 14px; }
+.price-lg .price-values del { font-size: 16px; }
+.price-lg .price-values strong { font-size: 28px; letter-spacing: -0.8px; }
+.price-lg .price-offer { font-size: 15px; margin-top: 4px; }
+
+/* Grid card (home sections) */
+.card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 960px) { .card-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .card-grid { grid-template-columns: 1fr; } }
+.mini-card { display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-l); transition: box-shadow .15s, border-color .15s; }
+.mini-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-card); }
+.mini-card .post-card-meta { padding-right: 0; }
+.mini-card h3 { font-size: 16px; font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mini-card .price { margin-top: auto; }
+.mini-card .post-card-author { padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* Season picker */
+.season-picker { display: grid; gap: 6px; }
+.tier-row { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.tier-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 44px; padding: 0 12px; text-align: left; }
+.tier-head:hover { background: var(--fill-2); }
+.tier-head .tier-name { font-weight: 600; color: var(--ink); font-size: 14px; }
+.tier-head .tier-range { color: var(--ink-3); font-size: 12px; }
+.tier-head .tier-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--brand); color: var(--white); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
+.tier-head .chev { margin-left: auto; color: var(--ink-4); transition: transform .15s; }
+.tier-head .tier-count + .chev { margin-left: 4px; }
+.tier-row[data-open='true'] .chev { transform: rotate(180deg); }
+.tier-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
+.tier-tools { display: flex; justify-content: flex-end; padding: 6px 0; }
+.season-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
+.season-box { position: relative; display: grid; place-items: center; height: 36px; border: 1px solid var(--line-2); border-radius: var(--radius-s); color: var(--ink-2); font-size: 13px; font-weight: 500; cursor: pointer; user-select: none; }
+.season-box input { position: absolute; opacity: 0; pointer-events: none; }
+.season-box:hover { border-color: var(--ink-3); }
+.season-box:has(input:checked) { background: var(--ink-2); border-color: var(--ink-2); color: var(--white); }
+.season-box:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+.picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.picked button { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 10px; border-radius: 14px; background: var(--fill); color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.picked button:hover { background: var(--line); }
+
+/* Choice grid (skins, ranks) */
+.choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.choice { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: var(--radius); font-size: 14px; color: var(--ink-2); cursor: pointer; user-select: none; }
+.choice:hover { border-color: var(--ink-3); }
+.choice:has(input:checked) { border-color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--ink-2); color: var(--ink); font-weight: 600; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.seg label { position: relative; display: grid; place-items: center; min-width: 48px; height: 40px; padding: 0 14px; border: 1px solid var(--line-2); border-radius: var(--radius); font-size: 14px; font-weight: 600; color: var(--ink-2); cursor: pointer; user-select: none; }
+.seg label input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:hover { border-color: var(--ink-3); }
+.seg label:has(input:checked) { background: var(--ink-2); border-color: var(--ink-2); color: var(--white); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Skeleton list */
+.skeleton-rows { display: grid; gap: 12px; }
+
+/* Pagination */
+.pager { display: flex; justify-content: center; gap: 4px; margin-top: 32px; }
+.pager button { min-width: 38px; height: 38px; padding: 0 10px; border-radius: var(--radius); color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.pager button:hover:not(:disabled) { background: var(--fill); }
+.pager button[aria-current='page'] { background: var(--ink-2); color: var(--white); }
+.pager button:disabled { color: var(--ink-4); }
