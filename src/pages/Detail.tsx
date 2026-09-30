@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight, Flag, Heart, Link2, MessageCircle, Pencil, Trash2, X } from 'lucide-react';
+import { Dialog } from 'radix-ui';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, STATUS_NAMES, categoryName, manToWon, parseList, relativeTime, skinDisplay, skinTags, tagName,
@@ -49,12 +50,13 @@ function OfferedAccount({ post }: { post: Post }) {
 function WantedAccount({ post, prefix = '' }: { post: Post; prefix?: '' | 'wanted' }) {
     const d = post.details, key = (k: string) => prefix ? prefix + k[0].toUpperCase() + k.slice(1) : k;
     const ranks = parseList(d[key('nicknameRanks')], NICK_RANKS), skins = skinDisplay(skinTags(d[key('skinTags')]));
+    const ladder = prefix ? post.wanted_tags || [] : post.tags;
     return <>
         <SpecList rows={[
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['전적', d[key('recordPreference')]],
             ['닉네임 글자 수', nicknameRange(d, prefix)], ['닉 등급', ranks.join(', ')],
         ]} />
-        {!prefix && post.tags.length > 0 && <><h3>원하는 래더</h3><div className="tags">{[...post.tags].sort((a, b) => b.season - a.season).map(t => <span className="tag tag-line" key={t.tier + t.season}>{tagName(t)}</span>)}</div></>}
+        {ladder.length > 0 && <><h3>원하는 래더</h3><div className="tags">{[...ladder].sort((a, b) => b.season - a.season).map(t => <span className="tag tag-line" key={t.tier + t.season}>{tagName(t)}</span>)}</div></>}
         {skins.length > 0 && <><h3>우대 스킨</h3><div className="tags">{skins.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div></>}
     </>;
 }
@@ -123,6 +125,8 @@ export function Detail({ id }: { id: string }) {
                     <span>{relativeTime(post.created_at)} 등록</span>
                     {post.updated_at - post.created_at > 60000 && <span>· {relativeTime(post.updated_at)} 수정</span>}
                 </div>
+                {/* On phones the author and their verification checks come right under the title. */}
+                <AuthorBox post={post} className="author-box-top" />
                 {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
 
                 <section className="detail-section">
@@ -138,7 +142,7 @@ export function Detail({ id }: { id: string }) {
                     <h2>상세 설명</h2>
                     <p className="body-text">{post.body}</p>
                 </section>
-                <div className="row muted small">
+                <div className="row muted small detail-tools">
                     <button type="button" className="btn btn-text small" onClick={() => { void navigator.clipboard?.writeText(location.href).then(() => toast('링크를 복사했습니다.')); }}><Link2 size={15} />링크 복사</button>
                     {!mine && <button type="button" className="btn btn-text small" onClick={() => requireLogin(() => setReport(true))}><Flag size={15} />신고</button>}
                     <span className="grow" /><span>글 번호 {post.id}</span>
@@ -152,17 +156,13 @@ export function Detail({ id }: { id: string }) {
                     <label className="field"><span className="field-label">거래 상태</span>
                         <select className="select" value={post.status} onChange={e => setStatus(e.target.value)}>{Object.entries(STATUS_NAMES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
                     <button type="button" className="btn btn-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} />삭제</button>
-                </div> : <div className="side-actions">
+                </div> : <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅으로 문의하기</button>
-                    {canOffer ? <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>가격 제안</button> : <span />}
+                    {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>가격 제안</button>}
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
                 {manager && !mine && <div className="row"><button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button><button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
-                <Link to={'/profile/' + post.author_id} className="author-box">
-                    <Avatar name={post.nickname} />
-                    <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats" style={{ display: 'block' }}>프로필과 다른 거래 보기</span></span>
-                    <ChevronRight size={18} className="muted" />
-                </Link>
+                <AuthorBox post={post} className="author-box-side" />
                 <p className="safety">거래 전 상대의 전화번호·계좌를 조회하고, 비밀번호나 인증번호는 채팅에 쓰지 마세요. 사이트는 결제와 거래 보증을 하지 않습니다.</p>
             </aside>
         </div>
@@ -170,15 +170,33 @@ export function Detail({ id }: { id: string }) {
         {!mine && <div className="mobile-cta">
             <PriceLine post={post} />
             <button type="button" className={'icon-btn' + (post.favorite ? ' is-on' : '')} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={22} fill={post.favorite ? 'currentColor' : 'none'} /></button>
+            {canOffer && <button type="button" className="btn btn-line" onClick={() => requireLogin(() => setOffer(true))}>가격 제안</button>}
             <button type="button" className="btn btn-primary" onClick={startChat}>채팅하기</button>
         </div>}
 
-        {lightbox && <div className="lightbox" role="dialog" aria-label="사진 크게 보기" onClick={() => setLightbox(null)}><img src={imageUrl(lightbox)} alt="" /><button type="button" className="icon-btn" aria-label="닫기"><X size={26} /></button></div>}
+        <Dialog.Root open={!!lightbox} onOpenChange={o => { if (!o) setLightbox(null); }}>
+            <Dialog.Portal>
+                <Dialog.Overlay className="lightbox" onClick={() => setLightbox(null)} />
+                <Dialog.Content className="lightbox-content" aria-describedby={undefined} onClick={() => setLightbox(null)}>
+                    <Dialog.Title className="sr-only">사진 크게 보기</Dialog.Title>
+                    {lightbox && <img src={imageUrl(lightbox)} alt="" />}
+                    <Dialog.Close className="icon-btn lightbox-close" aria-label="닫기"><X size={26} /></Dialog.Close>
+                </Dialog.Content>
+            </Dialog.Portal>
+        </Dialog.Root>
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글을 삭제할까요?" description="삭제한 글은 되돌릴 수 없어요."
             footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-dark" onClick={remove}>삭제</button></>}><span /></Modal>
     </div>;
+}
+
+function AuthorBox({ post, className }: { post: Post; className: string }) {
+    return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
+        <Avatar name={post.nickname} />
+        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats">프로필과 다른 거래 보기</span></span>
+        <ChevronRight size={18} className="muted" />
+    </Link>;
 }
 
 function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => void; post: Post }) {

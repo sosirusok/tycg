@@ -41,16 +41,21 @@ export function SeasonPicker({ value, onChange, showPicked = true }: { value: Se
     </div>;
 }
 
-export function SkinPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+export function SkinPicker({ value, onChange, compact = false }: { value: string[]; onChange: (v: string[]) => void; compact?: boolean }) {
     const toggle = (name: string, on: boolean) => onChange(on ? [...new Set([...value, name])] : value.filter(v => v !== name));
     // Values saved by older versions stay visible so they can be removed.
     const legacy = value.filter(v => !(SKIN_OPTIONS as readonly string[]).includes(v));
     return <div className="grid-gap-8">
-        <div className="choice-grid">
-            {SKIN_OPTIONS.map(name => <label key={name} className="choice check">
-                <input type="checkbox" checked={value.includes(name)} onChange={e => toggle(name, e.target.checked)} />{name}
-            </label>)}
-        </div>
+        {compact
+            // Narrow filter column: toggle chips that size to the name instead of a two-column grid.
+            ? <div className="chip-row skin-chips" role="group" aria-label="우대 스킨">
+                {SKIN_OPTIONS.map(name => <button type="button" key={name} className="chip chip-sm" aria-pressed={value.includes(name)} onClick={() => toggle(name, !value.includes(name))}>{name}</button>)}
+            </div>
+            : <div className="choice-grid">
+                {SKIN_OPTIONS.map(name => <label key={name} className="choice check">
+                    <input type="checkbox" checked={value.includes(name)} onChange={e => toggle(name, e.target.checked)} />{name}
+                </label>)}
+            </div>}
         {legacy.length > 0 && <div className="picked">{legacy.map(name => <button type="button" key={name} onClick={() => toggle(name, false)}>{name}<X size={12} /></button>)}</div>}
     </div>;
 }

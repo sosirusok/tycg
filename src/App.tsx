@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { DropdownMenu } from 'radix-ui';
-import { Toaster, toast } from 'sonner';
+import { Toaster } from 'sonner';
 import { BadgeCheck, House, LayoutList, MessageCircle, PenLine, UserRound } from 'lucide-react';
 import { Link, navigate, useLocation } from './lib/router';
-import { api, errorText } from './lib/api';
+import { KIND_NAMES, TRADE_KINDS, type User } from '../shared/market';
 import { AppProvider, useApp } from './app/state';
 import { Avatar, CIcon, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
@@ -31,10 +31,13 @@ function writeHref(params: URLSearchParams, path: string) {
 }
 
 function Shell() {
-    const { me, unread, requireLogin, openAuth, openApply, setMe } = useApp();
+    const { me, unread, requireLogin, openAuth, openApply, logout } = useApp();
     const { path, params, parts } = useLocation();
     const page = parts[0] || '';
     const write = writeHref(params, path);
+    // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, chat room).
+    const hideBottomNav = page === 'write' || page === 'edit' || (page === 'chat' && !!parts[1]);
+    useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
 
     // Links from the previous version (board at "/?kind=…", "/activity/…").
     useEffect(() => {
@@ -42,11 +45,13 @@ function Shell() {
         if (page === 'activity') void navigate('/me/' + (parts[1] || 'posts'), { replace: true, force: true });
     }, [path, params, page, parts]);
 
-    async function logout() {
-        try { await api('auth/logout', 'POST', {}); setMe(null); void navigate('/'); toast('로그아웃했습니다.'); }
-        catch (e) { toast.error(errorText(e)); }
-    }
     const go = (to: string) => requireLogin(() => void navigate(to));
+    // 대리(진행) needs 대리 인증; without it the button opens the application instead of the form.
+    const compose = () => requireLogin((u: User) => {
+        const proxy = new URLSearchParams(write.split('?')[1] || '').get('kind') === 'proxy_offer';
+        if (proxy && u.role !== 'manager' && !u.badges.includes('proxy')) openApply({ kind: 'badge', target: 'proxy' });
+        else void navigate(write);
+    });
 
     return <>
         <Toaster position="top-center" toastOptions={{ className: 'toast' }} />
@@ -54,12 +59,8 @@ function Shell() {
             <div className="container header-inner">
                 <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} />좀비고 거래소</Link>
                 <nav className="nav" aria-label="주 메뉴">
-                    {([['/trade?kind=sell', '판매', 'sell'], ['/trade?kind=buy', '구매', 'buy'], ['/trade?kind=exchange', '교환', 'exchange'], ['/trade?kind=proxy_offer', '대리', 'proxy']] as const).map(([to, label, key]) => {
-                        const kind = params.get('kind') || '';
-                        const current = page === 'trade' && (key === 'proxy' ? kind.startsWith('proxy') : kind === key);
-                        return <Link key={key} to={to} aria-current={current ? 'page' : undefined}>{label}</Link>;
-                    })}
-                    <Link to="/guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>
+                    {TRADE_KINDS.map(kind => <Link key={kind} to={'/trade?kind=' + kind} aria-current={page === 'trade' && params.get('kind') === kind ? 'page' : undefined}>{KIND_NAMES[kind]}</Link>)}
+                    <Link to="/guide" className="nav-guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>
                 </nav>
                 <div className="header-right">
                     <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
@@ -70,7 +71,7 @@ function Shell() {
                         {unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}
                     </button>
                     {me ? <DropdownMenu.Root>
-                        <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span>{me.nickname}</span></DropdownMenu.Trigger>
+                        <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                             <DropdownMenu.Content className="menu" align="end" sideOffset={8}>
                                 <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} role={me.role} badges={me.badges} /></div>
@@ -80,11 +81,11 @@ function Shell() {
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/applications')}>인증·등급 신청 내역</DropdownMenu.Item>
                                 {me.role === 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/manage')}>매니저 관리</DropdownMenu.Item>}
                                 <DropdownMenu.Separator className="menu-sep" />
-                                <DropdownMenu.Item className="menu-item" onSelect={logout}>로그아웃</DropdownMenu.Item>
+                                <DropdownMenu.Item className="menu-item" onSelect={() => void logout()}>로그아웃</DropdownMenu.Item>
                             </DropdownMenu.Content>
                         </DropdownMenu.Portal>
                     </DropdownMenu.Root> : <button type="button" className="header-link header-login" onClick={() => openAuth('login')}>로그인 / 회원가입</button>}
-                    <button type="button" className="btn btn-primary btn-sm header-write" onClick={() => go(write)}><PenLine size={16} />글쓰기</button>
+                    <button type="button" className="btn btn-primary btn-sm header-write" onClick={compose}><PenLine size={16} />글쓰기</button>
                 </div>
             </div>
         </header>
@@ -109,13 +110,13 @@ function Shell() {
                 <div className="footer-links"><Link to="/guide">공지·이용 안내</Link><button type="button" onClick={() => openApply()}>인증·등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
             </div>
         </footer>}
-        <nav className="bottom-nav" aria-label="하단 메뉴">
+        {!hideBottomNav && <nav className="bottom-nav" aria-label="하단 메뉴">
             <Link to="/" aria-current={page === '' ? 'page' : undefined}><House size={22} />홈</Link>
-            <Link to="/trade?kind=sell" aria-current={page === 'trade' ? 'page' : undefined}><LayoutList size={22} />거래</Link>
-            <button type="button" onClick={() => go(write)} aria-current={page === 'write' ? 'page' : undefined}><PenLine size={22} />글쓰기</button>
+            <Link to="/trade?kind=buy" aria-current={page === 'trade' ? 'page' : undefined}><LayoutList size={22} />거래</Link>
+            <button type="button" onClick={compose}><PenLine size={22} />글쓰기</button>
             <button type="button" onClick={() => go('/chat')} aria-current={page === 'chat' ? 'page' : undefined}><MessageCircle size={22} />채팅{unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}</button>
             <button type="button" onClick={() => me ? void navigate('/profile/' + me.id) : openAuth('login')} aria-current={page === 'profile' || page === 'me' ? 'page' : undefined}><UserRound size={22} />내 정보</button>
-        </nav>
+        </nav>}
         <AuthModal />
         <ApplyModal />
     </>;

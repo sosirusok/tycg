@@ -1,5 +1,5 @@
 import { db, fail, requireUser, json, body, limit, initManager, memberColumns, withMember, setting, MANAGER_ID } from './http';
-import { ensureChat, messageStatements } from './chat';
+import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import {
     PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
@@ -14,14 +14,15 @@ export async function siteConfig() {
 }
 
 // A 6-month grant extends an unexpired grant of the same grade instead of overlapping it.
-export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now()) {
+// With a guard, the grant is written only if that SQL condition holds when the batch runs.
+export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
     const info = gradeInfo(grade);
     let expires: number | null = null;
     if (plan === '6m') {
         const current = await db().prepare('SELECT MAX(expires_at) AS until FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?').bind(userId, grade, now).first<any>();
         expires = addMonths(Math.max(now, current?.until || 0), 6);
     }
-    return { expires, statement: db().prepare('INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) VALUES(?,?,?,?,?,?,?)').bind(userId, grade, info.rank, expires, by, now, applicationId) };
+    return { expires, statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${guard}`).bind(userId, grade, info.rank, expires, by, now, applicationId, ...guardArgs) };
 }
 
 function dateLabel(t: number) {
@@ -33,25 +34,29 @@ async function permanentRank(userId: string) {
     return Number(r?.rank || 0);
 }
 
+const DECIDED = 'EXISTS(SELECT 1 FROM applications WHERE id=? AND decision_id=?)';
+
+// The status change carries a new decision id. The grant and the chat message are
+// guarded by that id, so when two decisions overlap only the first one takes effect.
 async function decide(u: User, app: any, action: 'approve' | 'reject', note: string) {
-    const now = Date.now();
+    const now = Date.now(), decision = crypto.randomUUID(), args = [app.id, decision];
     const statements: D1PreparedStatement[] = [
-        db().prepare("UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=? WHERE id=? AND status='pending'").bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, app.id),
+        db().prepare("UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id),
     ];
     let message = '';
     if (action === 'approve') {
         if (app.kind === 'badge') {
-            statements.push(db().prepare('INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES(?,?,?,?)').bind(app.user_id, app.target, u.id, now));
+            statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급을 완료했습니다.`;
         } else {
-            const { expires, statement } = await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now);
+            const { expires, statement } = await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args);
             statements.push(statement);
             message = `${gradeInfo(app.target).name} 등급 지급을 완료했습니다.${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}`;
         }
     } else {
         message = `${applicationTitle(app)}이 반려되었습니다.${note ? ' 사유: ' + note : ''}`;
     }
-    if (app.conversation_id) statements.push(...messageStatements(app.conversation_id, u.id, message, 'system', app.id, [], now));
+    if (app.conversation_id) statements.push(...guardedMessageStatements(app.conversation_id, u.id, message, 'system', app.id, DECIDED, args, now));
     const r = await db().batch(statements);
     if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
 }
@@ -99,10 +104,18 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         }
         const id = crypto.randomUUID(), now = Date.now();
         const app = { id, kind, target: b.target, plan };
-        await db().batch([
-            db().prepare('INSERT INTO applications(id,user_id,kind,target,plan,status,conversation_id,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id, u.id, kind, b.target, plan, 'pending', chatId, '', now, now),
-            ...messageStatements(chatId, u.id, applicationTitle(app), 'application', id, [], now),
-        ]);
+        try {
+            await db().batch([
+                db().prepare('INSERT INTO applications(id,user_id,kind,target,plan,status,conversation_id,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id, u.id, kind, b.target, plan, 'pending', chatId, '', now, now),
+                ...messageStatements(chatId, u.id, applicationTitle(app), 'application', id, [], now),
+            ]);
+        } catch (e) {
+            // A simultaneous request already opened the same application.
+            if (!String(e).includes('UNIQUE')) throw e;
+            const existing = await db().prepare("SELECT id FROM applications WHERE user_id=? AND kind=? AND target=? AND status='pending'").bind(u.id, kind, b.target).first<any>();
+            if (!existing) throw e;
+            return json({ id: existing.id, chatId, created: false });
+        }
         return json({ id, chatId, created: true }, 201);
     }
     if (p[1] && method === 'PATCH') {
@@ -112,11 +125,12 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         if (app.status !== 'pending') fail(409, '이미 처리된 신청입니다.');
         if (b.action === 'cancel') {
             if (app.user_id !== u.id) fail(403, '본인 신청만 취소할 수 있습니다.');
-            const now = Date.now();
-            await db().batch([
-                db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE id=? AND status='pending'").bind(now, app.id),
-                ...(app.conversation_id ? messageStatements(app.conversation_id, u.id, `${applicationTitle(app)}을 취소했습니다.`, 'system', app.id, [], now) : []),
+            const now = Date.now(), decision = crypto.randomUUID();
+            const r = await db().batch([
+                db().prepare("UPDATE applications SET status='cancelled',updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(now, decision, app.id),
+                ...(app.conversation_id ? guardedMessageStatements(app.conversation_id, u.id, `${applicationTitle(app)}을 취소했습니다.`, 'system', app.id, DECIDED, [app.id, decision], now) : []),
             ]);
+            if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
             return json({ ok: true });
         }
         if (u.role !== 'manager') fail(403, '매니저만 처리할 수 있습니다.');

@@ -1,8 +1,8 @@
 import { db, fail, currentUser, requireUser, json, limit } from './http';
-import { putPhoto, getPhoto, deletePhoto, photoLimit, photoLimitText, storageMode } from './storage';
+import { putPhoto, getPhoto, deletePhoto, photoLimit, photoLimitText, storageMode, D1_USER_BYTES, D1_SITE_BYTES } from './storage';
 
-// A photo is "in use" while a post, a draft or a chat message references it.
-const unused = "NOT EXISTS(SELECT 1 FROM posts p,json_each(p.images) j WHERE j.value=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE j.value=uploads.id) AND NOT EXISTS(SELECT 1 FROM messages m,json_each(m.attachments) j WHERE j.value=uploads.id)";
+// A photo is "in use" while a post, a chat message or one of the owner's drafts references it.
+export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
 
 function sniff(bytes: Uint8Array) {
     if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
@@ -51,12 +51,20 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     if (p[0] === 'uploads' && !p[1] && method === 'POST') {
         const u = await requireUser(req);
         await limit('upload:' + u.id, 30, 600000);
-        const count = await db().prepare('SELECT COUNT(*) AS n FROM uploads WHERE owner_id=?').bind(u.id).first<any>();
-        if (count.n >= 600) fail(409, '업로드 한도에 도달했습니다. 사용하지 않는 사진을 정리해 주세요.');
+        const storage = storageMode();
+        // Photos that no post, chat or draft uses are removed a day after upload (see cleanup.ts).
+        const mine = await db().prepare("SELECT COUNT(*) AS n,COALESCE(SUM(CASE WHEN storage='d1' THEN size ELSE 0 END),0) AS d1 FROM uploads WHERE owner_id=?").bind(u.id).first<any>();
+        if (mine.n >= 600) fail(409, '올린 사진이 너무 많습니다. 쓰지 않는 사진은 하루 뒤 자동으로 정리됩니다.');
         const bytes = await readBody(req, photoLimit());
         const mime = sniff(bytes);
         if (!mime) fail(400, 'JPG, PNG, WebP 사진을 선택해 주세요.');
-        const id = crypto.randomUUID(), storage = storageMode();
+        if (storage === 'd1') {
+            // Without R2, photos share the database's 500 MB, so each member and the whole site have a budget.
+            if (mine.d1 + bytes.byteLength > D1_USER_BYTES) fail(409, '사진 저장 공간(1인 30MB)을 다 썼습니다. 쓰지 않는 사진은 하루 뒤 자동으로 정리됩니다.');
+            const site = await db().prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE storage='d1'").first<any>();
+            if (site.bytes + bytes.byteLength > D1_SITE_BYTES) fail(507, '사이트의 사진 저장 공간이 가득 찼습니다. 매니저에게 알려 주세요.');
+        }
+        const id = crypto.randomUUID();
         await db().prepare('INSERT INTO uploads(id,owner_id,mime,size,storage,created_at) VALUES(?,?,?,?,?,?)').bind(id, u.id, mime, bytes.byteLength, storage, Date.now()).run();
         try { await putPhoto(id, bytes, mime, storage); }
         catch (e) { await db().prepare('DELETE FROM uploads WHERE id=?').bind(id).run(); throw e; }
@@ -65,15 +73,16 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     if (p[0] === 'images' && p[1] && method === 'GET') {
         const m = await db().prepare('SELECT * FROM uploads WHERE id=?').bind(p[1]).first<any>();
         if (!m) fail(404, '사진을 찾을 수 없습니다.');
-        const publicImage = await db().prepare('SELECT 1 FROM posts p,json_each(p.images) j WHERE j.value=? AND p.hidden=0 LIMIT 1').bind(p[1]).first();
+        const publicImage = await db().prepare('SELECT 1 FROM post_images pi JOIN posts p ON p.id=pi.post_id WHERE pi.upload_id=? AND p.hidden=0 LIMIT 1').bind(p[1]).first();
         if (!publicImage) {
             const u = await currentUser(req);
-            const allowed = u && (u.id === m.owner_id || u.role === 'manager' || await db().prepare('SELECT 1 FROM messages msg JOIN conversations c ON c.id=msg.conversation_id,json_each(msg.attachments) j WHERE j.value=? AND (c.user_a=? OR c.user_b=?) LIMIT 1').bind(p[1], u.id, u.id).first());
+            const allowed = u && (u.id === m.owner_id || u.role === 'manager' || await db().prepare('SELECT 1 FROM message_images mi JOIN messages msg ON msg.id=mi.message_id JOIN conversations c ON c.id=msg.conversation_id WHERE mi.upload_id=? AND (c.user_a=? OR c.user_b=?) LIMIT 1').bind(p[1], u.id, u.id).first());
             if (!allowed) fail(404, '사진을 찾을 수 없습니다.');
         }
         const data = await getPhoto(p[1], m.storage);
         if (!data) fail(404, '사진을 찾을 수 없습니다.');
-        return new Response(data, { headers: { 'Content-Type': m.mime, 'Cache-Control': publicImage ? 'private, max-age=600' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
+        // A photo id never changes content. Public photos may be kept by the browser for a day.
+        return new Response(data, { headers: { 'Content-Type': m.mime, 'Cache-Control': publicImage ? 'private, max-age=86400' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
     }
     return null;
 }

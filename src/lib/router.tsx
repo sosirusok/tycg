@@ -26,10 +26,17 @@ function subscribe(listener: () => void) {
 }
 const snapshot = () => location.pathname + location.search;
 
-export function useLocation() {
-    const href = useSyncExternalStore(subscribe, snapshot, snapshot);
+function parseHref(href: string) {
     const url = new URL(href, location.origin);
     return { path: url.pathname, search: url.search, params: url.searchParams, parts: url.pathname.split('/').filter(Boolean), href };
+}
+// One parsed object per address, so `params` and `parts` are stable effect dependencies.
+let parsed: ReturnType<typeof parseHref> | null = null;
+
+export function useLocation() {
+    const href = useSyncExternalStore(subscribe, snapshot, snapshot);
+    if (parsed?.href !== href) parsed = parseHref(href);
+    return parsed;
 }
 
 export function Link({ to, onClick, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) {

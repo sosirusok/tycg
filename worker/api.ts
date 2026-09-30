@@ -1,6 +1,6 @@
 import {
-    db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, textField, storedHash, verifyPassword, random,
-    digest, tokenOf, sessionCookie, memberColumns, withMember, MANAGER_USERNAME, MANAGER_NICKNAME, SESSION_DAYS,
+    db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
+    digest, tokenOf, sessionCookie, memberColumns, withMember, nicknameField, isLegacyHash, DUMMY_HASH, MANAGER_USERNAME, SESSION_DAYS,
 } from './http';
 import { postsHandler } from './posts';
 import { filesHandler } from './files';
@@ -36,15 +36,16 @@ async function authHandler(req: Request, p: string[]) {
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
     if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문, 숫자, 밑줄로 4~24자까지 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
-    const ip = req.headers.get('cf-connecting-ip') || 'local';
-    await limit('auth-ip:' + await digest(ip), 40, 600000);
-    await limit('auth-user:' + username, 15, 600000);
+    // Limits are per address, and per id from each address, so nobody can lock
+    // another member (such as the manager) out by failing logins on purpose.
+    const ip = await digest(req.headers.get('cf-connecting-ip') || 'local');
+    await limit('auth-ip:' + ip, 40, 600000);
+    await limit('auth-user:' + username + ':' + ip, 15, 600000);
     await initManager();
     let id: string;
     if (p[1] === 'register') {
         if (username === MANAGER_USERNAME) fail(409, '이미 사용 중인 아이디입니다.');
-        const nickname = textField(b.nickname, 2, 16, '닉네임');
-        if (nickname === MANAGER_NICKNAME) fail(409, '이미 사용 중인 닉네임입니다.');
+        const nickname = nicknameField(b.nickname);
         const salt = random();
         id = crypto.randomUUID();
         try {
@@ -56,10 +57,12 @@ async function authHandler(req: Request, p: string[]) {
         }
     } else if (p[1] === 'login') {
         const found = await db().prepare('SELECT id,salt,password_hash FROM users WHERE username=?').bind(username).first<any>();
-        // Unknown ids still run one hash so response time does not reveal which ids exist.
-        const ok = await verifyPassword(b.password, found?.salt || 'invalid-user-constant-salt', found?.password_hash || '');
+        // Unknown ids still run one hash of the current cost so response time does not reveal which ids exist.
+        const ok = await verifyPassword(b.password, found?.salt || 'invalid-user-constant-salt', found?.password_hash || DUMMY_HASH);
         if (!found || !ok) fail(401, '아이디 또는 비밀번호가 맞지 않습니다.');
         id = found.id;
+        // Older 100,000-iteration hashes are replaced once the password is known.
+        if (isLegacyHash(found.password_hash)) await db().prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await storedHash(b.password, found.salt), id).run();
     } else fail(404, '페이지를 찾을 수 없습니다.');
     const token = random();
     await db().batch([
@@ -83,9 +86,9 @@ async function usersHandler(req: Request, p: string[]) {
     const u = await requireUser(req);
     if (u.id !== p[1]) fail(403, '본인 프로필만 수정할 수 있습니다.');
     if (method !== 'PUT') fail(405, '지원하지 않는 요청입니다.');
-    const b = await body(req), nickname = textField(b.nickname, 2, 16, '닉네임');
-    if (u.role === 'manager' && nickname !== MANAGER_NICKNAME) fail(400, '매니저 닉네임은 우와오로 고정됩니다.');
-    if (u.role !== 'manager' && nickname === MANAGER_NICKNAME) fail(409, '이미 사용 중인 닉네임입니다.');
+    const b = await body(req);
+    // An unchanged nickname is kept even if it predates the current nickname rules.
+    const nickname = b.nickname === u.nickname ? u.nickname : nicknameField(b.nickname, u.role === 'manager');
     const bio = typeof b.bio === 'string' ? b.bio.trim().slice(0, 300) : '';
     try {
         await db().prepare('UPDATE users SET nickname=?,bio=? WHERE id=?').bind(nickname, bio, u.id).run();

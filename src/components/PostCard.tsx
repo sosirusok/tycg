@@ -18,12 +18,30 @@ export function postSummary(post: Post) {
     return [];
 }
 
+// What an exchange post wants in return, in the same short form as the offered side.
+export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags'>) {
+    const d = post.details;
+    if (d.wantedCategory !== 'account') return [categoryName(d.wantedCategory || 'account')];
+    const unprefixed: Record<string, string> = {};
+    for (const [k, v] of Object.entries(d)) if (k.startsWith('wanted') && k !== 'wantedCategory') unprefixed[k[6].toLowerCase() + k.slice(7)] = v;
+    const tags = post.wanted_tags || [];
+    return [...tags.slice(0, 2).map(tagName), ...(tags.length > 2 ? [`외 ${tags.length - 2}개 시즌`] : []), ...accountSummary(unprefixed)];
+}
+
 export function tradeLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
     return post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : `${KIND_NAMES[post.kind]} · ${categoryName(post.category)}`;
 }
 
-// Sale price with every earlier 즉거가 struck through, oldest first.
+// Sale price with every earlier 즉거가 struck through, oldest first. Exchange posts have
+// no price, so the slot shows what the author wants in return.
 export function PriceLine({ post, large = false }: { post: Post; large?: boolean }) {
+    if (post.kind === 'exchange') {
+        const wanted = wantedSummary(post);
+        return <div className={'price price-exchange' + (large ? ' price-lg' : '')}>
+            <span className="price-label">원하는 {categoryName(post.details.wantedCategory || 'account')}</span>
+            <span className="price-want">{wanted.length > 1 || post.details.wantedCategory !== 'account' ? wanted.join(' · ') : '조건은 본문을 확인해 주세요'}</span>
+        </div>;
+    }
     const history = post.kind === 'sell' ? post.price_history || [] : [];
     const offer = post.kind === 'sell' && post.details.currentOffer ? Number(post.details.currentOffer) : null;
     return <div className={'price' + (large ? ' price-lg' : '')}>
@@ -46,8 +64,9 @@ export function PostCard({ post, highlight = [], onChange }: { post: Post; highl
     const href = '/posts/' + post.id;
     const tags = orderedTags(post.tags, highlight);
     const summary = postSummary(post);
-    async function favorite() {
-        if (!requireLogin()) return;
+    // Logged-out members log in first; the heart is then saved for the post they clicked.
+    const favorite = () => requireLogin(u => { if (u.id !== post.author_id) void save(); });
+    async function save() {
         try {
             await api(`posts/${post.id}/favorite`, 'POST', { active: !post.favorite });
             toast(post.favorite ? '찜을 해제했습니다.' : '찜한 글에 저장했습니다.');
@@ -65,7 +84,7 @@ export function PostCard({ post, highlight = [], onChange }: { post: Post; highl
             {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">
                 {tags.slice(0, 3).map(t => <span className="tag" key={t.tier + t.season}>{tagName(t)}</span>)}
                 {tags.length > 3 && <span className="tag">+{tags.length - 3}</span>}
-                {summary.slice(0, 4).map(s => <span className="spec" key={s}>{s}</span>)}
+                {summary.length > 0 && <span className="spec">{summary.slice(0, 4).join(' · ')}</span>}
             </div>}
             <div className="post-card-bottom">
                 <PriceLine post={post} />

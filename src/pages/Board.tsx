@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import {
-    KIND_ICONS, KIND_NAMES, RECORD_PREFERENCES, TIERS, categoriesForKind, categoryName, isTradeKind, manToWon, priceText, skinTags, validTags, wonToMan,
+    KIND_ICONS, KIND_NAMES, RECORD_PREFERENCES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, isTradeKind, manToWon, priceLabel, priceText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -11,16 +11,17 @@ import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
-const TAB_ORDER: TradeKind[] = ['buy', 'sell', 'exchange', 'proxy_request', 'proxy_offer'];
 const PAGE_SIZE = 16;
 
 type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
 
 // Only parameters that mean something for the current tab reach the API.
-function allowedKeys({ kind, category }: Ctx) {
+function allowedKeys(ctx: Ctx) {
+    const { kind, category } = ctx;
     const keys = ['kind', 'category', 'q', 'active', 'page', 'sort'];
     if (kind === 'all') return ['q', 'active', 'page'];
     if (kind === 'exchange') keys.push('wantedCategory');
+    if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedRecordPreference');
     if (kind !== 'exchange') keys.push('min', 'max');
     if (category === 'account' || category === 'ladder') keys.push('tags', 'match');
     if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'recordPreference'] : ['maxOwners', 'recordStatus', 'phantom']));
@@ -56,7 +57,24 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
     const money = (key: string) => wonToMan(params.get(key) ? Number(params.get(key)) : null);
     const setMoney = (key: string, v: string) => { const won = manToWon(v); update({ [key]: won === null || Number.isNaN(won) ? '' : String(won) }); };
     if (kind === 'all') return <Group title="거래 상태"><label className="switch"><input type="checkbox" checked={params.get('active') === '1'} onChange={e => update({ active: e.target.checked ? '1' : '' })} />거래완료 제외</label></Group>;
+    const exchange = kind === 'exchange';
+    const wantedTags = readTags(params.get('wantedTags'));
     return <>
+        {exchange && ctx.wanted === 'account' && <>
+            <h3 className="filter-section">상대가 구하는 계정</h3>
+            <Group title="내 계정으로 찾기" hint="내 계정 조건을 넣으면 그 계정을 받아 줄 교환 글만 보여요.">
+                <div className="grid-gap-8">
+                    <LazyNumber label="내 계정 대주 수" value={params.get('wantedOwnerCountOfMine') || ''} onCommit={v => update({ wantedOwnerCountOfMine: v })} placeholder="내 계정 대주 수" unit="대주" max={9999} />
+                    <LazyNumber label="내 닉네임 글자 수" value={params.get('wantedNicknameChars') || ''} onCommit={v => update({ wantedNicknameChars: v })} placeholder="내 닉네임 글자 수" unit="글자" max={20} />
+                    <RankPicker value={params.get('wantedNicknameRank') ? [params.get('wantedNicknameRank')!] : []} onChange={v => update({ wantedNicknameRank: v[0] || '' })} />
+                    <Segmented name="구하는 전적" options={RECORD_PREFERENCES} value={params.get('wantedRecordPreference') || ''} onChange={v => update({ wantedRecordPreference: v })} />
+                </div>
+            </Group>
+            <Group title="구하는 래더" hint="하나라도 원하는 글을 보여줘요.">
+                <SeasonPicker value={wantedTags} onChange={v => update({ wantedTags: v.length ? JSON.stringify(v) : '' })} />
+            </Group>
+        </>}
+        {exchange && (account || category === 'ladder') && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
         {account && buying && <Group title="내 계정으로 찾기" hint="내 계정 조건을 넣으면 받아 줄 구매 글만 보여요.">
             <div className="grid-gap-8">
                 <LazyNumber label="내 계정 대주 수" value={params.get('ownerCountOfMine') || ''} onCommit={v => update({ ownerCountOfMine: v })} placeholder="내 계정 대주 수" unit="대주" max={9999} />
@@ -70,7 +88,7 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
             {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌을 모두 가진 글만</label>}
         </Group>}
         {account && <Group title={buying ? '원하는 우대 스킨' : '보유 우대 스킨'}>
-            <SkinPicker value={skinTags(params.get('skinTags') || '')} onChange={v => update({ skinTags: v.length ? JSON.stringify(v) : '' })} />
+            <SkinPicker compact value={skinTags(params.get('skinTags') || '')} onChange={v => update({ skinTags: v.length ? JSON.stringify(v) : '' })} />
         </Group>}
         {account && !buying && <Group title="닉네임">
             <div className="grid-gap-8">
@@ -87,7 +105,7 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
         {account && !buying && <Group title="팬텀">
             <LazyNumber label="최소 팬텀 %" value={params.get('phantom') || ''} onCommit={v => update({ phantom: v })} placeholder="몇 % 이상" unit="% 이상" max={5000} />
         </Group>}
-        {kind !== 'exchange' && <Group title={kind === 'sell' ? '즉거가' : buying ? '최대 예산' : '비용'}>
+        {kind !== 'exchange' && <Group title={priceLabel(kind)}>
             <div className="range">
                 <LazyNumber label="최소 금액 (만원)" value={money('min')} onCommit={v => setMoney('min', v)} placeholder="최소" unit="만원" step="0.1" />
                 <span>~</span>
@@ -108,6 +126,12 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
         if (seasons.length) chips.push({ key: 'tier-' + tier.id, label: `${tier.name} ${seasons.join(', ')}시즌`, clear: () => { const rest = tags.filter(t => t.tier !== tier.id); update({ tags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
     }
     for (const skin of skinTags(params.get('skinTags') || '')) chips.push({ key: 'skin-' + skin, label: skin, clear: () => { const rest = skinTags(params.get('skinTags') || '').filter(v => v !== skin); update({ skinTags: rest.length ? JSON.stringify(rest) : '' }); } });
+    const wantedTags = readTags(params.get('wantedTags'));
+    if (wantedTags.length) chips.push({ key: 'wantedTags', label: '구하는 래더 ' + (wantedTags.length > 1 ? `${tagName(wantedTags[0])} 외 ${wantedTags.length - 1}` : tagName(wantedTags[0])), clear: () => update({ wantedTags: '' }) });
+    add('wantedOwnerCountOfMine', `내 계정 ${params.get('wantedOwnerCountOfMine')}대주`);
+    add('wantedNicknameChars', `내 닉 ${params.get('wantedNicknameChars')}글자`);
+    add('wantedNicknameRank', `내 닉 ${params.get('wantedNicknameRank')}`);
+    add('wantedRecordPreference', `구함 · ${params.get('wantedRecordPreference')}`);
     const buying = ctx.kind === 'buy';
     add('nicknameChars', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameChars')}글자`);
     add('nicknameRank', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameRank')}`);
@@ -141,8 +165,12 @@ export function Board() {
 
     const [data, setData] = useState<{ key: string; posts: Post[]; total: number; error: string } | null>(null);
     const [reload, setReload] = useState(0), [sheet, setSheet] = useState(false);
-    const [q, setQ] = useState(params.get('q') || '');
-    useEffect(() => { setQ(params.get('q') || ''); }, [params]);
+    // Follows the address (back/forward, chips) without overwriting what the member is typing.
+    const urlQ = params.get('q') || '';
+    const [q, setQ] = useState(urlQ);
+    useEffect(() => { setQ(urlQ); }, [urlQ]);
+    const tabsRef = useRef<HTMLDivElement>(null);
+    useEffect(() => { tabsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [kind]);
     useEffect(() => {
         let alive = true;
         api<{ posts: Post[]; total: number }>('posts?' + queryString)
@@ -157,7 +185,14 @@ export function Board() {
         for (const [k, v] of Object.entries(values)) v ? next.set(k, v) : next.delete(k);
         void navigate('/trade?' + next.toString(), { replace: true });
     };
-    const switchTo = (nextKind: TradeKind | 'all', nextCategory?: string, nextWanted?: string) => {
+    // Page buttons add a history entry (so Back returns to the previous page) and go to the top of the list.
+    const goPage = (n: number) => {
+        const next = new URLSearchParams(query);
+        n > 1 ? next.set('page', String(n)) : next.delete('page');
+        void navigate('/trade?' + next.toString());
+        window.scrollTo({ top: 0 });
+    };
+    const switchTo = (nextKind: TradeKind | 'all', nextCategory?: string, nextWanted?: string, keepSearch = true) => {
         const p: Record<string, string> = {};
         if (nextKind !== 'all') {
             p.kind = nextKind;
@@ -165,18 +200,19 @@ export function Board() {
             p.category = nextCategory && cats.some(c => c.id === nextCategory) ? nextCategory : cats[0].id;
             if (nextKind === 'exchange') p.wantedCategory = nextWanted || 'account';
         }
-        if (params.get('q')) p.q = params.get('q')!;
-        if (params.get('active')) p.active = '1';
+        if (keepSearch && params.get('q')) p.q = params.get('q')!;
+        if (keepSearch && params.get('active')) p.active = '1';
         void navigate(withParams('/trade', p));
     };
-    const clearAll = () => switchTo(kind, category, wanted);
+    // Resets every filter, including the search word and 거래완료 제외.
+    const clearAll = () => { setQ(''); switchTo(kind, category, wanted, false); };
     const page = Math.max(1, Number(params.get('page')) || 1);
     const loading = !data || data.key !== queryString;
     const chips = activeChips(ctx, query, update);
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
-    const compose = () => requireLogin(() => {
-        if (kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'))) openApply({ kind: 'badge', target: 'proxy' });
+    const compose = () => requireLogin(u => {
+        if (kind === 'proxy_offer' && !(u.role === 'manager' || u.badges.includes('proxy'))) openApply({ kind: 'badge', target: 'proxy' });
         else void navigate(writeHref);
     });
     const submit = (e: FormEvent) => { e.preventDefault(); update({ q: q.trim() }); };
@@ -189,9 +225,9 @@ export function Board() {
             <h1 className="page-title">{title}</h1>
             <button type="button" className="btn btn-primary btn-sm" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
         </div>
-        <div className="tabs kind-tabs" role="tablist" aria-label="거래 구분">
+        <div className="tabs kind-tabs" role="tablist" aria-label="거래 구분" ref={tabsRef}>
             {kind === 'all' && <button type="button" role="tab" className="tab" aria-selected>전체</button>}
-            {TAB_ORDER.map(k => <button type="button" role="tab" key={k} className="tab" aria-selected={kind === k} onClick={() => switchTo(k)}><CIcon name={KIND_ICONS[k]} size={22} />{KIND_NAMES[k]}</button>)}
+            {TRADE_KINDS.map(k => <button type="button" role="tab" key={k} className="tab" aria-selected={kind === k} onClick={() => switchTo(k)}><CIcon name={KIND_ICONS[k]} size={22} />{KIND_NAMES[k]}</button>)}
         </div>
         {kind !== 'all' && <div className="board-sub">
             {kind === 'exchange' ? <div className="exchange-pick">
@@ -231,9 +267,9 @@ export function Board() {
                         text={chips.length ? '필터를 줄이거나 검색어를 바꿔 보세요.' : kind === 'all' ? undefined : `${KIND_NAMES[kind]} · ${kind === 'exchange' ? `${categoryName(category)}에서 ${categoryName(wanted)} 구함` : categoryName(category)} 첫 글을 올려 보세요.`}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-primary" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">
-                    <button type="button" disabled={page <= 1} onClick={() => update({ page: String(page - 1) })}>이전</button>
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => Math.max(1, Math.min(page - 2, totalPages - 4)) + i).map(n => <button type="button" key={n} aria-current={n === page ? 'page' : undefined} onClick={() => update({ page: n === 1 ? '' : String(n) })}>{n}</button>)}
-                    <button type="button" disabled={page >= totalPages} onClick={() => update({ page: String(page + 1) })}>다음</button>
+                    <button type="button" disabled={page <= 1} onClick={() => goPage(page - 1)}>이전</button>
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => Math.max(1, Math.min(page - 2, totalPages - 4)) + i).map(n => <button type="button" key={n} aria-current={n === page ? 'page' : undefined} onClick={() => goPage(n)}>{n}</button>)}
+                    <button type="button" disabled={page >= totalPages} onClick={() => goPage(page + 1)}>다음</button>
                 </nav>}
             </section>
         </div>

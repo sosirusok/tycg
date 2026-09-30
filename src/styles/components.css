@@ -10,8 +10,6 @@
 .post-card-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .post-card-specs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 6px; }
 .post-card-specs .spec { color: var(--ink-2); font-size: 13px; }
-.post-card-specs .spec + .spec::before { content: '·'; margin-right: 6px; color: var(--ink-4); }
-.post-card-specs .tag + .spec::before { content: none; }
 .post-card-specs .tag + .spec { margin-left: 4px; }
 .post-card-bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-top: 2px; }
 .post-card-author { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
@@ -37,6 +35,8 @@
 .price-values strong { color: var(--ink); font-size: 18px; font-weight: 800; letter-spacing: -0.4px; }
 .price-offer { color: var(--ink-2); font-size: 13px; }
 .price-offer b { font-weight: 700; }
+.price-want { color: var(--ink); font-size: 15px; font-weight: 700; line-height: 1.45; }
+.price-lg .price-want { font-size: 18px; }
 .price-lg .price-label { font-size: 14px; }
 .price-lg .price-values del { font-size: 16px; }
 .price-lg .price-values strong { font-size: 28px; letter-spacing: -0.8px; }
@@ -46,7 +46,7 @@
 .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 @media (max-width: 960px) { .card-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 640px) { .card-grid { grid-template-columns: 1fr; } }
-.mini-card { display: grid; gap: 10px; align-content: start; min-height: 190px; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-l); transition: box-shadow .15s, border-color .15s; }
+.mini-card { display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-l); transition: box-shadow .15s, border-color .15s; }
 .mini-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-card); }
 .mini-card .post-card-meta { padding-right: 0; }
 .mini-card h3 { font-size: 16px; font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -59,7 +59,7 @@
 .tier-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 44px; padding: 0 12px; text-align: left; }
 .tier-head:hover { background: var(--fill-2); }
 .tier-head .tier-name { font-weight: 600; color: var(--ink); font-size: 14px; }
-.tier-head .tier-range { color: var(--ink-4); font-size: 12px; }
+.tier-head .tier-range { color: var(--ink-3); font-size: 12px; }
 .tier-head .tier-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--brand); color: var(--white); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
 .tier-head .chev { margin-left: auto; color: var(--ink-4); transition: transform .15s; }
 .tier-head .tier-count + .chev { margin-left: 4px; }

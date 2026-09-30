@@ -20,25 +20,47 @@ export async function ensureChat(a: string, b: string) {
     return (await db().prepare('SELECT id FROM conversations WHERE user_a=? AND user_b=?').bind(...pair).first<any>()).id as string;
 }
 
-// Inserts a message and bumps the conversation in one transaction.
+// Inserts a message (and its photo links) and bumps the conversation in one transaction.
 export function messageStatements(conversationId: string, senderId: string, text: string, type = 'text', referenceId: string | null = null, attachments: string[] = [], at = Date.now()) {
     return [
         db().prepare('INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) VALUES(?,?,?,?,?,?,?)').bind(conversationId, senderId, text, type, referenceId, JSON.stringify(attachments), at),
+        ...attachments.length ? [db().prepare('INSERT OR IGNORE INTO message_images(message_id,upload_id) SELECT (SELECT MAX(id) FROM messages WHERE conversation_id=? AND sender_id=?),value FROM json_each(?)').bind(conversationId, senderId, JSON.stringify(attachments))] : [],
         db().prepare('UPDATE conversations SET updated_at=? WHERE id=?').bind(at, conversationId),
+    ];
+}
+
+// A text-only message that is written only when `guard` (an SQL condition) holds when the batch runs.
+export function guardedMessageStatements(conversationId: string, senderId: string, text: string, type: string, referenceId: string | null, guard: string, args: unknown[], at = Date.now()) {
+    return [
+        db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,?,?,'[]',? WHERE ${guard}`).bind(conversationId, senderId, text, type, referenceId, at, ...args),
+        db().prepare(`UPDATE conversations SET updated_at=? WHERE id=? AND ${guard}`).bind(at, conversationId, ...args),
     ];
 }
 
 const preview = "(SELECT CASE WHEN m.body='' AND m.attachments!='[]' THEN '사진' ELSE m.body END FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1)";
 
+// Partner details in chat lists; when a 6-month grade ends stays private.
+function partner(row: any) {
+    const m = withMember(row);
+    delete m.grade_expires_at;
+    return m;
+}
+
 export async function chatHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
     const method = req.method, u = await requireUser(req);
+    // Polled on every page for the header badge. It also returns the member's current
+    // badges and grade so a grant shows up without reloading the page.
+    if (p[1] === 'unread' && method === 'GET') {
+        const r = await db().prepare('SELECT COUNT(*) AS n FROM conversations c JOIN messages m ON m.conversation_id=c.id AND m.sender_id!=? AND m.read_at IS NULL WHERE c.user_a=? OR c.user_b=?').bind(u.id, u.id, u.id).first<any>();
+        return json({ unread: r?.n || 0, user: u });
+    }
     if (!p[1] && method === 'GET') {
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,${memberColumns('u')},${preview} AS last_message,
             (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL) AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications
-            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE c.user_a=? OR c.user_b=? ORDER BY c.updated_at DESC`)
+            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE c.user_a=? OR c.user_b=? ORDER BY c.updated_at DESC LIMIT 100`)
             .bind(u.id, u.id, u.id, u.id).all();
-        return json({ chats: r.results.map(row => withMember(row as any)) });
+        return json({ chats: r.results.map(partner) });
     }
     if (!p[1] && method === 'POST') {
         await limit('chat-new:' + u.id, 30, 60000);
@@ -58,8 +80,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     }
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
-        const partner = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
-        return json({ chat: { id: c.id, partner: partner ? withMember(partner) : null, blocked: await blocked(c.user_a, c.user_b) } });
+        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
+        return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b) } });
     }
     if (p[1] && p[2] === 'messages') {
         const c = await chatMember(p[1], u.id);

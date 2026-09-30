@@ -1,4 +1,4 @@
-import { db, requireUser, requireManager, json, body, textField } from './http';
+import { db, requireUser, requireManager, json, body, textField, memberColumns, withMember } from './http';
 import { decorate, postSelect } from './posts';
 import { manageMembers } from './membership';
 
@@ -7,11 +7,11 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     requireManager(u);
     if (!p[1] && method === 'GET') {
         const r = await db().batch([
-            db().prepare('SELECT r.*,p.title,p.hidden,u.nickname FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id ORDER BY r.created_at DESC LIMIT 100'),
+            db().prepare(`SELECT r.*,p.title,p.hidden,u.nickname,${memberColumns('u')} FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id ORDER BY r.created_at DESC LIMIT 100`),
             db().prepare(postSelect + ' WHERE p.hidden=1 ORDER BY p.updated_at DESC LIMIT 100'),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
         ]);
-        return json({ reports: r[0].results, hidden: await decorate(r[1].results, u.id), pendingApplications: (r[2].results[0] as any).n });
+        return json({ reports: r[0].results.map(row => withMember(row as any)), hidden: await decorate(r[1].results, u.id), pendingApplications: (r[2].results[0] as any).n });
     }
     if (p[1] === 'visibility' && method === 'POST') {
         const b = await body(req);

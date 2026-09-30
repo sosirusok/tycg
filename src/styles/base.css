@@ -56,13 +56,12 @@ img { display: block; max-width: 100%; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 44px; padding: 0 18px; border-radius: var(--radius);
-  font-size: 15px; font-weight: 600; white-space: nowrap; transition: opacity .12s, background-color .12s;
+  font-size: 15px; font-weight: 600; white-space: nowrap; transition: box-shadow .12s, background-color .12s;
 }
 .btn svg { flex: none; }
 .btn-primary { background: var(--brand); color: var(--white); }
-.btn-primary:hover:not(:disabled) { opacity: .9; }
+.btn-primary:hover:not(:disabled), .btn-dark:hover:not(:disabled) { box-shadow: 0 0 0 3px var(--line); }
 .btn-dark { background: var(--ink-2); color: var(--white); }
-.btn-dark:hover:not(:disabled) { opacity: .9; }
 .btn-line { background: var(--white); color: var(--ink-2); border: 1px solid var(--line-2); }
 .btn-line:hover:not(:disabled) { background: var(--fill-2); }
 .btn-soft { background: var(--fill); color: var(--ink-2); }

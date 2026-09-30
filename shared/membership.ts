@@ -34,7 +34,7 @@ export const BADGES: BadgeInfo[] = [
     {
         id: 'credit',
         name: '신용인',
-        icon: 'handshake',
+        icon: 'trophy',
         summary: '거래 내역과 거래 금액을 보고 매니저가 지급해요.',
         requirements: ['거래 내역', '누적 거래 금액', '활동 닉네임 또는 커뮤니티'],
         template: '[신용인 신청]\n주요 거래 내역: (캡처를 사진으로 보내 주세요)\n누적 거래 금액: \n활동 닉네임: ',
@@ -60,15 +60,17 @@ export function planInfo(grade: string, plan: string) { return gradeInfo(grade).
 export function isBadge(id: unknown): id is BadgeId { return typeof id === 'string' && BADGES.some(b => b.id === id); }
 export function isGrade(id: unknown): id is GradeId { return typeof id === 'string' && GRADES.some(g => g.id === id); }
 
-// Six calendar months from the given time, clamped to the last day of the month.
+// Calendar months from the given time on the Korean (UTC+9) calendar, clamped to the
+// last day of the month, so the end date matches the date shown to members.
+const KST = 9 * 3600000;
 export function addMonths(from: number, months: number) {
-    const d = new Date(from);
+    const d = new Date(from + KST);
     const day = d.getUTCDate();
     d.setUTCDate(1);
     d.setUTCMonth(d.getUTCMonth() + months);
     const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
     d.setUTCDate(Math.min(day, last));
-    return d.getTime();
+    return d.getTime() - KST;
 }
 
 export type ApplicationKind = 'badge' | 'grade';

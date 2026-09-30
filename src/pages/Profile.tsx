@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Ban, MessageCircle, Pencil } from 'lucide-react';
+import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, type Post, type User } from '../../shared/market';
 import { BADGES, gradeInfo } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
@@ -12,7 +12,7 @@ import { PostCard } from '../components/PostCard';
 type Profile = User & { postCount: number; closedCount: number };
 
 export default function ProfilePage({ id }: { id?: string }) {
-    const { me, setMe, requireLogin, openApply } = useApp();
+    const { me, refreshMe, requireLogin, openApply, logout } = useApp();
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState('');
     const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false);
@@ -32,8 +32,10 @@ export default function ProfilePage({ id }: { id?: string }) {
         setSaving(true);
         try {
             await api('users/' + user!.id, 'PUT', { nickname, bio });
-            setUser({ ...user!, nickname: nickname.trim(), bio: bio.trim() });
-            if (me) setMe({ ...me, nickname: nickname.trim(), bio: bio.trim() });
+            // The server stores the nickname in a normalized form, so read it back.
+            const d = await api<{ user: Profile }>('users/' + user!.id);
+            setUser(d.user);
+            await refreshMe();
             setEditing(false); toast('프로필을 저장했습니다.');
         } catch (e) { toast.error(errorText(e)); }
         finally { setSaving(false); }
@@ -69,23 +71,29 @@ export default function ProfilePage({ id }: { id?: string }) {
 
         <section className="profile-cards">
             <div className="card card-pad">
-                <h2 className="card-title">인증</h2>
+                <div className="card-title-row"><h2 className="card-title">인증</h2>
+                    {mine && user.role !== 'manager' && user.badges.length < BADGES.length && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: BADGES.find(b => !user.badges.includes(b.id))!.id })}>인증 신청</button>}</div>
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
                     return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <span className="verified"><VerifiedMark size={16} />인증 완료</span> : <span className="muted small">미인증</span>}</li>;
                 })}</ul>
-                {mine && user.role !== 'manager' && user.badges.length < BADGES.length && <button type="button" className="btn btn-text small mt-12" onClick={() => openApply({ kind: 'badge', target: BADGES.find(b => !user.badges.includes(b.id))!.id })}>인증 신청하기</button>}
             </div>
             <div className="card card-pad">
-                <h2 className="card-title">등급</h2>
+                <div className="card-title-row"><h2 className="card-title">등급</h2>
+                    {mine && user.role !== 'manager' && grade.rank < 3 && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청</button>}</div>
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
                     <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
                     {mine && user.grade_expires_at && <p className="muted small">{dateText(user.grade_expires_at)}까지</p>}
                     <p className="muted small mt-8">일반 → 플러스 → 프리미엄 → 엘리트 → 관리자</p>
-                    {mine && <button type="button" className="btn btn-text small mt-12" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청하기</button>}
                 </>}
             </div>
         </section>
+
+        {mine && <nav className="my-menu" aria-label="내 메뉴">
+            {([['/me/posts', '내 거래'], ['/me/favorites', '찜한 글'], ['/me/applications', '인증·등급 신청 내역'], ...(me?.role === 'manager' ? [['/manage', '매니저 관리']] : [])] as [string, string][]).map(([to, label]) =>
+                <Link key={to} to={to}>{label}<ChevronRight size={18} /></Link>)}
+            <button type="button" onClick={() => void logout()}>로그아웃</button>
+        </nav>}
 
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래 중' }, { id: 'closed', label: '거래 완료' }]} />

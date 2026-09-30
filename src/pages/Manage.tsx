@@ -12,7 +12,7 @@ import { PostCard } from '../components/PostCard';
 
 type TabId = 'applications' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; badges: string[] };
-type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; reason: string; details: string; status: string; created_at: number };
+type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; badges: string[]; reason: string; details: string; status: string; created_at: number };
 type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
@@ -47,9 +47,13 @@ function Applications({ onChange }: { onChange: () => void }) {
     const load = useCallback(() => api<{ applications: App[] }>('manage/applications' + (status === 'pending' ? '?status=pending' : '')).then(d => setApps(d.applications)).catch(e => toast.error(errorText(e))), [status]);
     useEffect(() => { setApps(null); void load(); }, [load]);
     const [rejecting, setRejecting] = useState<App | null>(null), [note, setNote] = useState('');
+    const [busy, setBusy] = useState('');
     async function act(a: App, action: 'approve' | 'reject', reason = '') {
+        if (busy) return;
+        setBusy(a.id);
         try { await api('applications/' + a.id, 'PATCH', { action, note: reason }); toast(action === 'approve' ? '지급했어요.' : '반려했어요.'); setRejecting(null); setNote(''); void load(); onChange(); }
         catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(''); }
     }
     return <>
         <div className="chip-row"><button type="button" className="chip chip-sm" aria-pressed={status === 'pending'} onClick={() => setStatus('pending')}>확인 중</button><button type="button" className="chip chip-sm" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>전체</button></div>
@@ -60,7 +64,7 @@ function Applications({ onChange }: { onChange: () => void }) {
             </span>
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅 보기</Link>}
-            {a.status === 'pending' && <><button type="button" className="btn btn-primary btn-xs" onClick={() => act(a, 'approve')}>승인</button><button type="button" className="btn btn-line btn-xs" onClick={() => setRejecting(a)}>반려</button></>}
+            {a.status === 'pending' && <><button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => act(a, 'approve')}>승인하고 지급</button><button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => setRejecting(a)}>반려</button></>}
         </li>)}</ul> : <EmptyState icon="check-mark-button" title={status === 'pending' ? '확인할 신청이 없어요' : '신청 내역이 없어요'} />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => { void load(); onChange(); }} />}</Modal>
         <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="신청 반려" description={rejecting ? `${rejecting.nickname}님의 ${applicationTitle(rejecting)}` : ''}
@@ -95,7 +99,7 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
         <span className="grow">
             <strong>{r.reason}</strong>
             <span className="small">{r.details}</span>
-            <span className="muted small">{r.nickname}님 · {relativeTime(r.created_at)} · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</span>
+            <span className="muted small"><NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} />님 · {relativeTime(r.created_at)} · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</span>
         </span>
         {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden }), r.hidden ? '다시 공개했어요.' : '글을 숨겼어요.')}>{r.hidden ? '공개' : '숨기기'}</button>}
         <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료로 표시했어요.' : '다시 확인 중으로 돌렸어요.')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>

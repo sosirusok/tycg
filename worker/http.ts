@@ -37,6 +37,10 @@ export async function storedHash(password: string, salt: string) {
     return `pbkdf2-sha256$${PBKDF2_ITERATIONS}$${await passwordHash(password, salt)}`;
 }
 
+// Compared against when a login names an unknown id, so that request costs the same as a real one.
+export const DUMMY_HASH = `pbkdf2-sha256$${PBKDF2_ITERATIONS}$${'0'.repeat(64)}`;
+export const isLegacyHash = (stored: string) => !stored.startsWith('pbkdf2-sha256$');
+
 export async function verifyPassword(password: string, salt: string, stored: string) {
     const m = /^pbkdf2-sha256\$(\d{1,6})\$([0-9a-f]{64})$/.exec(stored);
     const iterations = m ? Number(m[1]) : LEGACY_ITERATIONS, expected = m ? m[2] : stored;
@@ -132,9 +136,25 @@ export function json(d: unknown, status = 200, h: Record<string, string> = {}) {
     return Response.json(d, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...h } });
 }
 
+const JSON_LIMIT = 64 * 1024;
+
+// Reads at most 64 KB so an oversized request is refused before it is decoded.
 export async function body(r: Request) {
     if (!r.headers.get('content-type')?.includes('application/json')) fail(415, '올바른 요청 형식이 아닙니다.');
-    const s = await r.text();
+    if (Number(r.headers.get('content-length')) > JSON_LIMIT) fail(413, '입력 내용이 너무 깁니다.');
+    const reader = r.body?.getReader(), chunks: Uint8Array[] = [];
+    let size = 0;
+    while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > JSON_LIMIT) { await reader.cancel(); fail(413, '입력 내용이 너무 깁니다.'); }
+        chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const c of chunks) { bytes.set(c, at); at += c.byteLength; }
+    const s = new TextDecoder().decode(bytes);
     if (s.length > 30000) fail(413, '입력 내용이 너무 깁니다.');
     try { return JSON.parse(s); }
     catch { fail(400, '입력 내용을 확인해 주세요.'); }
@@ -156,6 +176,24 @@ export async function limit(key: string, max: number, ms: number) {
 export function textField(v: unknown, min: number, max: number, label: string) {
     if (typeof v !== 'string' || v.trim().length < min || v.trim().length > max) fail(400, `${label}은 ${min}~${max}자로 입력해 주세요.`);
     return v.trim();
+}
+
+// Nicknames are stored in NFKC form without invisible characters, so a look-alike
+// of the manager nickname (e.g. with a zero-width space or Hangul filler) is refused.
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/u;
+const RESERVED_WORDS = ['매니저', '운영자', '관리자', '운영진', '운영팀', 'admin', 'manager'];
+export function nicknameField(v: unknown, isManager = false) {
+    if (typeof v !== 'string') fail(400, '닉네임은 2~16자로 입력해 주세요.');
+    const normalized = v.normalize('NFKC');
+    if (INVISIBLE.test(normalized)) fail(400, '닉네임에 쓸 수 없는 문자가 있습니다.');
+    const nickname = textField(normalized.replace(/\s+/g, ' '), 2, 16, '닉네임');
+    if (isManager) {
+        if (nickname !== MANAGER_NICKNAME) fail(400, '매니저 닉네임은 우와오로 고정됩니다.');
+        return nickname;
+    }
+    const compact = nickname.replace(/[\s._\-·]/g, '').toLowerCase();
+    if (compact.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => compact.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
+    return nickname;
 }
 
 // The cookie outlives the server session; the session row decides whether it is valid.

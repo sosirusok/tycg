@@ -3,8 +3,9 @@ name: Deploy to Cloudflare
 # One-time setup (repository Settings > Secrets and variables > Actions > New repository secret):
 #   CLOUDFLARE_API_TOKEN   required  API token from the "Edit Cloudflare Workers" template,
 #                                    plus the permission Account > D1 > Edit
-#   MANAGER_PASSWORD       optional  password for the reserved manager account (sosirusok / 우와오),
-#                                    used only when that account does not exist yet
+#   MANAGER_PASSWORD       required  password (8+ characters) for the reserved manager account
+#                                    (sosirusok / 우와오). Used only to create that account; the deploy
+#                                    fails while the account does not exist and this secret is missing.
 #   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1).
 # Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
@@ -189,6 +190,22 @@ jobs:
       - name: Apply D1 migrations (remote)
         run: pnpm exec wrangler d1 migrations apply DB --remote --config wrangler.jsonc
 
+      - name: Check that the manager account exists or can be created
+        env:
+          MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
+          MANAGER_PASSWORD_HASH: ${{ secrets.MANAGER_PASSWORD_HASH }}
+          MANAGER_PASSWORD_SALT: ${{ secrets.MANAGER_PASSWORD_SALT }}
+        run: |
+          set -euo pipefail
+          out="$(pnpm exec wrangler d1 execute DB --remote --config wrangler.jsonc --json --command "SELECT COUNT(*) AS n FROM users WHERE id='manager'")"
+          n="$(node -e 'const s=process.argv[1]; const j=JSON.parse(s.slice(s.indexOf("["))); process.stdout.write(String(j[0].results[0].n))' "$out")"
+          if [ "$n" = "1" ]; then echo "Manager account exists."; exit 0; fi
+          if [ -n "$MANAGER_PASSWORD" ] || { [ -n "$MANAGER_PASSWORD_HASH" ] && [ -n "$MANAGER_PASSWORD_SALT" ]; }; then
+            echo "The manager account will be created from the MANAGER_PASSWORD secret."; exit 0
+          fi
+          echo "::error::매니저 계정(sosirusok / 우와오)이 아직 없습니다. 저장소 Settings > Secrets and variables > Actions에 MANAGER_PASSWORD(8자 이상)를 등록하고 다시 실행해 주세요. 매니저 계정이 없으면 인증/등급 신청을 받을 수 없습니다."
+          exit 1
+
       - name: Ensure the account workers.dev subdomain
         env:
           WANTED_SUBDOMAIN: ${{ vars.WORKERS_SUBDOMAIN }}
@@ -266,6 +283,10 @@ jobs:
           done
           if [ -z "${ok:-}" ]; then
             echo "::warning::$WORKERS_URL/api/health 가 아직 응답하지 않습니다. 새 주소는 연결까지 몇 분 걸릴 수 있습니다."
+          elif ! curl -fsS "$WORKERS_URL/api/config" | jq -e '.manager.id == "manager"' > /dev/null; then
+            # /api/config creates the manager account from the secret on first use.
+            echo "::error::사이트는 열렸지만 매니저 계정을 만들지 못했습니다. MANAGER_PASSWORD 비밀값(8자 이상)을 확인한 뒤 다시 실행해 주세요."
+            exit 1
           fi
           {
             echo "### 배포 완료"

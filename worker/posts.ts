@@ -1,7 +1,7 @@
 import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, SKIN_TAGS,
-    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed,
+    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 
@@ -25,18 +25,22 @@ export async function visiblePost(id: string | number, u: User | null) {
 export async function decorate(rows: any[], uid?: string) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
-    const [tags, favs, histories] = await db().batch([
+    const [tags, wantedTags, favs, histories] = await db().batch([
         db().prepare('SELECT post_id,tier,season FROM post_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
+        db().prepare('SELECT post_id,tier,season FROM post_wanted_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
         db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(uid || '', ids),
         db().prepare('SELECT post_id,price,changed_at FROM post_price_history WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id').bind(ids),
     ]);
     return rows.map(row => {
         const p = withMember(row, 'author_');
+        // When a 6-month grade ends is private to the member and the manager.
+        delete p.author_grade_expires_at;
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
             details: parse(p.details, {}), images: parse(p.images, []),
             tags: tags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
+            wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })) : [],
         };
@@ -81,16 +85,27 @@ function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     selectedDetails(details, key('skinTags'), SKIN_TAGS, '스킨 선택', true);
 }
 
+export const canOfferProxy = (u: User) => u.role === 'manager' || u.badges.includes('proxy');
+const uniqueTags = (list: SeasonTag[]) => [...new Map(list.map(t => [t.tier + ':' + t.season, { tier: t.tier, season: t.season }])).values()];
+
+// SQL filter for one season table: any (or all) of the chosen tier-season pairs.
+function seasonFilter(table: string, tags: SeasonTag[], all: boolean) {
+    return (all ? '(SELECT COUNT(*)' : 'EXISTS (SELECT 1') + ` FROM ${table} s JOIN json_each(?) j ON s.tier=json_extract(j.value,'$.tier') AND s.season=json_extract(j.value,'$.season') WHERE s.post_id=p.id)` + (all ? '=' + tags.length : '');
+}
+
 async function validatePost(b: any, u: User, existing?: any) {
     const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '설명');
     if (!TRADE_KINDS.includes(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
     const category = b.category || categoriesForKind(b.kind)[0].id;
     if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '거래 구분에 맞는 종류를 선택해 주세요.');
-    // 대리(진행) is limited to members with 대리 인증. Existing posts keep their kind.
-    if (b.kind === 'proxy_offer' && existing?.kind !== 'proxy_offer' && u.role !== 'manager' && !u.badges.includes('proxy'))
-        fail(403, '대리(진행) 글은 대리 인증을 받은 회원만 올릴 수 있습니다.');
-    if (!validTags(b.tags, await latestSeason())) fail(400, '티어와 시즌을 확인해 주세요.');
-    const tags = category === 'account' || category === 'ladder' ? [...new Map((b.tags as SeasonTag[]).map(t => [t.tier + ':' + t.season, t])).values()] : [];
+    // 대리(진행) is limited to members with 대리 인증, for new posts and for edits.
+    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증을 받은 회원만 올리거나 고칠 수 있습니다.');
+    const latest = await latestSeason();
+    if (!validTags(b.tags, latest)) fail(400, '티어와 시즌을 확인해 주세요.');
+    const tags = category === 'account' || category === 'ladder' ? uniqueTags(b.tags) : [];
+    const wantedRaw = b.wantedTags ?? [];
+    if (!validTags(wantedRaw, latest)) fail(400, '원하는 래더의 티어와 시즌을 확인해 주세요.');
+    const wantedTags = b.kind === 'exchange' && b.details?.wantedCategory === 'account' ? uniqueTags(wantedRaw) : [];
     // Price meaning is determined by the trade kind, never by a stale form's mode.
     const price = b.kind === 'exchange' ? null : amount(b.price);
     const mode = price !== null ? 'fixed' : b.kind === 'sell' ? 'offer' : 'negotiate';
@@ -137,7 +152,7 @@ async function validatePost(b: any, u: User, existing?: any) {
     }
     const status = b.status || 'open';
     if (!['open', 'reserved', 'closed'].includes(status)) fail(400, '거래 상태를 확인해 주세요.');
-    return { kind: b.kind, title, content, category, tags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'exchange' ? 0 : b.accepts_offers || mode === 'offer' ? 1 : 0 };
+    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'exchange' ? 0 : b.accepts_offers || mode === 'offer' ? 1 : 0 };
 }
 
 async function listPosts(req: Request, url: URL) {
@@ -147,6 +162,9 @@ async function listPosts(req: Request, url: URL) {
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
     }
     if (s.get('author')) { where.push('p.author_id=?'); values.push(s.get('author')); }
+    // 대리(진행) posts are listed only while the author holds 대리 인증 (authors still see their own).
+    where.push("(p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))");
+    values.push(u?.id || '');
     if (s.get('active') === '1') where.push("p.status!='closed'");
     if (s.get('mode') && ['fixed', 'offer', 'negotiate'].includes(s.get('mode')!)) {
         where.push("(CASE WHEN p.price_mode='legacy' THEN CASE WHEN p.price IS NULL THEN 'negotiate' ELSE 'fixed' END ELSE p.price_mode END)=?");
@@ -154,8 +172,12 @@ async function listPosts(req: Request, url: URL) {
     }
     const q = s.get('q')?.trim().slice(0, 100);
     if (q) {
-        where.push("(instr(lower(p.title),lower(?))>0 OR instr(lower(p.body),lower(?))>0 OR instr(lower(replace(p.details,' ','')),lower(replace(?,' ','')))>0 OR instr(lower(u.nickname),lower(?))>0)");
+        // A skin's short name or in-game name (악주, 뱀동, 악몽의 주인 …) also finds posts that list that skin.
+        const skins = skinsForWord(q);
+        where.push("(instr(lower(p.title),lower(?))>0 OR instr(lower(p.body),lower(?))>0 OR instr(lower(replace(p.details,' ','')),lower(replace(?,' ','')))>0 OR instr(lower(u.nickname),lower(?))>0"
+            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '') + ')');
         values.push(q, q, q, q);
+        if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
     }
     for (const [key, op] of [['min', '>='], ['max', '<=']]) {
         const n = s.get(key);
@@ -207,11 +229,19 @@ async function listPosts(req: Request, url: URL) {
         where.push("json_extract(p.details,'$.wantedCategory')=?");
         values.push(wantedCategory);
     }
-    for (const key of ['nicknameCharsMin', 'nicknameCharsMax', 'wantedNicknameCharsMin', 'wantedNicknameCharsMax', 'wantedMaxOwners']) {
-        const n = queryInteger(key, 1, key === 'wantedMaxOwners' ? 9999 : 20);
-        if (n === null) continue;
-        where.push(`CAST(json_extract(p.details,'$.${key}') AS INTEGER)=?`);
-        values.push(n);
+    // "My account" filters for the wanted side of an exchange, with the same meaning as on 구매.
+    const wantedOwners = queryInteger('wantedOwnerCountOfMine', 1, 9999);
+    if (wantedOwners !== null) { where.push("(json_extract(p.details,'$.wantedMaxOwners') IS NULL OR CAST(json_extract(p.details,'$.wantedMaxOwners') AS INTEGER)>=?)"); values.push(wantedOwners); }
+    const wantedChars = queryInteger('wantedNicknameChars', 1, 20);
+    if (wantedChars !== null) {
+        where.push("(json_extract(p.details,'$.wantedNicknameCharsMin') IS NULL OR CAST(json_extract(p.details,'$.wantedNicknameCharsMin') AS INTEGER)<=?) AND (json_extract(p.details,'$.wantedNicknameCharsMax') IS NULL OR CAST(json_extract(p.details,'$.wantedNicknameCharsMax') AS INTEGER)>=?)");
+        values.push(wantedChars, wantedChars);
+    }
+    const wantedRank = s.get('wantedNicknameRank');
+    if (wantedRank) {
+        if (!NICK_RANKS.includes(wantedRank as typeof NICK_RANKS[number])) fail(400, '닉 등급 검색 조건을 확인해 주세요.');
+        where.push("(json_array_length(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]')) WHERE value=?))");
+        values.push(wantedRank);
     }
     for (const key of ['skinTags', 'wantedSkinTags', 'nicknameRanks', 'wantedNicknameRanks']) {
         if (!s.get(key)) continue;
@@ -219,17 +249,17 @@ async function listPosts(req: Request, url: URL) {
         if (!Array.isArray(chosen) || chosen.length > allowed.length || chosen.some(v => typeof v !== 'string' || !allowed.includes(v))) fail(400, '선택한 검색 조건을 확인해 주세요.');
         if (chosen.length) {
             where.push(`EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.${key}'),'[]')) selected JOIN json_each(?) wanted ON selected.value=wanted.value)`);
-            values.push(JSON.stringify(chosen));
+            values.push(JSON.stringify(allowed === SKIN_TAGS ? expandSkins(chosen) : chosen));
         }
     }
-    const raw = s.get('tags');
-    if (raw) {
+    for (const [param, table] of [['tags', 'post_seasons'], ['wantedTags', 'post_wanted_seasons']]) {
+        const raw = s.get(param);
+        if (!raw) continue;
         const tags = parse(raw, null);
         if (!validTags(tags, await latestSeason())) fail(400, '검색 시즌을 확인해 주세요.');
-        const unique = [...new Map(tags.map(t => [t.tier + ':' + t.season, t])).values()];
+        const unique = uniqueTags(tags);
         if (unique.length) {
-            const all = s.get('match') === 'all';
-            where.push((all ? '(SELECT COUNT(*)' : 'EXISTS (SELECT 1') + " FROM post_seasons s JOIN json_each(?) j ON s.tier=json_extract(j.value,'$.tier') AND s.season=json_extract(j.value,'$.season') WHERE s.post_id=p.id)" + (all ? '=' + unique.length : ''));
+            where.push(seasonFilter(table, unique, param === 'tags' && s.get('match') === 'all'));
             values.push(JSON.stringify(unique));
         }
     }
@@ -286,6 +316,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[2] === 'status' && method === 'PATCH') {
         const b = await body(req);
         if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
+        if (existing.kind === 'proxy_offer' && b.status !== 'closed' && !canOfferProxy(u)) fail(403, '대리 인증이 없으면 대리(진행) 글은 거래완료로만 바꿀 수 있습니다.');
         await db().batch([
             db().prepare('UPDATE posts SET status=?,updated_at=? WHERE id=?').bind(b.status, Date.now(), existing.id),
             db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND status IN('pending','accepted') AND ?!='reserved'").bind(Date.now(), existing.id, b.status),
@@ -300,6 +331,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
             db().prepare('INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
                 .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now),
             ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
+            ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
+            db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT (SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),value FROM json_each(?)').bind(u.id, now, v.images),
         ]);
         return json({ id: r[0].meta.last_row_id }, 201);
     }
@@ -311,6 +344,10 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
             .bind(v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
+        db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
+        ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
+        db().prepare('DELETE FROM post_images WHERE post_id=?').bind(existing.id),
+        db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT ?,value FROM json_each(?)').bind(existing.id, v.images),
         db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND status IN('pending','accepted') AND (?='closed' OR (?='reserved' AND ?!='reserved'))").bind(now, existing.id, v.status, existing.status, v.status),
     ]);
     return json({ id: existing.id });

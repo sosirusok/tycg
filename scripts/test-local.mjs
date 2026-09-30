@@ -68,21 +68,26 @@ try {
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of ['tests/verify-market.mjs', 'tests/verify-membership.mjs']) {
+    for (const suite of ['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs']) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
     stop(server);
     await exited;
 
-    // Same Worker without the R2 binding: photos must fall back to D1.
+    // Same Worker without the R2 binding: photos must fall back to D1. Local dev
+    // delivers test cron events only to a Worker without static assets, so this
+    // server also leaves out the assets and checks the daily cleanup.
     const built = JSON.parse(await readFile(config, 'utf8'));
     delete built.r2_buckets;
+    delete built.assets;
     const noR2 = path.join(path.dirname(config), 'wrangler.no-r2.json');
     await writeFile(noR2, JSON.stringify(built));
-    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
-    await completed(child(['tests/verify-storage.mjs'], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791' } }), 60000);
+    for (const suite of ['tests/verify-storage.mjs', 'tests/verify-cleanup.mjs']) {
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791' } }), 90000);
+    }
 } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

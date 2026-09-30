@@ -10,11 +10,13 @@ type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at
 type Detail = { user: User & { username: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[] };
 
 // Manager tools for one member: verification switches, grade grants, applications.
-export function MemberPanel({ userId, onChange }: { userId: string; onChange?: () => void }) {
+// `version` reloads the panel after changes made elsewhere (e.g. the chat's application card).
+// Inside the member's chat the pending applications already show as cards, so `inChat` hides them here.
+export function MemberPanel({ userId, onChange, version = 0, inChat = false }: { userId: string; onChange?: () => void; version?: number; inChat?: boolean }) {
     const [data, setData] = useState<Detail | null>(null), [error, setError] = useState('');
     const [grade, setGrade] = useState<GradeId>('plus'), [plan, setPlan] = useState<PlanId>('permanent'), [busy, setBusy] = useState(false);
     const load = useCallback(() => api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))), [userId]);
-    useEffect(() => { void load(); }, [load]);
+    useEffect(() => { void load(); }, [load, version]);
     const plans = gradeInfo(grade).plans;
     useEffect(() => { if (!plans.some(p => p.id === plan)) setPlan('permanent'); }, [grade]);
 
@@ -35,12 +37,14 @@ export function MemberPanel({ userId, onChange }: { userId: string; onChange?: (
             <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
             <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span>
         </div>
-        {pending.length > 0 && <div className="mp-block">
+        {pending.length > 0 && !inChat && <div className="mp-block">
             <h4>확인 중인 신청</h4>
-            {pending.map(a => <div key={a.id} className="mp-row">
-                <span className="grow">{applicationTitle(a)}</span>
-                <button type="button" className="btn btn-primary btn-xs" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'approve' }), '지급했어요.')}>승인</button>
-                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'reject' }), '반려했어요.')}>반려</button>
+            {pending.map(a => <div key={a.id} className="mp-app">
+                <span>{applicationTitle(a)}</span>
+                <div className="row">
+                    <button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'approve' }), '지급했어요.')}>승인하고 지급</button>
+                    <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => run(() => api('applications/' + a.id, 'PATCH', { action: 'reject' }), '반려했어요.')}>반려</button>
+                </div>
             </div>)}
         </div>}
         <div className="mp-block">
@@ -62,7 +66,7 @@ export function MemberPanel({ userId, onChange }: { userId: string; onChange?: (
             <div className="mp-grant">
                 <select className="select" aria-label="지급할 등급" value={grade} onChange={e => setGrade(e.target.value as GradeId)}>{GRADES.filter(g => g.id !== 'normal').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select className="select" aria-label="기간" value={plan} onChange={e => setPlan(e.target.value as PlanId)}>{(plans.length ? plans : [{ id: 'permanent', label: '영구' }]).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
-                <button type="button" className="btn btn-dark btn-sm" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades`, 'POST', { grade, plan }), `${gradeInfo(grade).name} 등급을 지급했어요.`)}>지급</button>
+                <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades`, 'POST', { grade, plan }), `${gradeInfo(grade).name} 등급을 지급했어요.`)}>지급</button>
             </div>
         </div>}
         {data.applications.length > pending.length && <div className="mp-block">

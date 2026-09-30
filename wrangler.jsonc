@@ -5,6 +5,8 @@
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Daily cleanup of expired sessions and unused photos (03:17 KST).
+  "triggers": { "crons": ["17 18 * * *"] },
   "assets": {
     // The React app is a single-page app; unknown paths fall back to index.html.
     // Only /api/* requests invoke the Worker, so static files never cost CPU time.

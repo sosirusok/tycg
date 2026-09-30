@@ -5,7 +5,7 @@ import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '..
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
-import { EmptyState, SkeletonRows, Tabs } from '../components/ui';
+import { EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 
 const TABS = [
@@ -14,7 +14,10 @@ const TABS = [
 ] as const;
 type TabId = typeof TABS[number]['id'];
 
-type Offer = { id: string; post_id: number; title: string; amount: number; status: string; sender_id: string; sender_name: string; recipient_name: string; conversation_id: string; created_at: number };
+type Offer = {
+    id: string; post_id: number; title: string; amount: number; status: string; sender_id: string; sender_name: string; recipient_name: string; conversation_id: string; created_at: number;
+    sender_grade: string; sender_badges: string[]; recipient_grade: string; recipient_badges: string[];
+};
 const OFFER_STATUS: Record<string, string> = { pending: '답변 대기', accepted: '수락됨', declined: '거절됨', withdrawn: '철회됨', cancelled: '취소됨' };
 
 export default function Mine({ tab: raw }: { tab?: string }) {
@@ -46,9 +49,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
                 : (tab === 'posts' || tab === 'favorites' || tab === 'recent') ? (items.length ? <div className="post-list">{(items as Post[]).map(p => <PostCard key={p.id} post={p} onChange={() => setRev(n => n + 1)} />)}</div>
-                    : <EmptyState icon={tab === 'favorites' ? 'red-heart' : 'memo'} title={tab === 'posts' ? '아직 쓴 글이 없어요' : tab === 'favorites' ? '찜한 글이 없어요' : '최근 본 글이 없어요'} action={tab === 'posts' ? <Link to="/write" className="btn btn-primary">글쓰기</Link> : <Link to="/trade?kind=sell" className="btn btn-line">거래 둘러보기</Link>} />)
+                    : <EmptyState icon={tab === 'favorites' ? 'red-heart' : 'memo'} title={tab === 'posts' ? '아직 쓴 글이 없어요' : tab === 'favorites' ? '찜한 글이 없어요' : '최근 본 글이 없어요'} action={tab === 'posts' ? <Link to="/write" className="btn btn-primary">글쓰기</Link> : <Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
                 : tab === 'offers' ? (items.length ? <ul className="simple-list">{(items as Offer[]).map(o => <li key={o.id}>
-                    <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? `${o.recipient_name}님에게 보냄` : `${o.sender_name}님이 보냄`} · {relativeTime(o.created_at)}</span></span>
+                    <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? <><NameLine nickname={o.recipient_name} grade={o.recipient_grade} badges={o.recipient_badges} />님에게 보냄</> : <><NameLine nickname={o.sender_name} grade={o.sender_grade} badges={o.sender_badges} />님이 보냄</>} · {relativeTime(o.created_at)}</span></span>
                     <b>{priceText(o.amount)}</b><span className="event-status">{OFFER_STATUS[o.status] || o.status}</span>
                     <Link to={'/chat/' + o.conversation_id} className="btn btn-line btn-xs">채팅</Link>
                 </li>)}</ul> : <EmptyState icon="money-with-wings" title="주고받은 가격 제안이 없어요" />)
@@ -57,7 +60,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
                     {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
                 </li>)}</ul> : <EmptyState icon="check-mark-button" title="신청 내역이 없어요" action={me.role !== 'manager' ? <button className="btn btn-primary" onClick={() => openApply()}>인증·등급 신청하기</button> : undefined} />)
-                : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link">{b.nickname}</Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 풀기</button></li>)}</ul>
+                : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 풀기</button></li>)}</ul>
                     : <EmptyState icon="shield" title="차단한 회원이 없어요" />)}
         </div>
     </div>;

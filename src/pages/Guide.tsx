@@ -11,7 +11,7 @@ const STEPS = [
     ['magnifying-glass-tilted-left', '찾기', '거래 탭과 필터로 래더 시즌, 우대 스킨, 대주 수를 골라 찾아요.'],
     ['speech-balloon', '문의', '글에서 ‘채팅으로 문의하기’를 눌러 조건을 맞춰요. 판매 글에는 가격을 제안할 수도 있어요.'],
     ['shield', '확인', '상대의 인증 표시를 보고, 전화번호·계좌를 조회해요. 필요하면 이중창 인증을 요청하세요.'],
-    ['handshake', '거래', '합의가 끝나면 글을 예약중·거래완료로 바꿔 주세요.'],
+    ['check-mark-button', '거래', '합의가 끝나면 글을 예약중·거래완료로 바꿔 주세요.'],
 ] as const;
 
 export default function Guide() {
@@ -49,7 +49,7 @@ export default function Guide() {
                 <tbody>{GRADES.map(g => <tr key={g.id}>
                     <td><span className="row"><CIcon name={g.icon} size={22} />{g.name}</span></td>
                     {g.plans.length ? <><td>{g.plans.find(p => p.id === 'permanent')?.price.toLocaleString('ko-KR') + '원'}</td><td>{g.plans.find(p => p.id === '6m') ? g.plans.find(p => p.id === '6m')!.price.toLocaleString('ko-KR') + '원' : '—'}</td></>
-                        : <td colSpan={2} className="muted">{g.note}</td>}
+                        : <td colSpan={2} className="grade-note">{g.note}</td>}
                 </tr>)}</tbody>
             </table>
             <p className="muted small mt-12">{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 매니저와의 채팅에서 안내해요.'} 입금이 확인되면 매니저가 등급을 지급합니다. 등급 혜택은 준비 중이에요.</p>

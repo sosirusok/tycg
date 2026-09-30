@@ -51,6 +51,8 @@ export type Post = {
     created_at: number;
     updated_at: number;
     tags: SeasonTag[];
+    // Ladders an exchange post wants in return.
+    wanted_tags?: SeasonTag[];
     category: string;
     price_mode: string;
     accepts_offers: number;
@@ -185,13 +187,13 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
 };
 
 export function listingPrice(p: Pick<Post, 'price' | 'price_mode' | 'kind'>) {
-    if (p.kind === 'exchange') return '교환';
+    if (p.kind === 'exchange') return '교환 글';
     if (p.price === null) return p.kind === 'buy' ? '예산 협의' : p.price_mode === 'offer' ? '가격 제시' : '가격 협의';
     return priceText(p.price);
 }
 
 export function priceLabel(kind: string) {
-    return kind === 'sell' ? '즉거가' : kind === 'buy' ? '최대 예산' : kind === 'exchange' ? '교환' : kind === 'proxy_request' ? '희망 비용' : '진행 비용';
+    return kind === 'sell' ? '즉거가' : kind === 'buy' ? '최대 사용 가능 금액(MAX)' : kind === 'exchange' ? '교환' : kind === 'proxy_request' ? '희망 비용' : '진행 비용';
 }
 
 export function relativeTime(t: number) {
@@ -199,9 +201,9 @@ export function relativeTime(t: number) {
     return n < 60000 ? '방금 전' : n < 3600000 ? Math.floor(n / 60000) + '분 전' : n < 86400000 ? Math.floor(n / 3600000) + '시간 전' : n < 604800000 ? Math.floor(n / 86400000) + '일 전' : dateText(t);
 }
 
-// Preferred ("우대") skins. The first eight are the owner's list under their in-game
-// names; the rest recur as 우대/필수 in 2025–2026 trade posts. Sources: docs/research.md.
-export const OWNER_SKINS = ['유루미', '아람', '송편 좀비', '유니콘 좀비', '악몽의 주인', '서큐버스 날개', '뱀파이어 정동석', '구미호 케빈'] as const;
+// Preferred ("우대") skins. The first eight are the owner's list, spelled as the owner
+// wrote them; the rest recur as 우대/필수 in 2025–2026 trade posts. Sources: docs/research.md.
+export const OWNER_SKINS = ['유루미', '아람', '송편좀비', '유니콘 좀비', '악몽주인', '서큐 날개', '뱀파이어 정동석', '구미호 케빈'] as const;
 export const SKIN_OPTIONS = [
     ...OWNER_SKINS,
     '창작의 화신', '마법고 5강', '마리오네트 윤슬', '냥냥 김준호', '냥냥 정예슬', '홍매화 정예슬',
@@ -210,8 +212,38 @@ export const SKIN_OPTIONS = [
 // Values stored by earlier versions stay valid for existing posts and searches.
 export const LEGACY_SKELETON = '해골 기사단장 남동진';
 export const FULL_SET = '해골 기사단장 남동진 풀세트';
-const LEGACY_SKINS = ['악몽주인', '서큐 날개', '송편좀비', LEGACY_SKELETON, '파자마 고나래', '펭귄 맹규리', FULL_SET];
+const LEGACY_SKINS = [LEGACY_SKELETON, '파자마 고나래', '펭귄 맹규리', FULL_SET];
 export const SKIN_TAGS: readonly string[] = [...SKIN_OPTIONS, ...LEGACY_SKINS];
+
+// Other names for the same skin: in-game names and short forms used in trade posts
+// (악주, 뱀동, 냥준, 냥슬, 붉박 …). Searching any of them finds the listed skin.
+export const SKIN_ALIASES: Record<string, readonly string[]> = {
+    '송편좀비': ['송편 좀비'],
+    '악몽주인': ['악몽의 주인', '악주'],
+    '서큐 날개': ['서큐버스 날개', '서큐'],
+    '뱀파이어 정동석': ['뱀동'],
+    '냥냥 김준호': ['냥준'],
+    '냥냥 정예슬': ['냥슬'],
+    '붉은 박스 좀비': ['붉박'],
+    '끝주홍 나비날개': ['끝주홍'],
+    [FULL_SET]: ['해골기사 남동진 풀세트'],
+    '해골기사 남동진 풀세트': [FULL_SET],
+};
+const squash = (v: string) => v.replace(/\s+/g, '').toLowerCase();
+
+// The stored skin values that a search word refers to (exact skin or alias, spaces ignored).
+export function skinsForWord(word: string): string[] {
+    const w = squash(word);
+    if (!w) return [];
+    return SKIN_TAGS.filter(tag => squash(tag) === w || SKIN_ALIASES[tag]?.some(a => squash(a) === w));
+}
+
+// Skin values to match when a filter selects these skins, including older stored values.
+export function expandSkins(chosen: string[]) {
+    const out = new Set(chosen);
+    for (const tag of chosen) for (const alias of SKIN_ALIASES[tag] || []) if (SKIN_TAGS.includes(alias)) out.add(alias);
+    return [...out];
+}
 
 export const NICK_RANKS = ['R', 'S', 'A', 'B', '잡'] as const;
 

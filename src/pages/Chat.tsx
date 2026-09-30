@@ -17,11 +17,12 @@ type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'cre
 
 const OFFER_STATUS: Record<string, string> = { pending: '답변 대기', accepted: '수락됨', declined: '거절됨', withdrawn: '철회됨', cancelled: '취소됨' };
 
-function timeLabel(t: number) { return new Date(t).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }); }
-function dayLabel(t: number) { return new Date(t).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }); }
+// Times are shown in Korean time wherever the browser is.
+function timeLabel(t: number) { return new Date(t).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }); }
+function dayLabel(t: number) { return new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }); }
 
 export default function Chat({ id }: { id?: string }) {
-    const { me, ready, requireLogin, refreshUnread } = useApp();
+    const { me, ready, requireLogin, refreshUnread, refreshMe } = useApp();
     const [chats, setChats] = useState<ChatItem[] | null>(null);
     const loadChats = useCallback(() => { api<{ chats: ChatItem[] }>('chats').then(d => setChats(d.chats)).catch(() => setChats([])); }, []);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -44,18 +45,24 @@ export default function Chat({ id }: { id?: string }) {
                         <Avatar name={c.nickname} />
                         <span className="chat-item-main">
                             <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} role={c.role} badges={c.badges} /><time className="muted small nowrap">{relativeTime(c.updated_at)}</time></span>
-                            <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}{c.last_message || '대화를 시작해 보세요'}</span>
+                            <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}<span className="chat-item-text">{c.last_message || '대화를 시작해 보세요'}</span></span>
                         </span>
                         {c.unread > 0 && <b className="unread">{c.unread > 99 ? '99+' : c.unread}</b>}
                     </Link></li>)}</ul>}
             </aside>
-            {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} />
+            {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
                 : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="대화를 선택해 주세요" text="인증·등급 신청도 매니저와의 채팅에서 진행돼요." /></section>}
         </div>
     </div>;
 }
 
-function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => void }) {
+function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivity: () => void; onGrant: () => void }) {
+    // The parent passes new callbacks on every render; keeping them in refs lets the room
+    // load once per chat instead of restarting whenever the chat list refreshes.
+    const activity = useRef(onActivity), grant = useRef(onGrant);
+    activity.current = onActivity; grant.current = onGrant;
+    const [panelVersion, setPanelVersion] = useState(0), [appBusy, setAppBusy] = useState('');
+    const appStatus = useRef(new Map<string, string>());
     const [partner, setPartner] = useState<Partner | null>(null), [blocked, setBlocked] = useState(false), [error, setError] = useState('');
     const [messages, setMessages] = useState<Message[]>([]), [offers, setOffers] = useState<Offer[]>([]), [apps, setApps] = useState<Application[]>([]);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
@@ -71,8 +78,8 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
 
     const markRead = useCallback((list: Message[]) => {
         const lastIncoming = [...list].reverse().find(m => m.sender_id !== me.id && !m.read_at);
-        if (lastIncoming) api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(onActivity).catch(() => {});
-    }, [id, me.id, onActivity]);
+        if (lastIncoming) api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(() => activity.current()).catch(() => {});
+    }, [id, me.id]);
 
     const poll = useCallback(async (initial = false) => {
         const d = await api<{ messages: Message[]; offers: Offer[]; applications: Application[]; readThrough: number; blocked: boolean; hasMore: boolean }>(`chats/${id}/messages` + (initial ? '' : `?after=${last.current}`));
@@ -80,6 +87,14 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
         if (d.messages.length) { merge(d.messages); last.current = Math.max(last.current, ...d.messages.map(m => m.id)); idle.current = 0; markRead(d.messages); }
         else idle.current++;
         setOffers(d.offers); setApps(d.applications); setReadThrough(d.readThrough); setBlocked(d.blocked);
+        // When an application is decided, the member's badges and the manager's panel update right away.
+        let decided = false;
+        for (const a of d.applications) {
+            const before = appStatus.current.get(a.id);
+            if (before && before !== a.status) decided = true;
+            appStatus.current.set(a.id, a.status);
+        }
+        if (decided) { setPanelVersion(v => v + 1); grant.current(); }
         return d.messages.length;
     }, [id, markRead]);
 
@@ -114,7 +129,7 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
         try {
             await api(`chats/${id}/messages`, 'POST', { body: text, images: photos });
             setText(''); setPhotos([]); stick.current = true;
-            await poll(); onActivity();
+            await poll(); activity.current();
         } catch (err) { toast.error(errorText(err)); }
         finally { setSending(false); input.current?.focus(); }
     }
@@ -134,8 +149,11 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
         catch (err) { toast.error(errorText(err)); }
     }
     async function appAction(app: Application, action: 'approve' | 'reject' | 'cancel', note = '') {
-        try { await api('applications/' + app.id, 'PATCH', { action, note }); toast(action === 'approve' ? '지급했어요.' : action === 'reject' ? '반려했어요.' : '신청을 취소했어요.'); await poll(); onActivity(); }
+        if (appBusy) return;
+        setAppBusy(app.id);
+        try { await api('applications/' + app.id, 'PATCH', { action, note }); toast(action === 'approve' ? '지급했어요.' : action === 'reject' ? '반려했어요.' : '신청을 취소했어요.'); await poll(); activity.current(); }
         catch (err) { toast.error(errorText(err)); }
+        finally { setAppBusy(''); }
     }
     async function toggleBlock() {
         if (!partner) return;
@@ -167,7 +185,7 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
                         {showDay && <div className="day-sep"><span>{day}</span></div>}
                         {m.type === 'system' ? <div className="sys-msg">{m.body}</div>
                             : m.type === 'listing' ? <ListingCard postId={Number(m.reference_id)} title={m.body} />
-                            : m.type === 'application' ? <AppCard app={apps.find(a => a.id === m.reference_id)} fallback={m.body} me={me} mine={mine} at={m.created_at} onAction={appAction} />
+                            : m.type === 'application' ? <AppCard app={apps.find(a => a.id === m.reference_id)} fallback={m.body} me={me} partner={partner} mine={mine} at={m.created_at} busy={appBusy === m.reference_id} onAction={appAction} />
                             : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} />
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
@@ -192,8 +210,8 @@ function Room({ id, me, onActivity }: { id: string; me: User; onActivity: () => 
             </form>
         </div>
         {managerView && partner && <>
-            <aside className="room-panel"><MemberPanel userId={partner.id} onChange={() => void poll()} /></aside>
-            <Modal open={panel} onClose={() => setPanel(false)} title="회원 관리"><MemberPanel userId={partner.id} onChange={() => void poll()} /></Modal>
+            <aside className="room-panel"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></aside>
+            <Modal open={panel} onClose={() => setPanel(false)} title="회원 관리"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></Modal>
         </>}
     </section>;
 }
@@ -217,18 +235,18 @@ function OfferCard({ offer, me, onAction }: { offer?: Offer; me: User; onAction:
     </div>;
 }
 
-function AppCard({ app, fallback, me, mine, at, onAction }: { app?: Application; fallback: string; me: User; mine: boolean; at: number; onAction: (a: Application, action: 'approve' | 'reject' | 'cancel', note?: string) => void }) {
+function AppCard({ app, fallback, me, partner, mine, at, busy, onAction }: { app?: Application; fallback: string; me: User; partner: Partner | null; mine: boolean; at: number; busy: boolean; onAction: (a: Application, action: 'approve' | 'reject' | 'cancel', note?: string) => void }) {
     const [note, setNote] = useState(''), [rejecting, setRejecting] = useState(false);
     if (!app) return <div className="sys-msg">{fallback}</div>;
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
-        <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small">{mine ? '내 신청' : `${app.nickname || '회원'}님의 신청`} · {timeLabel(at)}</span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
+        <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : partner ? <><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} />님의 신청</> : `${app.nickname || '회원'}님의 신청`} · {timeLabel(at)}</span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요한 정보를 이 채팅으로 보내 주시면 매니저가 확인 후 지급해요.</p>}
         {app.status === 'rejected' && app.note && <p className="small">반려 사유: {app.note}</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <input className="input" value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="반려 사유 (선택)" autoFocus />
-            <div className="row"><button type="button" className="btn btn-dark btn-sm grow" onClick={() => onAction(app, 'reject', note)}>반려하기</button><button type="button" className="btn btn-line btn-sm" onClick={() => setRejecting(false)}>취소</button></div>
-        </div> : <div className="row mt-8"><button type="button" className="btn btn-primary btn-sm grow" onClick={() => onAction(app, 'approve')}>승인하고 지급</button><button type="button" className="btn btn-line btn-sm grow" onClick={() => setRejecting(true)}>반려</button></div>)
-            : mine && <button type="button" className="btn btn-text small mt-8" onClick={() => onAction(app, 'cancel')}>신청 취소</button>)}
+            <div className="row"><button type="button" className="btn btn-dark btn-sm grow" disabled={busy} onClick={() => onAction(app, 'reject', note)}>반려하기</button><button type="button" className="btn btn-line btn-sm" onClick={() => setRejecting(false)}>취소</button></div>
+        </div> : <div className="row mt-8"><button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => onAction(app, 'approve')}>{busy ? <LoaderCircle size={16} className="spin" /> : '승인하고 지급'}</button><button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setRejecting(true)}>반려</button></div>)
+            : mine && <button type="button" className="btn btn-text small mt-8" disabled={busy} onClick={() => onAction(app, 'cancel')}>신청 취소</button>)}
     </div>;
 }

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // Photo storage without an R2 bucket: bytes are kept in D1 (upload_blobs).
 const base = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8791').origin;
@@ -30,4 +32,21 @@ big.set([137, 80, 78, 71, 13, 10, 26, 10]);
 assert.equal((await call('uploads', 'POST', undefined, { type: 'image/png', bytes: big })).status, 413, 'photos above the D1 row limit are rejected');
 assert.equal((await call('uploads/' + up.data.id, 'DELETE')).status, 200, 'unused D1 photo can be deleted');
 assert.equal((await call('images/' + up.data.id)).status, 404, 'deleted photo is gone');
-console.log('PASS D1 photo storage fallback (5 checks)');
+
+// Without R2, photos share the 500 MB database: 30 MB per member and 300 MB for the site.
+function sql(command) {
+    execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--command', command],
+        { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: 'pipe', timeout: 30000 });
+}
+const me = (await call('auth/me')).data.user;
+const small = png.slice(0, 1000);
+try {
+    sql(`INSERT INTO uploads (id,owner_id,mime,size,storage,created_at) VALUES ('budget-${run}','${me.id}','image/png',${30 * 1024 * 1024},'d1',${Date.now()})`);
+    assert.equal((await call('uploads', 'POST', undefined, { type: 'image/png', bytes: small })).status, 409, 'per-member D1 photo budget');
+    sql(`UPDATE uploads SET owner_id='manager',size=${300 * 1024 * 1024} WHERE id='budget-${run}'`);
+    assert.equal((await call('uploads', 'POST', undefined, { type: 'image/png', bytes: small })).status, 507, 'site-wide D1 photo budget');
+} finally {
+    sql(`DELETE FROM uploads WHERE id='budget-${run}'`);
+}
+assert.equal((await call('uploads', 'POST', undefined, { type: 'image/png', bytes: small })).status, 201, 'uploads work again once space is freed');
+console.log('PASS D1 photo storage fallback and budgets (8 checks)');

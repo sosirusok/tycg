@@ -17,21 +17,22 @@ type Form = {
     price: string; // 만원
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
+    wantedTags: SeasonTag[]; // ladders an exchange post wants in return
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [] };
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
-    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [] };
+    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
 }
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -47,11 +48,14 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
     return <section className="ed-section"><div className="ed-head"><h2>{title}</h2>{desc && <p>{desc}</p>}</div>{children}</section>;
 }
 
+// Whole-number fields drop anything after a decimal point instead of joining the digits (2.5 → 2, not 25).
+const wholeNumber = (v: string) => v.split('.')[0].replace(/\D/g, '');
+
 function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean }) {
     return <label className="field"><span className="field-label">{label}</span>
         <div className={unit ? 'input-unit' : undefined}>
             <input className="input" type="number" inputMode={decimal ? 'decimal' : 'numeric'} min="0" max={max} step={decimal ? 'any' : '1'} placeholder={placeholder} value={value}
-                onChange={e => onChange(decimal ? e.target.value : e.target.value.replace(/[^\d]/g, ''))} />
+                onChange={e => onChange(decimal ? e.target.value : wholeNumber(e.target.value))} />
             {unit && <span>{unit}</span>}
         </div>
         {decimal && value && !Number.isNaN(manToWon(value)) && manToWon(value) !== null && <span className="field-hint">{manToWon(value)!.toLocaleString('ko-KR')}원</span>}
@@ -59,10 +63,13 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
 }
 
 export default function Editor({ id }: { id?: string }) {
-    const { me, ready, requireLogin, openApply } = useApp();
+    const { me, ready, requireLogin, openApply, refreshMe } = useApp();
     const { params } = useLocation();
+    const proxyAllowed = me?.role === 'manager' || !!me?.badges.includes('proxy');
+    // A link to a 대리(진행) form without 대리 인증 opens 대리(구함) instead and offers the application.
+    const proxyBlocked = !id && params.get('kind') === 'proxy_offer' && !!me && !proxyAllowed;
     const initial = normalize({
-        kind: isTradeKind(params.get('kind')) ? params.get('kind') as TradeKind : 'sell',
+        kind: proxyBlocked ? 'proxy_request' : isTradeKind(params.get('kind')) ? params.get('kind') as TradeKind : 'sell',
         category: params.get('category') || undefined,
         details: params.get('kind') === 'exchange' ? { wantedCategory: params.get('wantedCategory') === 'clan' ? 'clan' : 'account' } : {},
     });
@@ -73,9 +80,12 @@ export default function Editor({ id }: { id?: string }) {
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null);
     formRef.current = form;
     const draftKey = id || 'new';
-    const proxyAllowed = me?.role === 'manager' || !!me?.badges.includes('proxy');
 
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
+    useEffect(() => {
+        void refreshMe().catch(() => {});
+        if (proxyBlocked) { openApply({ kind: 'badge', target: 'proxy' }); toast('대리(진행) 글은 대리 인증 후에 쓸 수 있어요. 대리(구함)으로 열었어요.'); }
+    }, []);
     useEffect(() => {
         if (!me) return;
         let alive = true;
@@ -99,7 +109,7 @@ export default function Editor({ id }: { id?: string }) {
         try {
             await api('drafts/' + draftKey, 'PUT', JSON.parse(snapshot));
             lastSaved.current = snapshot;
-            setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
+            setSavedAt(new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' }));
             if (manual) toast('임시저장했습니다.');
             return true;
         } catch (e) { if (manual) toast.error(errorText(e)); return false; }
@@ -109,9 +119,15 @@ export default function Editor({ id }: { id?: string }) {
     useEffect(() => {
         if (!loaded) return;
         setLeaveGuard(async () => { await persist(); return true; });
-        const warn = (e: BeforeUnloadEvent) => { if (dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current) e.preventDefault(); };
+        const unsaved = () => dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current;
+        const warn = (e: BeforeUnloadEvent) => { if (unsaved()) e.preventDefault(); };
         window.addEventListener('beforeunload', warn);
-        return () => { setLeaveGuard(null); window.removeEventListener('beforeunload', warn); };
+        return () => {
+            setLeaveGuard(null);
+            window.removeEventListener('beforeunload', warn);
+            // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out.
+            if (unsaved()) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
+        };
     }, [loaded]);
 
     const patch = (v: Partial<Form>) => { dirty.current = true; setForm(f => ({ ...f, ...v })); };
@@ -119,10 +135,10 @@ export default function Editor({ id }: { id?: string }) {
 
     function changeKind(kind: TradeKind) {
         if (kind === form.kind) return;
-        if (kind === 'proxy_offer' && !proxyAllowed && form.kind !== 'proxy_offer') { openApply({ kind: 'badge', target: 'proxy' }); return; }
+        if (kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
         const cats = categoriesForKind(kind);
         const category = cats.some(c => c.id === form.category) ? form.category : cats[0].id;
-        patch({ kind, category, price: '', offer: '', tags: [], details: kind === 'exchange' ? { wantedCategory: 'account' } : {} });
+        patch({ kind, category, price: '', offer: '', tags: [], wantedTags: [], details: kind === 'exchange' ? { wantedCategory: 'account' } : {} });
     }
     function changeCategory(category: string) {
         if (category === form.category) return;
@@ -153,11 +169,11 @@ export default function Editor({ id }: { id?: string }) {
         const price = form.kind === 'exchange' ? null : manToWon(form.price);
         const offer = form.kind === 'sell' ? manToWon(form.offer) : null;
         if (Number.isNaN(price) || Number.isNaN(offer)) { setError('가격은 만원 단위 숫자로 입력해 주세요. 예: 35 또는 1.5'); return; }
-        if (form.kind === 'proxy_offer' && !proxyAllowed && !id) { openApply({ kind: 'badge', target: 'proxy' }); return; }
+        if (form.kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), status: form.status, tags: form.tags, details, images: form.images };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), status: form.status, tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
             done.current = true;
             const d = await api<{ id: number }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -212,14 +228,16 @@ export default function Editor({ id }: { id?: string }) {
             </div>
             <div className="field"><span className="field-label">원하는 닉네임</span>
                 <div className="range nick-range">
-                    <div className="input-unit"><input className="input" type="number" inputMode="numeric" min="1" max="20" placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} onChange={e => setDetail(k('nicknameCharsMin'), e.target.value.replace(/\D/g, ''))} /><span>글자</span></div>
+                    <div className="input-unit"><input className="input" type="number" inputMode="numeric" min="1" max="20" placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} onChange={e => setDetail(k('nicknameCharsMin'), wholeNumber(e.target.value))} /><span>글자</span></div>
                     <span>~</span>
-                    <div className="input-unit"><input className="input" type="number" inputMode="numeric" min="1" max="20" placeholder="최대" aria-label="닉네임 최대 글자 수" value={d[k('nicknameCharsMax')] || ''} onChange={e => setDetail(k('nicknameCharsMax'), e.target.value.replace(/\D/g, ''))} /><span>글자</span></div>
+                    <div className="input-unit"><input className="input" type="number" inputMode="numeric" min="1" max="20" placeholder="최대" aria-label="닉네임 최대 글자 수" value={d[k('nicknameCharsMax')] || ''} onChange={e => setDetail(k('nicknameCharsMax'), wholeNumber(e.target.value))} /><span>글자</span></div>
                 </div>
                 <RankPicker multiple value={ranksOf(k('nicknameRanks'))} onChange={v => setDetail(k('nicknameRanks'), v.length ? JSON.stringify(v) : '')} />
                 <span className="field-hint">닉 등급은 여러 개 고를 수 있어요. 상관없으면 비워 두세요.</span>
             </div>
-            {!prefix && <div className="field"><span className="field-label">원하는 래더</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} /></div>}
+            <div className="field"><span className="field-label">원하는 래더</span>
+                {prefix ? <SeasonPicker value={form.wantedTags} onChange={wantedTags => patch({ wantedTags })} /> : <SeasonPicker value={form.tags} onChange={tags => patch({ tags })} />}
+                <span className="field-hint">상관없으면 비워 두세요.</span></div>
             <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d[k('skinTags')])} onChange={v => setDetail(k('skinTags'), v.length ? JSON.stringify(v) : '')} /></div>
         </div>;
     };
@@ -231,8 +249,8 @@ export default function Editor({ id }: { id?: string }) {
             : <label className="field" key={f.id}><span className="field-label">{(buying && cat !== 'ladder' && cat !== 'story' && cat !== 'event' ? '희망 ' : '') + f.label}</span><input className="input" type={f.type === 'date' ? 'date' : 'text'} maxLength={500} placeholder={f.placeholder || ''} value={d[f.id] || ''} onChange={e => setDetail(f.id, e.target.value)} /></label>)}</div>
     </div>;
 
-    const infoTitle = kind === 'exchange' ? '교환 조건' : account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
-    const hasInfo = kind === 'exchange' || account || (DETAIL_FIELDS[category]?.length || 0) > 0;
+    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
+    const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
 
     return <div className="container page editor">
         <div className="ed-top">
@@ -240,7 +258,7 @@ export default function Editor({ id }: { id?: string }) {
             <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : '작성 중인 내용은 자동으로 저장돼요'}</span>
         </div>
         {restore && <div className="restore">
-            <span className="grow">작성하던 글이 있어요. <span className="muted small">{new Date(restore.savedAt).toLocaleString('ko-KR')}</span></span>
+            <span className="grow">작성하던 글이 있어요. <span className="muted small">{new Date(restore.savedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</span></span>
             <button type="button" className="btn btn-primary btn-sm" onClick={() => { const { savedAt: _s, ...rest } = restore; void _s; setForm(normalize(rest)); dirty.current = true; setRestore(null); }}>이어서 쓰기</button>
             <button type="button" className="btn btn-line btn-sm" onClick={() => { setRestore(null); api('drafts/' + draftKey, 'DELETE').catch(() => {}); }}>새로 쓰기</button>
         </div>}
@@ -249,7 +267,7 @@ export default function Editor({ id }: { id?: string }) {
                 <Section title="어떤 거래인가요?">
                     <div className="kind-cards" role="radiogroup" aria-label="거래 구분">
                         {TRADE_KINDS.map(k => {
-                            const locked = k === 'proxy_offer' && !proxyAllowed && kind !== 'proxy_offer';
+                            const locked = k === 'proxy_offer' && !proxyAllowed;
                             return <label key={k} className={'kind-card' + (locked ? ' is-locked' : '')}>
                                 <input type="radio" name="kind" checked={kind === k} onChange={() => changeKind(k)} onClick={() => { if (locked) changeKind(k); }} />
                                 <CIcon name={KIND_ICONS[k]} size={36} /><span>{KIND_NAMES[k]}</span>
@@ -280,13 +298,13 @@ export default function Editor({ id }: { id?: string }) {
                     </div>}
                 </Section>}
 
-                {hasInfo && <Section title={infoTitle} desc={account && !buying ? '아는 항목만 채우면 돼요.' : undefined}>
-                    {kind === 'exchange' ? <div className="grid-gap-16">
-                        <h3 className="ed-sub">내놓는 {categoryName(category)}</h3>
-                        {account ? sellerAccount : generic('clan')}
-                        <h3 className="ed-sub">구하는 {categoryName(wanted)}</h3>
+                {kind === 'exchange' ? <>
+                    <Section title={`내가 내놓는 ${categoryName(category)}`} desc="아는 항목만 채우면 돼요.">{account ? sellerAccount : generic('clan')}</Section>
+                    <Section title={`내가 구하는 ${categoryName(wanted)}`} desc={wanted === 'account' ? '상관없는 항목은 비워 두세요.' : undefined}>
                         {wanted === 'account' ? buyerAccount('wanted') : <p className="muted">원하는 클랜 조건은 아래 상세 설명에 적어 주세요.</p>}
-                    </div> : account ? (buying ? buyerAccount('') : sellerAccount) : generic(category)}
+                    </Section>
+                </> : hasInfo && <Section title={infoTitle} desc={account && !buying ? '아는 항목만 채우면 돼요.' : undefined}>
+                    {account ? (buying ? buyerAccount('') : sellerAccount) : generic(category)}
                 </Section>}
 
                 <Section title="제목과 설명">

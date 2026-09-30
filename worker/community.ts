@@ -1,6 +1,13 @@
-import { db, fail, requireUser, json, body, limit, textField } from './http';
+import { db, fail, requireUser, json, body, limit, textField, memberColumns, withMember } from './http';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat } from './chat';
+
+// Badge and grade columns for a listed member, without the grade's end date.
+export function publicMember(row: any, prefix = '') {
+    const m = withMember(row, prefix);
+    delete m[prefix + 'grade_expires_at'];
+    return m;
+}
 
 // Drafts, saved searches, blocks, reports, notices and price offers.
 export async function communityHandler(req: Request, p: string[]): Promise<Response | null> {
@@ -45,8 +52,8 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
     if (p[0] === 'blocks') {
         const u = await requireUser(req);
         if (method === 'GET') {
-            const r = await db().prepare('SELECT b.target_id,u.nickname FROM blocks b JOIN users u ON u.id=b.target_id WHERE b.user_id=?').bind(u.id).all();
-            return json({ blocks: r.results });
+            const r = await db().prepare(`SELECT b.target_id,u.nickname,${memberColumns('u')} FROM blocks b JOIN users u ON u.id=b.target_id WHERE b.user_id=?`).bind(u.id).all();
+            return json({ blocks: r.results.map(row => publicMember(row)) });
         }
         if (method === 'POST') {
             const b = await body(req);
@@ -76,8 +83,8 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
 async function offersHandler(req: Request, p: string[]) {
     const method = req.method, u = await requireUser(req);
     if (method === 'GET') {
-        const r = await db().prepare('SELECT o.*,p.title,p.hidden,s.nickname AS sender_name,t.nickname AS recipient_name FROM offers o JOIN posts p ON p.id=o.post_id JOIN users s ON s.id=o.sender_id JOIN users t ON t.id=o.recipient_id WHERE o.sender_id=? OR o.recipient_id=? ORDER BY o.created_at DESC LIMIT 100').bind(u.id, u.id).all();
-        return json({ offers: r.results });
+        const r = await db().prepare(`SELECT o.*,p.title,p.hidden,s.nickname AS sender_name,t.nickname AS recipient_name,${memberColumns('s', 'sender_')},${memberColumns('t', 'recipient_')} FROM offers o JOIN posts p ON p.id=o.post_id JOIN users s ON s.id=o.sender_id JOIN users t ON t.id=o.recipient_id WHERE o.sender_id=? OR o.recipient_id=? ORDER BY o.created_at DESC LIMIT 100`).bind(u.id, u.id).all();
+        return json({ offers: r.results.map(row => publicMember(publicMember(row, 'sender_'), 'recipient_')) });
     }
     if (method === 'POST' && !p[1]) {
         await limit('offer:' + u.id, 20, 600000);
