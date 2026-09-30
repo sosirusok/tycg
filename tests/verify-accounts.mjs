@@ -86,6 +86,12 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     const r = await client()('auth/register', 'POST', { username: username('sqlkey2'), password, nickname: `키 ${run}!` });
     equal([r.status, r.data.error], [409, '비슷한 닉네임이 이미 있습니다.'], 'look-alike of a key-less row is refused (lazy backfill)');
     equal(sql(`SELECT nickname_key FROM users WHERE id='${id}'`)[0].nickname_key, `키${run}`, 'the key-less row now has its key');
+    // A nickname the previous Worker changes (the key is left as it was) loses its stale key.
+    sql(`UPDATE users SET nickname='바뀐${run}' WHERE id='${id}'`);
+    equal(sql(`SELECT nickname_key FROM users WHERE id='${id}'`)[0].nickname_key, null, 'a nickname change without a key clears the stale key');
+    const renamed = await client()('auth/register', 'POST', { username: username('sqlkey3'), password, nickname: `바뀐 ${run}` });
+    equal([renamed.status, renamed.data.error], [409, '비슷한 닉네임이 이미 있습니다.'], 'the new nickname is protected after the lazy backfill');
+    equal((await register('sqlkey4', `키${run}`)).user.nickname, `키${run}`, 'the old nickname is free again');
     sql(`DELETE FROM users WHERE id='${id}'`);
 }
 
@@ -96,7 +102,9 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal(first.status, 200, 'first nickname change after sign-up is allowed');
     const shown = (await guest('users/' + n.user.id)).data.user;
     equal([shown.nickname, shown.prev_nickname], [`new${run}`, `nick${run}`], 'profile shows the previous nickname');
-    check(!('nickname_changed_at' in shown), 'the change time itself is not exposed');
+    check(!('nickname_changed_at' in shown) && !('nickname_next_at' in shown), 'the change time itself is not exposed');
+    const own = (await n('users/' + n.user.id)).data.user;
+    check(own.nickname_next_at > Date.now() + 29 * DAY, 'the member sees when the nickname can change again');
     const again = await n('users/' + n.user.id, 'PUT', { nickname: `newer${run}`, bio: '' });
     equal(again.status, 409, 'a second change right away is refused');
     check(again.data.error.includes('30일') && /\(\d{1,2}월 \d{1,2}일부터 가능\)$/.test(again.data.error), `the refusal names the date: ${again.data.error}`);
@@ -151,10 +159,18 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
 // 회원 탈퇴.
 {
     const w = await register('withdraw'), buyer = await register('wbuyer');
-    const post = await w('posts', 'POST', { kind: 'sell', category: 'other', title: `[QA] 탈퇴 ${run}`, body: '자동 검증', price: 300000, accepts_offers: true, status: 'open', tags: [], images: [], details: {} });
+    const sale = title => ({ kind: 'sell', category: 'other', title, body: '자동 검증', price: 300000, accepts_offers: true, status: 'open', tags: [], images: [], details: {} });
+    const post = await w('posts', 'POST', sale(`[QA] 탈퇴 ${run}`));
     equal(post.status, 201, 'the member writes a post');
     const offer = await buyer('offers', 'POST', { postId: post.data.id, amount: 250000 });
     equal(offer.status, 201, 'another member offers on it');
+    // The member's own offer on the other member's post is accepted, so that post is 예약중.
+    const theirs = await buyer('posts', 'POST', sale(`[QA] 탈퇴 상대 ${run}`));
+    const sent = await w('offers', 'POST', { postId: theirs.data.id, amount: 200000 });
+    equal((await buyer('offers/' + sent.data.id, 'PATCH', { action: 'accepted' })).status, 200, 'the other member accepts the member\'s offer');
+    equal((await guest('posts/' + theirs.data.id)).data.post.status, 'reserved', 'that post is 예약중');
+    equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).status, 200, 'the member holds 본인 인증');
+    equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the member holds 플러스');
     const wrong = await w('auth/withdraw', 'POST', { password: 'wrong-password' });
     equal([wrong.status, wrong.data.error], [400, '비밀번호가 맞지 않습니다.'], 'withdraw with a wrong password is 400');
     equal((await w('auth/withdraw', 'POST', { password })).status, 200, 'withdraw with the right password');
@@ -168,12 +184,26 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal((await client()('auth/login', 'POST', { username: placeholder.username, password })).status, 401, 'the deleted_ id does not log in');
     check(Date.now() - started < 1000, `an empty stored hash answers in under 1s (${Date.now() - started} ms)`);
     const profile = (await guest('users/' + w.user.id)).data.user;
-    check(profile.nickname.startsWith('탈퇴회원'), 'the profile nickname starts with 탈퇴회원: ' + profile.nickname);
+    equal([profile.nickname, profile.deleted, profile.grade], ['탈퇴회원', true, 'normal'], 'the profile is plain 탈퇴회원, marked deleted');
     equal([profile.bio, profile.badges], ['', []], 'bio and badges are gone');
+    equal([sql(`SELECT COUNT(*) AS n FROM user_badges WHERE user_id='${w.user.id}'`)[0].n, sql(`SELECT COUNT(*) AS n FROM user_grades WHERE user_id='${w.user.id}'`)[0].n], [1, 1], 'grade and badge rows stay as the manager\'s record');
+    check(sql(`SELECT nickname_key FROM users WHERE id='${w.user.id}'`)[0].nickname_key.startsWith('#deleted:'), 'the withdrawn row has a #deleted: key, never NULL');
+    equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'premium', plan: '6m' })).data.error, '탈퇴한 회원입니다.', 'no grade for a withdrawn member');
+    equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).data.error, '탈퇴한 회원입니다.', 'no badge for a withdrawn member');
+    const vis = await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: false });
+    equal([vis.status, vis.data.error], [409, '탈퇴한 회원의 글입니다.'], 'the manager cannot publish a withdrawn member\'s post');
+    // The chat the two offers share: both end with a line, the 예약중 post is 거래중 again, and nobody can write there.
+    const lines = (await buyer(`chats/${offer.data.chatId}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
+    check(lines.includes('회원 탈퇴로 제시가 마감되었습니다.') && lines.includes('회원 탈퇴로 제시가 마감되었습니다. 글이 거래중으로 바뀌었습니다.'), 'both ended offers leave a line: ' + JSON.stringify(lines));
+    equal([(await guest('posts/' + theirs.data.id)).data.post.status, (await buyer('offers')).data.offers.find(o => o.id === sent.data.id)?.status], ['open', 'cancelled'], 'the 예약중 post is 거래중 again and the accepted offer ended');
+    const room = (await buyer('chats/' + offer.data.chatId)).data.chat;
+    equal([room.partner.nickname, room.partner.deleted], ['탈퇴회원', true], 'the chat shows the partner as 탈퇴회원');
+    const reply = await buyer(`chats/${offer.data.chatId}/messages`, 'POST', { body: '네 말씀하세요' });
+    equal([reply.status, reply.data.error], [404, '탈퇴한 회원입니다.'], 'nobody can write to a withdrawn member');
     equal((await guest('posts?author=' + w.user.id)).data.posts.length, 0, 'a guest sees none of the withdrawn member\'s posts');
     equal((await guest('posts/' + post.data.id)).status, 404, 'the post itself is hidden');
     const chat = await buyer('chats', 'POST', { userId: w.user.id });
-    equal([chat.status, chat.data.error], [404, '없는 회원입니다.'], 'a chat with a withdrawn member is refused');
+    equal([chat.status, chat.data.error], [404, '탈퇴한 회원입니다.'], 'a chat with a withdrawn member is refused');
     equal((await buyer('offers')).data.offers.find(o => o.id === offer.data.id)?.status, 'cancelled', 'the open offer on the post ended');
     const hidden = (await manager('manage')).data.hidden;
     check(!hidden.some(p => p.id === post.data.id), 'withdrawn posts stay out of the manager\'s 숨긴 글');

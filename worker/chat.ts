@@ -1,4 +1,4 @@
-import { db, fail, requireUser, json, body, limit, memberColumns, withMember } from './http';
+import { db, fail, requireUser, json, body, limit, memberColumns, withMember, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 
 export async function blocked(a: string, b: string) {
@@ -15,7 +15,7 @@ export async function ensureChat(a: string, b: string) {
     if (a === b) fail(400, '자신과는 채팅할 수 없습니다.');
     const partner = await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(b).first<{ deleted_at: number | null }>();
     if (!partner) fail(404, '회원을 찾을 수 없습니다.');
-    if (partner.deleted_at) fail(404, '없는 회원입니다.');
+    if (partner.deleted_at) fail(404, WITHDRAWN);
     if (await blocked(a, b)) fail(403, '차단된 회원입니다.');
     const pair = [a, b].sort(), now = Date.now();
     await db().prepare('INSERT OR IGNORE INTO conversations(id,user_a,user_b,created_at,updated_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), ...pair, now, now).run();
@@ -42,10 +42,13 @@ export function guardedMessageStatements(conversationId: string, senderId: strin
 // Offer rows written before the 제시 wording still hold '가격 제안', so the preview names the type instead.
 const preview = "(SELECT CASE WHEN m.type='offer' THEN '가격 제시' WHEN m.body='' AND m.attachments!='[]' THEN '사진' ELSE m.body END FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1)";
 
-// Partner details in chat lists; when a 6-month grade ends stays private.
+// Partner details in chat lists; when a 6-month grade ends stays private. A withdrawn partner is
+// shown as plain 탈퇴회원 with `deleted`, so the room can close its composer.
 function partner(row: any) {
-    const m = withMember(row);
+    const { deleted_at, ...rest } = row;
+    const m: Record<string, unknown> = withMember(rest);
     delete m.grade_expires_at;
+    if (deleted_at) { m.nickname = WITHDRAWN_NAME; m.deleted = true; }
     return m;
 }
 
@@ -58,10 +61,11 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         return json({ unread: r?.n || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
-        const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,${memberColumns('u')},${preview} AS last_message,
+        // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
+        const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
             (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL) AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications
-            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE c.user_a=? OR c.user_b=? ORDER BY c.updated_at DESC LIMIT 100`)
+            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id) ORDER BY c.updated_at DESC LIMIT 100`)
             .bind(u.id, u.id, u.id, u.id).all();
         return json({ chats: r.results.map(partner) });
     }
@@ -81,7 +85,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     }
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
-        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
+        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
         return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b) } });
     }
     if (p[1] && p[2] === 'messages') {
@@ -101,6 +105,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             });
         }
         if (method === 'POST') {
+            // Nobody can write to a member who left; their side of the chat stays readable.
+            if ((await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(c.user_a === u.id ? c.user_b : c.user_a).first<{ deleted_at: number | null }>())?.deleted_at) fail(404, WITHDRAWN);
             if (await blocked(c.user_a, c.user_b)) fail(403, '차단된 회원입니다.');
             await limit('message:' + u.id, 60, 60000);
             const b = await body(req);

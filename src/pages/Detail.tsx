@@ -86,6 +86,10 @@ export function Detail({ id }: { id: string }) {
     const mine = me?.id === post.author_id, manager = me?.role === 'manager';
     const canOffer = !mine && post.status === 'open' && post.kind === 'sell' && (post.accepts_offers === 1 || post.price_mode === 'offer');
     const exchangeWanted = post.details.wantedCategory || 'account';
+    // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
+    const lostProxy = mine && post.kind === 'proxy_offer' && me?.role !== 'manager' && !me?.badges.includes('proxy');
+    // A post hidden by 회원 탈퇴 cannot be published again.
+    const withdrawnPost = (post as Post & { hidden_reason?: string }).hidden_reason === '탈퇴';
 
     async function startChat() {
         requireLogin(async () => {
@@ -108,7 +112,7 @@ export function Detail({ id }: { id: string }) {
         catch (e) { toast.error(errorText(e)); }
     }
     async function hide(hidden: boolean) {
-        try { await api('manage/visibility', 'POST', { postId: post!.id, hidden }); toast(hidden ? '숨김 처리' : '공개 처리'); void load(); }
+        try { await api('manage/visibility', 'POST', { postId: post!.id, hidden }); toast(hidden ? '숨김 완료' : '공개 완료'); void load(); }
         catch (e) { toast.error(errorText(e)); }
     }
 
@@ -157,14 +161,15 @@ export function Detail({ id }: { id: string }) {
                 {mine ? <div className="owner-tools">
                     <Link to={'/edit/' + post.id} className="btn btn-primary btn-lg btn-block"><Pencil size={18} />수정</Link>
                     <label className="field"><span className="field-label">거래 상태</span>
-                        <select className="select" value={post.status} onChange={e => setStatus(e.target.value)}>{Object.entries(STATUS_NAMES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+                        <select className="select" value={post.status} onChange={e => setStatus(e.target.value)}>{Object.entries(STATUS_NAMES).filter(([k]) => !lostProxy || k === post.status || k === 'closed').map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+                    {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
                     <button type="button" className="btn btn-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} />삭제</button>
                 </div> : <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
                     {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
-                {manager && !mine && <div className="row"><button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button><button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
+                {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
                 <AuthorBox post={post} className="author-box-side" />
                 <p className="safety">입금 전 더치트로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>
             </aside>

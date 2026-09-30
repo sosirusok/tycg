@@ -50,6 +50,18 @@ export async function visiblePost(id: unknown, u: User | null) {
 
 type Viewer = Pick<User, 'id' | 'role'> | null | undefined;
 
+// The struck prices shown: only strictly falling prices above the current one (60, 50, 40 shows
+// ~~60~~ ~~50~~ 40). The Worker stores history that way already; this read-time filter also covers
+// rows the previous Worker recorded (it kept rises too), without deleting anything in a migration.
+export function shownPriceHistory(history: { price: number; changed_at: number }[], price: number | null) {
+    const kept: typeof history = [];
+    let floor = price ?? -Infinity;
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].price > floor) { kept.unshift(history[i]); floor = history[i].price; }
+    }
+    return kept;
+}
+
 export async function decorate(rows: any[], viewer?: Viewer) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
@@ -75,7 +87,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
             tags: tags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
-            price_history: p.kind === 'sell' ? histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })) : [],
+            price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
             featured,
         };
     });
@@ -212,6 +224,7 @@ async function validatePost(b: any, u: User, existing?: any) {
         if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}: 숫자로 입력해 주세요.`);
     }
     if (details.currentOffer) details.currentOffer = String(amount(details.currentOffer, false));
+    if (details.currentOffer && Number(details.currentOffer) < 1000) fail(400, '현젯은 1,000원 이상입니다.');
     if (b.kind === 'sell' && price !== null && details.currentOffer && Number(details.currentOffer) >= price) fail(400, '현젯은 즉거가보다 낮게 입력해 주세요.');
     // This retired free-text field has no input anymore. Keep the seller's original data on edits.
     if (category === 'account' && b.kind !== 'buy' && existing?.category === 'account') {
@@ -245,15 +258,18 @@ function featuredCte(now: number) {
     };
 }
 
-// Posts the previous Worker wrote during a deploy have bumped_at=0 and would sort last. The first
-// list in each isolate copies created_at into them (an indexed lookup); the daily cleanup does too.
-let bumpBackfilled = false;
+// Posts the previous Worker wrote during a deploy have bumped_at=0 and would sort last. For the
+// first hour of each isolate, every list copies created_at into them first, in the same batch as the
+// list (an indexed UPDATE that usually changes nothing), so rows the previous Worker writes while
+// both versions still serve are covered too. The daily cleanup does the same.
+let isolateStart = 0;
+function bumpBackfill(now: number) {
+    isolateStart ||= now;
+    return now - isolateStart < HOUR ? [db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0')] : [];
+}
 
 async function listPosts(req: Request, url: URL) {
-    if (!bumpBackfilled) {
-        await db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0').run();
-        bumpBackfilled = true;
-    }
+    const backfill = bumpBackfill(Date.now());
     const u = await currentUser(req), s = url.searchParams, where: string[] = [], values: any[] = [];
     const author = s.get('author');
     // Authors see their own hidden posts in their own list; nobody else sees hidden posts in a list.
@@ -399,7 +415,7 @@ async function listPosts(req: Request, url: URL) {
     // Home '추천 매물': featured posts of 엘리트 and above across every tab, with the same hidden,
     // block and 대리 인증 rules as the boards.
     if (s.get('featured') === 'home') {
-        const r = await db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown WHERE r>=3) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6)).all();
+        const r = (await db().batch([...backfill, db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown WHERE r>=3) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6))])).at(-1)!;
         return json({ posts: await decorate(r.results, u), total: r.results.length, page: 1, size });
     }
     // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
@@ -407,12 +423,13 @@ async function listPosts(req: Request, url: URL) {
     const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope;
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
-    const r = await db().batch([
+    const r = (await db().batch([
+        ...backfill,
         db().prepare('SELECT COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause).bind(...values),
         db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
         ...withFeatured ? [db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown) ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
-    ]);
+    ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
     const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
     return json({ posts: await decorate(r[1].results, u), total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
@@ -447,11 +464,14 @@ async function bumpPost(u: User, post: any) {
 }
 
 // 게시판 상단 노출 on or off. Turning one on while every slot is used drops the author's oldest
-// featured posts in the same batch. Which featured posts are shown is decided when lists are read
-// (featuredCte), against the author's grade at that time.
+// featured posts in the same batch. Only open, non-hidden posts use a slot: a 예약중 or hidden post
+// keeps its featured_at and returns to the box when it is 거래중 again (if a slot is free then).
+// Which featured posts are shown is decided when lists are read (featuredCte), against the
+// author's grade at that time.
+export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND status='open' AND hidden=0";
 async function featurePost(req: Request, u: User, post: any) {
     const b = await body(req), perks = perksOf(u), now = Date.now(), active = !!b.active;
-    const mine = "author_id=? AND featured_at IS NOT NULL AND status!='closed'";
+    const mine = FEATURED_MINE;
     if (active) {
         if (!perks.boardSlots) fail(403, '게시판 상단 노출은 프리미엄부터 가능합니다.');
         if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 상단에 노출할 수 있습니다.');
@@ -484,6 +504,7 @@ async function patchPrice(req: Request, u: User, post: any) {
     if (hasPrice && price! < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
     const stored = parse(post.details, {}).currentOffer;
     const offer: number | null = hasOffer ? (b.currentOffer === '' || b.currentOffer === null ? null : amount(b.currentOffer, false)) : stored ? Number(stored) : null;
+    if (hasOffer && offer !== null && offer < 1000) fail(400, '현젯은 1,000원 이상입니다.');
     if (price !== null && offer !== null && offer >= price) fail(400, '현젯은 즉거가보다 낮게 입력해 주세요.');
     const sets: string[] = [], args: unknown[] = [];
     if (hasPrice) { sets.push("price=?,price_mode='fixed'"); args.push(price); }
@@ -549,6 +570,10 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         const perks = perksOf(u), strict = u.role !== 'manager' && !relaxedLimits(req), dayStart = kstDayStart(now);
         if (strict) {
             const gapMs = perks.bumpGapHours * HOUR;
+            // The author's open posts from before title_key existed get their key now, so the
+            // same-title rule sees them before the daily cleanup has run.
+            const missing = await db().prepare("SELECT id,title FROM posts WHERE author_id=? AND status!='closed' AND title_key='' LIMIT 100").bind(u.id).all<{ id: number; title: string }>();
+            if (missing.results.length) await db().batch(missing.results.map(p => db().prepare("UPDATE posts SET title_key=? WHERE id=? AND title=? AND title_key=''").bind(postTitleKey(p.title), p.id, p.title)));
             const c = await db().prepare(`SELECT (SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed') AS openCount,
                 (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?) AS postsToday,
                 EXISTS(SELECT 1 FROM posts WHERE author_id=? AND kind=? AND status!='closed' AND title_key=?) AS openDup,

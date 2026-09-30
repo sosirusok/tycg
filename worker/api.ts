@@ -1,7 +1,7 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
     digest, tokenOf, sessionCookie, memberColumns, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, DUMMY_HASH,
-    MANAGER_USERNAME, SESSION_DAYS,
+    MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME,
 } from './http';
 import { postsHandler } from './posts';
 import { filesHandler } from './files';
@@ -56,9 +56,18 @@ async function changePassword(req: Request) {
     return json({ ok: true });
 }
 
+// Offers 회원 탈퇴 ends: the member's pending offers and the ones on their posts, plus accepted ones
+// whose post is not 거래완료 yet (a finished deal keeps its accepted offer). Bind the member's id twice.
+const WITHDRAW_ENDS_OFFERS = "(sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?)) AND (status='pending' OR (status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status!='closed')))";
+// An accepted offer the member sent holds another member's post at 예약중; that post goes back to 거래중.
+const WITHDRAW_RESERVED = "sender_id=? AND status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status='reserved')";
+
 // 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id and
-// nickname, removes the password, bio, badges, grades and saved data, hides every post and ends
-// open offers and applications.
+// nickname, removes the password, bio and saved data, hides every post and ends open offers and
+// applications. Grade and badge rows stay as the manager's record of each grant; memberColumns
+// shows none of them for a withdrawn member, and only the manager ever writes them.
+// Each chat with an ended offer gets one line from the post author, as endOffersStatements does;
+// the lines and the post change come before the UPDATE that cancels the offers they select.
 async function withdraw(req: Request) {
     const u = await requireUser(req);
     if (u.role === 'manager') fail(403, '매니저 계정은 탈퇴할 수 없습니다.');
@@ -66,11 +75,17 @@ async function withdraw(req: Request) {
     const b = await body(req);
     if (!await passwordMatches(b.password, await passwordRow(u.id))) fail(400, '비밀번호가 맞지 않습니다.');
     const now = Date.now();
+    const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
-        db().prepare("UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='탈퇴회원'||lower(hex(randomblob(4))),nickname_key=NULL,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?").bind(now, u.id),
-        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'user_badges', 'user_grades'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
+        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?`).bind(now, u.id),
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        line('회원 탈퇴로 제시가 마감되었습니다. 글이 거래중으로 바뀌었습니다.', WITHDRAW_RESERVED, [u.id]),
+        line('회원 탈퇴로 제시가 마감되었습니다.', `${WITHDRAW_ENDS_OFFERS} AND NOT (${WITHDRAW_RESERVED})`, [u.id, u.id, u.id]),
+        db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
+        db().prepare(`UPDATE posts SET status='open',updated_at=? WHERE id IN (SELECT post_id FROM offers WHERE ${WITHDRAW_RESERVED})`).bind(now, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
-        db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE status IN('pending','accepted') AND (sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?))").bind(now, u.id, u.id),
+        db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${WITHDRAW_ENDS_OFFERS}`).bind(now, u.id, u.id),
         db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
     ]);
     return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
@@ -134,13 +149,17 @@ async function usersHandler(req: Request, p: string[]) {
         const viewer = await currentUser(req);
         // Counts skip 대리(진행) posts whose author lost 대리 인증, as the board list does (the author still counts them).
         const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))";
-        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.role,u.bio,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
+        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.role,u.bio,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
             .bind(viewer?.id || '', viewer?.id || '', p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
-        const { prev_nickname, nickname_changed_at, ...rest } = row;
+        const { prev_nickname, nickname_changed_at, deleted_at, ...rest } = row;
+        // A withdrawn member is only a name: no bio, grade, badges, counts or chat.
+        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, deleted: true } });
         const user: Record<string, unknown> = withMember(rest);
         // The nickname before the latest change stays on the profile for 90 days.
         if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
+        // The member sees when their nickname can change again (30 days after the last change).
+        if (viewer?.id === user.id && nickname_changed_at && nickname_changed_at + 30 * DAY > Date.now()) user.nickname_next_at = nickname_changed_at + 30 * DAY;
         if (viewer?.id !== user.id && viewer?.role !== 'manager') user.grade_expires_at = null;
         // Whether the viewer blocked this member, for the profile's block button.
         if (viewer) user.blocked = !!await db().prepare('SELECT 1 FROM blocks WHERE user_id=? AND target_id=?').bind(viewer.id, user.id).first();

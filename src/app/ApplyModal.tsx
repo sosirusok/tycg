@@ -69,7 +69,7 @@ export function ApplyModal() {
                 closeApply();
                 refreshUnread();
                 void navigate('/chat/' + d.chatId);
-                toast(d.created ? '신청 완료. 채팅으로 자료를 보내 주세요.' : '이미 신청한 건입니다. 채팅으로 이동합니다.');
+                toast(d.created ? '신청 완료' : '이미 신청한 건입니다. 채팅으로 이동합니다.');
             } catch (e) { toast.error(errorText(e)); }
             finally { setBusy(false); }
         };

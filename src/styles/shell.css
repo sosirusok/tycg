@@ -74,7 +74,9 @@
 
 /* Modal (Radix dialog) */
 .overlay { position: fixed; inset: 0; z-index: 70; background: rgba(28, 36, 47, .48); animation: fade .15s ease-out; }
-.modal { position: fixed; z-index: 71; left: 50%; top: 50%; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; transform: translate(-50%, -50%); background: var(--white); border-radius: 16px; box-shadow: var(--shadow-pop); animation: pop .16s ease-out; }
+/* Overlay and modal share one z-index, so a modal opened from inside another (a confirm) paints
+   its overlay above the first modal and dims it; DOM order decides. */
+.modal { position: fixed; z-index: 70; left: 50%; top: 50%; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; transform: translate(-50%, -50%); background: var(--white); border-radius: 16px; box-shadow: var(--shadow-pop); animation: pop .16s ease-out; }
 .modal:focus { outline: none; }
 .modal-wide { width: min(640px, calc(100vw - 32px)); }
 .modal-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 20px 12px 24px; background: var(--white); }

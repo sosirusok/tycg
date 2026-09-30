@@ -95,6 +95,8 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     const target = await post(s, sale(), 'F24 sell post for offers');
     const small = await members.buyerA('offers', 'POST', { postId: target, amount: 0 });
     equal([small.status, small.data.error], [400, '제시가는 1,000원 이상입니다.'], 'F24 offer amount 0 is refused');
+    const tiny = await s('posts', 'POST', sale({ price: 400000, details: { currentOffer: '500' } }));
+    equal([tiny.status, tiny.data.error], [400, '현젯은 1,000원 이상입니다.'], 'F24 현젯 below 1,000원 is refused');
 }
 
 // F04 and F09: which offers a status change ends, and the chat lines offers leave.
@@ -150,6 +152,16 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal((await a('offers/' + withdrawn.data.id, 'PATCH', { action: 'withdrawn' })).status, 200, 'F09 buyer withdraws');
     const withdrawLine = await lastMessage(s, withdrawn.data.chatId);
     equal([withdrawLine.type, withdrawLine.body, withdrawLine.sender_id], ['system', '제시 취소 · 3만원', a.user.id], 'F09 withdraw line from the buyer');
+
+    // Accepting one offer ends the other pending offers on the post, each with the 마감 line.
+    const p5 = await post(s, sale(), 'F09 post with two offers');
+    const first = await a('offers', 'POST', { postId: p5, amount: 380000 }), second = await b('offers', 'POST', { postId: p5, amount: 350000 });
+    const unreadB = await chatUnread(b, second.data.chatId);
+    equal((await s('offers/' + first.data.id, 'PATCH', { action: 'accepted' })).status, 200, 'F09 seller accepts the first offer');
+    equal((await offerOf(b, second.data.id)).status, 'cancelled', 'F09 the other pending offer ends (마감)');
+    const endedLine = await lastMessage(b, second.data.chatId);
+    equal([endedLine.type, endedLine.body, endedLine.sender_id], ['system', '글 상태가 바뀌어 제시가 마감되었습니다.', s.user.id], 'F09 the other buyer gets the 마감 line from the seller');
+    check(await chatUnread(b, second.data.chatId) > unreadB, 'F09 the other buyer sees it as unread');
 }
 
 // F13: 채팅하기 only opens the chat; the first message brings the post's card.
@@ -162,6 +174,7 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal(opened.status, 200, 'F13 chat opened from a post');
     equal((await s('chats/unread')).data.unread, unread, 'F13 opening a chat does not notify the seller');
     equal((await messages(q, opened.data.id)).length, 0, 'F13 the opened chat has no messages');
+    check(!(await s('chats')).data.chats.some(c => c.id === opened.data.id) && !(await q('chats')).data.chats.some(c => c.id === opened.data.id), 'F13 a chat with no messages is in neither chat list');
     equal((await q('chats', 'POST', { userId: s.user.id, postId: postA })).data.id, opened.data.id, 'F13 userId and postId open the same chat');
     equal((await q('chats', 'POST', { userId: members.other.user.id, postId: postA })).status, 400, 'F13 the post must be the partner\'s');
 
@@ -169,6 +182,7 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal((await messages(q, opened.data.id)).map(m => [m.type, m.type === 'listing' ? m.reference_id : m.body]),
         [['listing', String(postA)], ['text', '안녕하세요']], 'F13 the chat holds exactly [listing, text]');
     check((await s('chats/unread')).data.unread > unread, 'F13 the message reaches the seller');
+    check((await s('chats')).data.chats.some(c => c.id === opened.data.id), 'F13 the chat is listed after the first message');
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '이것도요', postId: postB });
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '다시 A요', postId: postA });
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '계속 A요', postId: postA });

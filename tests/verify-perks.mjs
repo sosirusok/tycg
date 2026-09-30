@@ -205,6 +205,12 @@ backdate([B], 73);
 equal((await guest(`posts?kind=sell&q=B${run}`)).data.featured, [], 'B leaves the box 72 hours after its last bump');
 equal((await setStatus(elite, E[0], 'reserved')).status, 200, 'an elite post is reserved');
 check(!(await guest(`posts?kind=sell&q=${run}`)).data.featured.some(p => p.id === E[0]), 'a 예약중 post drops out of the box');
+// A 예약중 post uses no slot and keeps featured_at, so featuring another post does not clear it.
+const E3 = await created(elite, 'elite 3');
+const f3 = await elite(`posts/${E3}/feature`, 'PUT', { active: true });
+equal([f3.status, f3.data.replaced, f3.data.used], [200, null, 3], 'featuring a 4th post while one is 예약중 replaces nothing');
+check(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at !== null, 'the 예약중 post keeps featured_at');
+equal((await elite('me/usage')).data.featured.length, 3, 'usage counts only the open featured posts');
 equal((await setStatus(elite, E[0], 'closed')).status, 200, 'the featured post is closed');
 equal(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at, null, 'closing clears featured_at');
 refused(await elite(`posts/${E[0]}/feature`, 'PUT', { active: true }), 409, '거래중인 글만 상단에 노출할 수 있습니다.', 'a closed post cannot be featured');
@@ -234,6 +240,13 @@ const bumpedBefore = sql(`SELECT bumped_at FROM posts WHERE id=${sp}`)[0].bumped
 const cut = await seller(`posts/${sp}/price`, 'PATCH', { price: 400000 });
 equal([cut.status, cut.data.post.price, cut.data.post.price_history.map(h => h.price)], [200, 400000, [500000]], 'price 500000 to 400000 keeps 500000 in price_history');
 equal(sql(`SELECT bumped_at FROM posts WHERE id=${sp}`)[0].bumped_at, bumpedBefore, 'a price change never bumps');
+// Rows the previous Worker wrote (it kept rises too) are filtered when read.
+sql(`INSERT INTO post_price_history(post_id,price,changed_at) VALUES(${sp},350000,${Date.now()})`);
+equal((await guest('posts/' + sp)).data.post.price_history.map(h => h.price), [500000], 'a stored entry below the current price is not shown');
+sql(`INSERT INTO post_price_history(post_id,price,changed_at) VALUES(${sp},700000,${Date.now()})`);
+equal((await guest('posts/' + sp)).data.post.price_history.map(h => h.price), [700000], 'an entry followed by a higher one is not shown');
+sql(`DELETE FROM post_price_history WHERE post_id=${sp} AND price IN (350000,700000)`);
+refused(await seller(`posts/${sp}/price`, 'PATCH', { currentOffer: 500 }), 400, '현젯은 1,000원 이상입니다.', '현젯 below 1,000원');
 refused(await seller(`posts/${sp}/price`, 'PATCH', { currentOffer: 450000 }), 400, '현젯은 즉거가보다 낮게 입력해 주세요.', '현젯 at or above 즉거가');
 refused(await seller(`posts/${sp}/price`, 'PATCH', { price: 999 }), 400, '1,000원', '즉거가 below 1,000원');
 const offer = await seller(`posts/${sp}/price`, 'PATCH', { currentOffer: 300000 });

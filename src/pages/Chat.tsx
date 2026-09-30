@@ -13,8 +13,9 @@ import { MemberPanel } from '../components/MemberPanel';
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; badges: string[]; last_message: string | null; unread: number; pending_applications: number };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string };
-type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'>;
+type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean };
 
+const POST_MISMATCH = '게시글 작성자를 확인해 주세요.';
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Times are shown in Korean time wherever the browser is.
@@ -149,8 +150,9 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             setText(''); setPhotos([]); stick.current = true;
             await poll(); activity.current();
         } catch (err) {
-            // A post that is gone must not block the chat: the next try goes without it.
-            if (postId !== undefined && err instanceof ApiError && (err.status === 400 || err.status === 404)) forgetPost();
+            // A post that is gone (or not the partner's) must not block the chat: the next try goes
+            // without it. Other errors, such as a message that is too long, keep the post for the retry.
+            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH)) forgetPost();
             toast.error(errorText(err));
         }
         finally { setSending(false); input.current?.focus(); }
@@ -199,10 +201,11 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         <div className="room-main">
             <header className="room-head">
                 <Link to="/chat" className="icon-btn room-back" aria-label="채팅 목록"><ArrowLeft size={22} /></Link>
-                {partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /></Link> : <span className="grow" />}
+                {partner?.deleted ? <span className="room-who"><Avatar name={partner.nickname} size="sm" /><span>{partner.nickname}</span></span>
+                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /></Link> : <span className="grow" />}
                 <span className="grow" />
                 {managerView && <button type="button" className="btn btn-line btn-sm room-panel-btn" onClick={() => setPanel(true)}><UserCog size={16} />회원 관리</button>}
-                {partner && partner.role !== 'manager' && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}
+                {partner && partner.role !== 'manager' && !partner.deleted && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}
             </header>
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 {hasMore && <button type="button" className="btn btn-soft btn-xs older" onClick={loadOlder}>이전 대화 보기</button>}
@@ -226,7 +229,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 })}
             </div>
             <form className="composer" onSubmit={send}>
-                {blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p> : <>
+                {partner?.deleted ? <p className="muted small composer-blocked">탈퇴한 회원입니다.</p>
+                    : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p> : <>
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
                         <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => attach(e.target.files)} />

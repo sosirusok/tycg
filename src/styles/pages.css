@@ -271,6 +271,7 @@
 .mp-app { display: grid; gap: 8px; padding: 8px 0; font-size: 14px; color: var(--ink); font-weight: 600; }
 .mp-grant { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 8px; }
 .mp-grant .select { height: 38px; font-size: 14px; }
+.mp-temp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 20px; letter-spacing: .08em; }
 @media (max-width: 1200px) {
   .chat-room.with-panel { grid-template-columns: minmax(0, 1fr); }
   .room-panel { display: none; }

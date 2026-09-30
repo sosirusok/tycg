@@ -1,4 +1,4 @@
-import { db, fail, requireUser, json, body, limit, initManager, isManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID } from './http';
+import { db, fail, requireUser, json, body, limit, initManager, isManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID, WITHDRAWN } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import {
@@ -16,22 +16,40 @@ export async function siteConfig() {
 // Only the manager grants grades (the DB triggers in 0009_manager_only refuse any other granted_by).
 // A 6-month grant extends the member's unexpired 6-month row of the same grade by 6 months instead
 // of adding a second row, so one 회수 removes the whole period. A grade already held permanently
-// is not granted again. With a guard, the grant is written only if that SQL condition holds when
-// the batch runs.
+// is not granted again. The new end date is computed here from the row as read, so the statement
+// runs only while that row still ends at the date read (`precondition`); two grants at once then
+// cannot both write the same date and lose a paid period. With a guard, the grant is written only
+// if that SQL condition holds too when the batch runs.
 export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
     if (by !== MANAGER_ID) fail(403, '등급은 매니저만 지급할 수 있습니다.');
     const info = gradeInfo(grade);
     if (await db().prepare('SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL LIMIT 1').bind(userId, grade).first()) fail(409, '이미 영구 등급입니다.');
+    const noPermanent = 'NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL)';
     if (plan === '6m') {
         const existing = await db().prepare('SELECT id,expires_at FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? ORDER BY expires_at DESC LIMIT 1').bind(userId, grade, now).first<{ id: number; expires_at: number }>();
         if (existing) {
             const expires = addMonths(existing.expires_at, 6);
-            return { expires, statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND ${guard}`).bind(expires, by, now, applicationId, existing.id, ...guardArgs) };
+            const precondition = `EXISTS(SELECT 1 FROM user_grades WHERE id=? AND expires_at=?) AND ${noPermanent}`, preArgs = [existing.id, existing.expires_at, userId, grade];
+            return {
+                expires, precondition, preArgs,
+                statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND expires_at=? AND ${noPermanent} AND ${guard}`)
+                    .bind(expires, by, now, applicationId, existing.id, existing.expires_at, userId, grade, ...guardArgs),
+            };
         }
     }
     const expires = plan === '6m' ? addMonths(now, 6) : null;
-    return { expires, statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${guard}`).bind(userId, grade, info.rank, expires, by, now, applicationId, ...guardArgs) };
+    // A new row only while the member still has no permanent row of this grade and, for 6 months,
+    // no unexpired 6-month row that should be extended instead.
+    const precondition = noPermanent + (plan === '6m' ? ' AND NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?)' : '');
+    const preArgs = [userId, grade, ...plan === '6m' ? [userId, grade, now] : []];
+    return {
+        expires, precondition, preArgs,
+        statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${precondition} AND ${guard}`)
+            .bind(userId, grade, info.rank, expires, by, now, applicationId, ...preArgs, ...guardArgs),
+    };
 }
+
+const GRADE_CHANGED = '등급이 방금 바뀌었습니다. 다시 시도해 주세요.';
 
 // Badges too are granted only by the manager account.
 function assertBadgeGranter(u: User) {
@@ -53,8 +71,12 @@ const DECIDED = 'EXISTS(SELECT 1 FROM applications WHERE id=? AND decision_id=?)
 // guarded by that id, so when two decisions overlap only the first one takes effect.
 async function decide(u: User, app: any, action: 'approve' | 'reject', note: string) {
     const now = Date.now(), decision = crypto.randomUUID(), args = [app.id, decision];
+    // An approved grade is granted in the same batch, so the application changes only while the
+    // grant's precondition holds too; otherwise nothing is written and the manager tries again.
+    const grant = action === 'approve' && app.kind !== 'badge' ? await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args) : null;
     const statements: D1PreparedStatement[] = [
-        db().prepare("UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id),
+        db().prepare(`UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending' AND ${grant ? grant.precondition : '1'}`)
+            .bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id, ...grant ? grant.preArgs : []),
     ];
     let message = '';
     if (action === 'approve') {
@@ -63,16 +85,18 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
-            const { expires, statement } = await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args);
-            statements.push(statement);
-            message = `${gradeInfo(app.target).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}`;
+            statements.push(grant!.statement);
+            message = `${gradeInfo(app.target).name} 등급 지급 완료${grant!.expires ? ` (${dateLabel(grant!.expires)}까지)` : ' (영구)'}`;
         }
     } else {
         message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
     }
     if (app.conversation_id) statements.push(...guardedMessageStatements(app.conversation_id, u.id, message, 'system', app.id, DECIDED, args, now));
     const r = await db().batch(statements);
-    if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
+    if (!r[0].meta.changes) {
+        if (grant && (await db().prepare("SELECT status FROM applications WHERE id=?").bind(app.id).first<{ status: string }>())?.status === 'pending') fail(409, GRADE_CHANGED);
+        fail(409, '이미 처리된 신청입니다.');
+    }
 }
 
 export async function membershipHandler(req: Request, p: string[]): Promise<Response | null> {
@@ -205,6 +229,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             assertBadgeGranter(u);
             const b = await body(req);
             if (!isBadge(b.badge)) fail(400, '인증 종류를 확인해 주세요.');
+            if (b.active && target.deleted_at) fail(400, WITHDRAWN);
             if (b.active) await db().prepare('INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES(?,?,?,?)').bind(p[2], b.badge, u.id, Date.now()).run();
             else await db().prepare('DELETE FROM user_badges WHERE user_id=? AND badge=?').bind(p[2], b.badge).run();
             return json({ ok: true });
@@ -215,15 +240,16 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             const plan: PlanId = b.plan === '6m' ? '6m' : 'permanent';
             if (plan === '6m' && !planInfo(b.grade, '6m')) fail(400, '이 등급은 6개월 기간이 없습니다.');
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
+            if (target.deleted_at) fail(400, WITHDRAWN);
             const { statement } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
-            await statement.run();
+            if (!(await statement.run()).meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
         // A member who forgot their password gets a temporary one through the manager's chat.
         // It replaces the old password and signs the member out everywhere; it is shown only in this response.
         if (p[3] === 'password' && !p[4] && method === 'POST') {
             if (target.role === 'manager') fail(400, '매니저 계정에는 임시 비밀번호를 발급하지 않습니다.');
-            if (target.deleted_at) fail(400, '탈퇴한 회원입니다.');
+            if (target.deleted_at) fail(400, WITHDRAWN);
             const password = tempPassword(), salt = random();
             await db().batch([
                 db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(password, salt), salt, target.id),

@@ -70,7 +70,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 // Only the switch itself toggles; the name next to it is plain text.
                 return <div key={b.id} className="mp-row">
                     <span className="grow">{b.name}{on && <span className="muted small"> · {dateText(data.badges.find(x => x.badge === b.id)?.granted_at || now)}</span>}</span>
-                    <span className="switch"><input type="checkbox" role="switch" aria-label={b.name} checked={on} disabled={busy}
+                    <span className="switch"><input type="checkbox" role="switch" aria-label={b.name} checked={on} disabled={busy || (!on && !!u.deleted_at)}
                         onChange={() => on ? setRevoke({ name: b.name, description: b.id === 'proxy' ? '대리(진행) 글이 목록에서 빠집니다.' : undefined, task: set(false), done: `${b.name} 회수 완료` }) : void run(set(true), `${b.name} 지급 완료`)} /></span>
                 </div>;
             })}
@@ -81,11 +81,11 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${dateText(g.expires_at)}까지` : '영구'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRevoke({ name: `${gradeInfo(g.grade).name} 등급`, task: () => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), done: '등급 회수 완료' })}>회수</button>
             </div>) : <p className="muted small">지급 내역 없음</p>}
-            <div className="mp-grant">
+            {!u.deleted_at && <div className="mp-grant">
                 <select className="select" aria-label="지급할 등급" value={grade} onChange={e => setGrade(e.target.value as GradeId)}>{GRADES.filter(g => g.id !== 'normal').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select className="select" aria-label="기간" value={plan} onChange={e => setPlan(e.target.value as PlanId)}>{(plans.length ? plans : [{ id: 'permanent', label: '영구' }]).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
                 <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades`, 'POST', { grade, plan }), `${gradeInfo(grade).name} 등급 지급 완료`)}>지급</button>
-            </div>
+            </div>}
         </div>}
         {data.applications.length > pending.length && <div className="mp-block">
             <h4>지난 신청</h4>
@@ -106,8 +106,8 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         <Modal open={!!temp} onClose={() => setTemp('')} title="임시 비밀번호"
             footer={<button type="button" className="btn btn-primary" onClick={() => void copy()}>복사</button>}>
             <div className="field">
-                <input className="input" readOnly value={temp} aria-label="임시 비밀번호" style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 20, letterSpacing: '0.08em' }} onFocus={e => e.currentTarget.select()} />
-                <span className="field-hint">회원에게 채팅으로 전달하세요.</span>
+                <input className="input mp-temp" readOnly value={temp} aria-label="임시 비밀번호" onFocus={e => e.currentTarget.select()} />
+                <span className="field-hint">채팅으로 전달</span>
             </div>
         </Modal>
     </div>;

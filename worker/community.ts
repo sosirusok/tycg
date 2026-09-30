@@ -1,6 +1,6 @@
 import { db, fail, requireUser, json, body, limit, textField, memberColumns, withMember } from './http';
 import { priceText } from '../shared/market';
-import { amount, parse, visiblePost } from './posts';
+import { amount, parse, visiblePost, OFFERS_ENDED_TEXT } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 
 // Badge and grade columns for a listed member, without the grade's end date.
@@ -122,10 +122,16 @@ async function offersHandler(req: Request, p: string[]) {
             : action === 'declined' ? `제시 거절 · ${priceText(offer.amount)}` : `제시 취소 · ${priceText(offer.amount)}`;
         const notice = guardedMessageStatements(offer.conversation_id, u.id, text, 'system', offer.id, 'EXISTS(SELECT 1 FROM offers WHERE id=? AND status=? AND updated_at=?)', [offer.id, action, now], now);
         if (action === 'accepted') {
+            const othersPending = "post_id=? AND status='pending' AND EXISTS(SELECT 1 FROM offers x WHERE x.id=? AND x.status='accepted')";
             const r = await db().batch([
                 db().prepare("UPDATE offers SET status='accepted',updated_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM posts WHERE id=offers.post_id AND status='open' AND hidden=0) AND NOT EXISTS(SELECT 1 FROM offers x WHERE x.post_id=offers.post_id AND x.status='accepted')").bind(now, offer.id),
                 db().prepare("UPDATE posts SET status='reserved',updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM offers WHERE id=? AND status='accepted')").bind(now, offer.post_id, offer.id),
-                db().prepare("UPDATE offers SET status='declined',updated_at=? WHERE post_id=? AND status='pending' AND EXISTS(SELECT 1 FROM offers x WHERE x.id=? AND x.status='accepted')").bind(now, offer.post_id, offer.id),
+                // The other buyers' pending offers end (마감, as on any status change); each of their chats
+                // gets the 마감 line from the seller and moves up, before the UPDATE that ends the offers they select.
+                db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT DISTINCT conversation_id,?,?,'system',NULL,'[]',? FROM offers WHERE ${othersPending}`)
+                    .bind(u.id, OFFERS_ENDED_TEXT, now, offer.post_id, offer.id),
+                db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${othersPending})`).bind(now, offer.post_id, offer.id),
+                db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${othersPending}`).bind(now, offer.post_id, offer.id),
                 ...notice,
             ]);
             if (!r[0].meta.changes) fail(409, '다른 제시를 이미 수락했거나 글 상태가 바뀌었습니다.');

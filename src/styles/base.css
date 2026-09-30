@@ -69,6 +69,7 @@ img { display: block; max-width: 100%; }
 .btn-text { height: auto; padding: 0; color: var(--ink-3); font-weight: 500; }
 .btn-text:hover { color: var(--ink); }
 .btn-danger { background: var(--white); color: var(--danger); border: 1px solid var(--line-2); }
+.btn-danger-solid { background: var(--danger); border-color: var(--danger); color: var(--white); }
 .btn:disabled { opacity: .45; }
 /* Disabled primary actions turn neutral gray instead of a pale brand tint. */
 .btn-primary:disabled, .btn-dark:disabled { opacity: 1; background: var(--line); color: var(--ink-4); }

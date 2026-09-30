@@ -74,11 +74,18 @@ export async function initManager() {
 }
 
 // SQL columns that describe a member's effective grade and verification badges.
-// `alias` is the users table alias in the surrounding query.
+// `alias` is the users table alias in the surrounding query. 회원 탈퇴 keeps the grade and badge
+// rows (the manager's record of each grant), so a withdrawn member simply shows none of them.
 export function memberColumns(alias: string, prefix = '') {
-    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at) FROM user_grades g WHERE g.user_id=${alias}.id AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
-        + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id) AS ${prefix}badges_json`;
+    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at) FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
+        + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
+
+// The one message for anything aimed at a member who left (chat, grants, temporary password).
+export const WITHDRAWN = '탈퇴한 회원입니다.';
+// What a withdrawn member is called on screen. The stored nickname keeps a random suffix only
+// because nicknames are unique.
+export const WITHDRAWN_NAME = '탈퇴회원';
 
 const parseJson = (raw: unknown, fallback: any) => { try { return typeof raw === 'string' ? JSON.parse(raw) : fallback; } catch { return fallback; } };
 
@@ -210,6 +217,9 @@ export function nicknameKey(nickname: string) {
 // progress, or by SQL in tests) get their key here, 200 rows per round. The probe is an indexed
 // lookup that returns nothing once every row has a key, so it runs before every look-alike check
 // instead of being skipped by a per-isolate flag that would miss rows written after it was set.
+// Withdrawn members hold a '#deleted:' key (never NULL), so the probe does not grow with them, and a
+// nickname the previous Worker changes without touching the key gets NULL from a trigger
+// (0010_nickname_key_reset) and is keyed again here.
 // At most 10 rounds (2,000 members) per request keep the D1 calls bounded; the next request continues.
 export async function ensureNicknameKeys() {
     for (let round = 0; round < 10; round++) {

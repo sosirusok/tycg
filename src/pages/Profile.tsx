@@ -9,14 +9,18 @@ import { useApp } from '../app/state';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 
-type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string };
+// "10월 31일" on the Korean calendar.
+const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
+
+type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean };
 
 export default function ProfilePage({ id }: { id?: string }) {
     const { me, setMe, refreshMe, requireLogin, openApply, logout } = useApp();
     // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
     const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
-    const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false);
+    const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
+    const [postsVersion, setPostsVersion] = useState(0);
     const [account, setAccount] = useState<'' | 'password' | 'withdraw'>('');
     const mine = me?.id === id;
 
@@ -28,25 +32,30 @@ export default function ProfilePage({ id }: { id?: string }) {
         setPosts(null);
         api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: '20', ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }))
             .then(d => { setPosts(d.posts); setTotal(d.total); }).catch(() => setPosts([]));
-    }, [id, tab]);
+    }, [id, tab, postsVersion]);
 
     if (error) return <div className="container page">{error.status === 404
         ? <EmptyState icon="warning" title="없는 회원입니다" />
         : <EmptyState icon="warning" title="회원 정보를 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); setRetry(n => n + 1); }}>다시 시도</button>} />}</div>;
     if (!user) return <div className="container page"><SkeletonRows count={2} height={160} /></div>;
+    if (user.deleted) return <div className="container page"><EmptyState icon="warning" title="탈퇴한 회원입니다" /></div>;
 
     async function save() {
-        setSaving(true);
+        setSaving(true); setEditError('');
         try {
             await api('users/' + user!.id, 'PUT', { nickname, bio });
-            // The server stores the nickname in a normalized form, so read it back.
+            // The server stores the nickname in a normalized form, so read it back; the post cards
+            // below carry the author's nickname too.
             const d = await api<{ user: Profile }>('users/' + user!.id);
             setUser(d.user);
+            setPostsVersion(v => v + 1);
             await refreshMe();
             setEditing(false); toast('저장 완료');
-        } catch (e) { toast.error(errorText(e)); }
+        } catch (e) { setEditError(errorText(e)); }
         finally { setSaving(false); }
     }
+    // A member may change their nickname once every 30 days (the manager's is fixed).
+    const nicknameLocked = !!user.nickname_next_at && user.nickname_next_at > Date.now();
     const chat = () => requireLogin(async () => {
         try { const d = await api<{ id: string }>('chats', 'POST', { userId: user.id }); void navigate('/chat/' + d.id); }
         catch (e) { toast.error(errorText(e)); }
@@ -68,7 +77,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             </div>
             <div className="profile-actions">
                 {mine ? <>
-                    <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
+                    <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditError(''); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
                     {user.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" onClick={() => openApply()}>인증/등급 신청</button>}
                 </> : <>
                     <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
@@ -110,8 +119,11 @@ export default function ProfilePage({ id }: { id?: string }) {
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>
             <div className="form-stack">
-                <label className="field"><span className="field-label">닉네임</span><input className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager'} /></label>
+                <div className="field"><label className="field-label" htmlFor="profile-nickname">닉네임</label>
+                    <input id="profile-nickname" className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager' || nicknameLocked} aria-describedby={user.role === 'manager' ? undefined : 'profile-nickname-hint'} />
+                    {user.role !== 'manager' && <span id="profile-nickname-hint" className="field-hint">{nicknameLocked ? `${monthDay(user.nickname_next_at!)}부터 변경 가능` : '30일에 한 번 변경 가능'}</span>}</div>
                 <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="예: 래더계 위주 거래, 밤에 답장 빠름" /></label>
+                {editError && <p className="field-error" role="alert">{editError}</p>}
                 <div className="row">
                     <button type="button" className="btn btn-line btn-sm" onClick={() => { setEditing(false); setAccount('password'); }}>비밀번호 변경</button>
                     {user.role !== 'manager' && <button type="button" className="btn btn-text small" style={{ marginLeft: 'auto' }} onClick={() => { setEditing(false); setAccount('withdraw'); }}>회원 탈퇴</button>}

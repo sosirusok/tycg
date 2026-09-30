@@ -25,8 +25,10 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         const b = await body(req), hidden = b.hidden ? 1 : 0, reason = hidden && typeof b.reason === 'string' ? b.reason : '';
         if (reason && !(REPORT_REASONS as readonly string[]).includes(reason)) fail(400, '숨김 사유를 확인해 주세요.');
         if (typeof b.postId !== 'number' && typeof b.postId !== 'string') fail(404, '게시글을 찾을 수 없습니다.');
-        const post = await db().prepare('SELECT id,author_id,title,hidden FROM posts WHERE id=?').bind(b.postId).first<any>();
+        const post = await db().prepare('SELECT p.id,p.author_id,p.title,p.hidden,p.hidden_reason,u.deleted_at FROM posts p JOIN users u ON u.id=p.author_id WHERE p.id=?').bind(b.postId).first<any>();
         if (!post) fail(404, '게시글을 찾을 수 없습니다.');
+        // A post hidden by 회원 탈퇴 stays hidden, and its '탈퇴' reason is never overwritten.
+        if (post.deleted_at || post.hidden_reason === '탈퇴') fail(409, '탈퇴한 회원의 글입니다.');
         const now = Date.now();
         await db().batch([
             db().prepare('UPDATE posts SET hidden=?,hidden_reason=? WHERE id=?').bind(hidden, reason, post.id),
