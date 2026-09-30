@@ -124,7 +124,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
 
 export function Board() {
     const { params } = useLocation();
-    const { me, requireLogin, openApply, refreshUnread } = useApp();
+    const { me, requireLogin, openApply } = useApp();
     const rawKind = params.get('kind');
     const kind: TradeKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
     const categories = kind === 'all' ? [] : categoriesForKind(kind);
@@ -150,7 +150,6 @@ export function Board() {
             .catch(e => { if (alive) setData({ key: queryString, posts: [], total: 0, error: errorText(e) }); });
         return () => { alive = false; };
     }, [queryString, reload, me?.id]);
-    useEffect(() => { refreshUnread(); }, [refreshUnread]);
 
     const update = (values: Record<string, string>) => {
         const next = new URLSearchParams(query);

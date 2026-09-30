@@ -187,9 +187,9 @@
 .chat-item:hover { background: var(--fill-2); }
 .chat-item.is-active { background: var(--fill); }
 .chat-item-main { display: grid; gap: 3px; flex: 1; min-width: 0; }
-.chat-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.chat-item-top .name-line { flex-wrap: nowrap; overflow: hidden; }
-.chat-item-top .verified { display: none; }
+.chat-item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.chat-item-top .name-line { min-width: 0; }
+.chat-item-top time { padding-top: 2px; }
 .chat-item-last { display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .app-flag { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--ink-2); color: var(--white); font-size: 11px; }
 .unread { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--brand); color: var(--white); font-size: 12px; line-height: 20px; text-align: center; }

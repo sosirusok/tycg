@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, pbkdf2Sync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // Verification badges, grades, manager-chat applications and chat photos.
 // Runs only against a local Worker (see scripts/test-local.mjs).
@@ -180,5 +182,18 @@ const s33 = await applicant('posts', 'POST', { kind: 'sell', category: 'account'
 equal(s33.status, 201, 'new season accepted after the manager raises it');
 equal((await manager('manage/settings', 'PUT', { latestSeason: 32 })).status, 400, 'season cannot go backwards');
 equal((await other('manage/settings', 'PUT', { latestSeason: 40 })).status, 403, 'members cannot change settings');
+
+// Password hashes: new accounts store the iteration count; the earlier
+// 100,000-iteration hex format (MANAGER_PASSWORD_HASH/SALT, old members) still verifies.
+{
+    const legacyUser = `legacy_${run}`, legacyPass = 'legacy-' + run, salt = randomBytes(32).toString('hex');
+    const legacyHash = pbkdf2Sync(legacyPass, salt, 100000, 32, 'sha256').toString('hex');
+    execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--persist-to', process.env.TEST_PERSIST || '.wrangler/state',
+        '--command', `INSERT INTO users (id,username,nickname,password_hash,salt,role,bio,created_at) VALUES ('${crypto.randomUUID()}','${legacyUser}','예전${run}','${legacyHash}','${salt}','member','',${Date.now()})`],
+        { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: 'pipe', timeout: 30000 });
+    const old = client();
+    equal((await old('auth/login', 'POST', { username: legacyUser, password: 'wrong-' + run })).status, 401, 'legacy hash rejects a wrong password');
+    equal((await old('auth/login', 'POST', { username: legacyUser, password: legacyPass })).status, 200, 'legacy 100,000-iteration hash still signs in');
+}
 
 console.log(`\n${checks} membership checks passed`);
