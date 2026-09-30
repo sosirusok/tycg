@@ -100,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           find_id() {
-            pnpm exec wrangler d1 list --json | node -e '
+            ./node_modules/.bin/wrangler d1 list --json | node -e '
               let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
                 const a = s.indexOf("["), b = s.lastIndexOf("]");
                 if (a < 0 || b < a) { console.error("wrangler d1 list did not return JSON"); process.exit(2); }
@@ -111,8 +111,12 @@ jobs:
           id="$(find_id)"
           if [ -z "$id" ]; then
             echo "Creating D1 database $D1_NAME"
-            pnpm exec wrangler d1 create "$D1_NAME" --location "$D1_LOCATION"
-            id="$(find_id)"
+            ./node_modules/.bin/wrangler d1 create "$D1_NAME" --location "$D1_LOCATION"
+            for attempt in 1 2 3 4 5; do
+              id="$(find_id)"
+              [ -n "$id" ] && break
+              sleep 3
+            done
           fi
           if ! [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
             echo "::error::D1 ID를 확인하지 못했습니다. API 토큰에 Account > D1 > Edit 권한이 있는지 확인하세요."
@@ -129,15 +133,24 @@ jobs:
           if [ "${USE_R2:-}" = "false" ]; then
             echo "R2 disabled by repository variable USE_R2=false"
           else
-            body="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_BUCKET")"
-            codes="$(jq -r '[.errors[]?.code] | map(tostring) | join(",")' <<<"$body")"
-            if [ "$(jq -r '.success' <<<"$body")" = "true" ]; then
-              r2=true
-            elif [[ ",$codes," == *",10006,"* ]]; then
-              if pnpm exec wrangler r2 bucket create "$R2_BUCKET"; then r2=true; fi
+            # Only a confirmed 'no R2 subscription' (10042) switches photos to D1. Any other
+            # failure stops the deploy, so a transient error never drops a bucket that is in use.
+            for attempt in 1 2 3; do
+              body="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_BUCKET" || true)"
+              codes="$(jq -r '[.errors[]?.code] | map(tostring) | join(",")' <<<"$body" 2>/dev/null || echo "")"
+              if [ "$(jq -r '.success' <<<"$body" 2>/dev/null)" = "true" ]; then r2=true; decided=1; break; fi
+              if [[ ",$codes," == *",10006,"* ]]; then
+                if ./node_modules/.bin/wrangler r2 bucket create "$R2_BUCKET"; then r2=true; decided=1; break; fi
+              fi
+              if [[ ",$codes," == *",10042,"* ]]; then decided=1; break; fi
+              sleep 5
+            done
+            if [ -z "${decided:-}" ]; then
+              echo "::error::R2 상태를 확인하지 못했습니다(오류 코드: ${codes:-응답 없음}). 토큰에 Workers R2 Storage 권한이 있는지 확인하거나, R2를 쓰지 않으려면 저장소 변수 USE_R2를 false로 지정하세요."
+              exit 1
             fi
             if [ "$r2" != "true" ]; then
-              echo "::notice title=R2 미사용::R2를 쓸 수 없어(오류 코드: ${codes:-없음}; 10042는 R2 미가입) 사진을 D1에 저장하는 방식으로 배포합니다."
+              echo "::notice title=R2 미사용::이 계정은 R2에 가입되어 있지 않아(10042) 사진을 D1에 저장하는 방식으로 배포합니다."
             fi
           fi
           echo "R2_ENABLED=$r2" >> "$GITHUB_ENV"
@@ -186,9 +199,11 @@ jobs:
           res="$(api "$url")"
           sub="$(jq -r '.result.subdomain // empty' <<<"$res")"
           if [ -z "$sub" ]; then
-            base="${WANTED_SUBDOMAIN:-$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//' | cut -c1-40)}"
+            base="$(printf '%s' "${WANTED_SUBDOMAIN:-$GITHUB_REPOSITORY_OWNER}" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//' | cut -c1-40 | sed -E 's/-+$//')"
+            [ -n "$base" ] || base="zombiego"
             for cand in "$base" "$base-$(openssl rand -hex 3)"; do
-              put="$(api -X PUT --data "{\"subdomain\":\"$cand\"}" "$url")"
+              [[ "$cand" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || continue
+              put="$(api -X PUT --data "$(jq -cn --arg s "$cand" '{subdomain:$s}')" "$url")"
               sub="$(jq -r '.result.subdomain // empty' <<<"$put")"
               [ -n "$sub" ] && break
             done
