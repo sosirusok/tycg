@@ -44,7 +44,7 @@ function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebro
             : <div className="shelf-empty"><p>{empty}</p><button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(u => {
                 if (kind === 'proxy_offer' && u.role !== 'manager' && !u.badges.includes('proxy')) openApply({ kind: 'badge', target: 'proxy' });
                 else void navigate(withParams('/write', { kind, category }));
-            })}>첫 글 올리기</button></div>}
+            })}>글쓰기</button></div>}
     </section>;
 }
 
@@ -60,7 +60,7 @@ export function Home() {
         <section className="container hero">
             <h1>어떤 거래를 찾으세요?</h1>
             <form className="hero-search" onSubmit={search} role="search">
-                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="제목, 스킨, 닉네임으로 검색" aria-label="거래 검색" /></label>
+                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임 (예: 악주, 뱀동)" aria-label="거래 검색" /></label>
                 <button type="button" className="btn btn-soft hero-write" onClick={() => requireLogin(() => void navigate('/write'))}><PenLine size={18} />거래 등록</button>
             </form>
             <nav className="quick-row" aria-label="거래 종류">
@@ -80,9 +80,9 @@ export function Home() {
                 <CIcon name={proxyReady ? 'check-mark-button' : 'locked'} size={84} />
             </button>
 
-            <Shelf eyebrow="판매" title="방금 올라온 매물" kind="sell" withCategories empty="아직 등록된 판매 글이 없어요." />
-            <Shelf eyebrow="구매" title="이런 계정을 찾고 있어요" kind="buy" empty="아직 등록된 구매 글이 없어요." />
-            <Shelf eyebrow={KIND_NAMES.proxy_offer} title="대리 인증 회원의 진행 글" kind="proxy_offer" empty="아직 등록된 대리 진행 글이 없어요." />
+            <Shelf eyebrow="판매" title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." />
+            <Shelf eyebrow="구매" title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." />
+            <Shelf eyebrow={KIND_NAMES.proxy_offer} title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." />
 
             <section className="section">
                 <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">전체 보기<ChevronRight size={16} /></Link></div>

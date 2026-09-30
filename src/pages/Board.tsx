@@ -62,7 +62,7 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
     return <>
         {exchange && ctx.wanted === 'account' && <>
             <h3 className="filter-section">상대가 구하는 계정</h3>
-            <Group title="내 계정으로 찾기" hint="내 계정 조건을 넣으면 그 계정을 받아 줄 교환 글만 보여요.">
+            <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 글만 표시">
                 <div className="grid-gap-8">
                     <LazyNumber label="내 계정 대주 수" value={params.get('wantedOwnerCountOfMine') || ''} onCommit={v => update({ wantedOwnerCountOfMine: v })} placeholder="내 계정 대주 수" unit="대주" max={9999} />
                     <LazyNumber label="내 닉네임 글자 수" value={params.get('wantedNicknameChars') || ''} onCommit={v => update({ wantedNicknameChars: v })} placeholder="내 닉네임 글자 수" unit="글자" max={20} />
@@ -70,12 +70,12 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
                     <Segmented name="구하는 전적" options={RECORD_PREFERENCES} value={params.get('wantedRecordPreference') || ''} onChange={v => update({ wantedRecordPreference: v })} />
                 </div>
             </Group>
-            <Group title="구하는 래더" hint="하나라도 원하는 글을 보여줘요.">
+            <Group title="구하는 래더" hint="하나라도 맞으면 표시">
                 <SeasonPicker value={wantedTags} onChange={v => update({ wantedTags: v.length ? JSON.stringify(v) : '' })} />
             </Group>
         </>}
         {exchange && (account || category === 'ladder') && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
-        {account && buying && <Group title="내 계정으로 찾기" hint="내 계정 조건을 넣으면 받아 줄 구매 글만 보여요.">
+        {account && buying && <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 구매 글만 표시">
             <div className="grid-gap-8">
                 <LazyNumber label="내 계정 대주 수" value={params.get('ownerCountOfMine') || ''} onCommit={v => update({ ownerCountOfMine: v })} placeholder="내 계정 대주 수" unit="대주" max={9999} />
                 <LazyNumber label="내 닉네임 글자 수" value={params.get('nicknameChars') || ''} onCommit={v => update({ nicknameChars: v })} placeholder="내 닉네임 글자 수" unit="글자" max={20} />
@@ -83,9 +83,9 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
             </div>
         </Group>}
         {account && buying && <Group title="전적 조건"><Segmented name="전적 조건" options={RECORD_PREFERENCES} value={params.get('recordPreference') || ''} onChange={v => update({ recordPreference: v })} /></Group>}
-        {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '티어를 누르고 시즌을 고르세요. 하나라도 맞으면 보여줘요.'}>
+        {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'}>
             <SeasonPicker value={tags} onChange={v => update({ tags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
-            {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌을 모두 가진 글만</label>}
+            {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌 모두 포함</label>}
         </Group>}
         {account && <Group title={buying ? '원하는 우대 스킨' : '보유 우대 스킨'}>
             <SkinPicker compact value={skinTags(params.get('skinTags') || '')} onChange={v => update({ skinTags: v.length ? JSON.stringify(v) : '' })} />
@@ -217,7 +217,7 @@ export function Board() {
     });
     const submit = (e: FormEvent) => { e.preventDefault(); update({ q: q.trim() }); };
     const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
-    const title = kind === 'all' ? (params.get('q') ? '검색 결과' : '전체 거래') : KIND_NAMES[kind];
+    const title = kind === 'all' ? (params.get('q') ? '검색 결과' : '전체') : KIND_NAMES[kind];
     const highlight = readTags(query.get('tags'));
 
     return <div className="container page board">
@@ -237,7 +237,7 @@ export function Board() {
                 <span>구함</span>
             </div> : <div className="chip-scroll">{categories.map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
         </div>}
-        {proxyLocked && <div className="board-notice"><CIcon name="video-game" size={28} /><span>대리(진행) 글은 <b>대리 인증</b>을 받은 회원만 올릴 수 있어요.</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
+        {proxyLocked && <div className="board-notice"><CIcon name="video-game" size={28} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
 
         <div className="board-layout">
             <aside className="filter-panel" aria-label="필터">
@@ -248,7 +248,7 @@ export function Board() {
                 <div className="list-top">
                     <form className="search-input" role="search" onSubmit={submit}>
                         <Search size={20} />
-                        <input value={q} onChange={e => setQ(e.target.value)} placeholder={kind === 'all' ? '제목, 스킨, 닉네임으로 검색' : `${KIND_NAMES[kind]} 글에서 검색`} aria-label="검색어" />
+                        <input value={q} onChange={e => setQ(e.target.value)} placeholder={kind === 'all' ? '스킨, 제목, 닉네임 (예: 악주, 뱀동)' : `${KIND_NAMES[kind]} 글 검색`} aria-label="검색어" />
                         {q && <button type="button" className="icon-btn" aria-label="검색어 지우기" onClick={() => { setQ(''); update({ q: '' }); }}><X size={18} /></button>}
                     </form>
                     <button type="button" className="btn btn-line filter-open" onClick={() => setSheet(true)}><SlidersHorizontal size={18} />필터{chips.length > 0 && <b className="filter-count">{chips.length}</b>}</button>
@@ -261,10 +261,9 @@ export function Board() {
                     </select>}
                 </div>
                 {loading ? <SkeletonRows />
-                    : data!.error ? <EmptyState icon="warning" title="목록을 불러오지 못했어요" text={data!.error} action={<button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button>} />
+                    : data!.error ? <EmptyState icon="warning" title="목록을 불러오지 못했습니다" text={data!.error} action={<button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button>} />
                     : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>
-                    : <EmptyState icon={kind === 'all' ? 'magnifying-glass-tilted-left' : KIND_ICONS[kind]} title={chips.length ? '조건에 맞는 글이 없어요' : '아직 올라온 글이 없어요'}
-                        text={chips.length ? '필터를 줄이거나 검색어를 바꿔 보세요.' : kind === 'all' ? undefined : `${KIND_NAMES[kind]} · ${kind === 'exchange' ? `${categoryName(category)}에서 ${categoryName(wanted)} 구함` : categoryName(category)} 첫 글을 올려 보세요.`}
+                    : <EmptyState icon={kind === 'all' ? 'magnifying-glass-tilted-left' : KIND_ICONS[kind]} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-primary" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">
                     <button type="button" disabled={page <= 1} onClick={() => goPage(page - 1)}>이전</button>

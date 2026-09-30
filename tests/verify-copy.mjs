@@ -57,6 +57,17 @@ function client() {
     check((await readFile(new URL('App.tsx', root), 'utf8')).includes('인증/등급 신청하기'), "header keeps '인증/등급 신청하기'");
 }
 
+// Home, board and guide: empty states are one title, the guide has no em dash or '준비 중',
+// and the coupon rule matches the 굿즈 및 쿠폰 board ('쿠폰 코드는 입금 확인 후 전달').
+{
+    const page = async name => readFile(new URL(`../src/pages/${name}.tsx`, import.meta.url), 'utf8');
+    const home = await page('Home'), board = await page('Board'), guide = await page('Guide');
+    check(!home.includes('첫 글') && (home.match(/empty="등록된 글이 없습니다\."/g) || []).length === 3, "home shelves read '등록된 글이 없습니다.' with a 글쓰기 button");
+    check(!/첫 글|보세요|없어요/.test(board) && board.includes("'등록된 글이 없습니다'"), 'board empty state is a title with no nudge line');
+    check(!/준비 중|—/.test(guide), "guide has no '준비 중' or em dash");
+    check(guide.includes('쿠폰 코드는 입금 확인 후 전달') && !/쿠폰 코드는 글/.test(guide), 'guide coupon rule says 입금 확인 후 전달');
+}
+
 const member = client(), manager = client(), guest = client();
 const username = `c_${run}_a`, nickname = `copy${run}`;
 const joined = await member('auth/register', 'POST', { username, password, nickname });

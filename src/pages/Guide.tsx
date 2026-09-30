@@ -22,7 +22,7 @@ export default function Guide() {
     useEffect(() => { if (notices && location.hash.startsWith('#notice-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' }); }, [notices]);
 
     return <div className="container page guide">
-        <h1 className="page-title">공지·이용 안내</h1>
+        <h1 className="page-title">공지</h1>
 
         <section className="section">
             <h2 className="section-title">공지사항</h2>
@@ -39,7 +39,7 @@ export default function Guide() {
 
         <section className="section">
             <div className="section-head"><h2 className="section-title">인증</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'identity' })}>인증 신청하기</button></div>
-            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">필요한 것 · {b.requirements.join(', ')}</p></div>)}</div>
+            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">제출: {b.requirements.join(', ')}</p></div>)}</div>
         </section>
 
         <section className="section">
@@ -48,20 +48,21 @@ export default function Guide() {
                 <thead><tr><th>등급</th><th>영구</th><th>6개월</th></tr></thead>
                 <tbody>{GRADES.map(g => <tr key={g.id}>
                     <td><span className="row"><CIcon name={g.icon} size={22} />{g.name}</span></td>
-                    {g.plans.length ? <><td>{g.plans.find(p => p.id === 'permanent')?.price.toLocaleString('ko-KR') + '원'}</td><td>{g.plans.find(p => p.id === '6m') ? g.plans.find(p => p.id === '6m')!.price.toLocaleString('ko-KR') + '원' : '—'}</td></>
+                    {g.plans.length ? <><td>{g.plans.find(p => p.id === 'permanent')?.price.toLocaleString('ko-KR') + '원'}</td><td>{g.plans.find(p => p.id === '6m') ? g.plans.find(p => p.id === '6m')!.price.toLocaleString('ko-KR') + '원' : '-'}</td></>
                         : <td colSpan={2} className="grade-note">{g.note}</td>}
                 </tr>)}</tbody>
             </table>
-            <p className="muted small mt-12">{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 매니저와의 채팅에서 안내해요.'} 입금이 확인되면 매니저가 등급을 지급합니다. 등급 혜택은 준비 중이에요.</p>
+            <p className="muted small mt-12">{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</p>
         </section>
 
         <section className="section">
-            <h2 className="section-title">꼭 알아 두세요</h2>
+            <h2 className="section-title">주의사항</h2>
             <ul className="rules">
-                <li>좀비고 거래소는 회원끼리 직접 거래하는 게시판이에요. 결제 대행, 에스크로, 거래 보증을 하지 않아요.</li>
-                <li>계정 거래, 계정 공유, 대리 플레이는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>에 따라 제재될 수 있어요.</li>
-                <li>비밀번호, 인증번호, 쿠폰 코드는 글이나 채팅에 쓰지 마세요.</li>
-                <li>의심스러운 글은 글 하단의 ‘신고’로 알려 주세요. 매니저가 확인해 숨기거나 삭제해요.</li>
+                <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
+                <li>계정 거래와 대리는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
+                <li>비번, 인증번호는 글에 쓰지 마세요.</li>
+                <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
+                <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
             </ul>
         </section>
     </div>;
