@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
-import { X } from 'lucide-react';
+import { FileText, Lock, MessageCircle, Search, X } from 'lucide-react';
 import { BADGES, gradeInfo, type BadgeId, type GradeId } from '../../shared/membership';
 
 // Fluent Emoji color icons (public/icons, MIT).
@@ -16,25 +16,30 @@ export function VerifiedMark({ size = 15 }: { size?: number }) {
     return <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor" /><path d="m6 10.2 2.6 2.6L14 7.4" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
+// Text-only grade chip: plus is a gray outline, premium a brand outline, elite brand solid,
+// 관리자 an ink outline and 매니저 ink solid. The Fluent grade icons stay on the apply modal and profile grade card.
 export function GradeChip({ grade, role }: { grade?: GradeId | string | null; role?: string }) {
     if (role === 'manager') return <span className="grade grade-manager">매니저</span>;
     const info = gradeInfo(grade);
     if (info.id === 'normal') return null;
-    if (info.id === 'admin') return <span className="grade grade-admin">관리자</span>;
-    return <span className="grade"><img src={`/icons/${info.icon}.svg`} alt="" />{info.name}</span>;
+    return <span className={'grade grade-' + info.id}>{info.name}</span>;
 }
 
+// Verification name plus check mark. Both the full name (본인 인증) and the short one (본인) are
+// rendered; the name line shows the short one only in compact rows. The name is never dropped.
 export function Verified({ badges }: { badges?: BadgeId[] | string[] }) {
     if (!badges?.length) return null;
-    return <>{BADGES.filter(b => badges.includes(b.id as never)).map(b => <Fragment key={b.id}>{' '}<span className="verified" title={b.name + ' 완료'}><VerifiedMark size={14} />{b.name}</span></Fragment>)}</>;
+    return <>{BADGES.filter(b => badges.includes(b.id as never)).map(b => <Fragment key={b.id}>{' '}<span className="verified" title={b.name} aria-label={b.name}><VerifiedMark size={14} /><span className="v-full">{b.name}</span><span className="v-short">{b.short}</span></span></Fragment>)}</>;
 }
 
 // Nickname followed by the grade chip and verification checks. Each chip and check is preceded by
 // a space: the inline-flex line drops it, and a caption row that renders the line inline keeps the
 // words apart for screen readers and copying. Nothing trails the last part, so text glued after it stays put.
-export function NameLine({ nickname, grade, role, badges, size = '' }: { nickname: string; grade?: string | null; role?: string; badges?: string[]; size?: '' | 'lg' }) {
+// compact keeps everything on one line for list rows, chat and the header menu: the nickname
+// ellipsizes first and the badges use their short names.
+export function NameLine({ nickname, grade, role, badges, size = '', compact = false }: { nickname: string; grade?: string | null; role?: string; badges?: string[]; size?: '' | 'lg'; compact?: boolean }) {
     const chip = GradeChip({ grade, role });
-    return <span className={'name-line' + (size ? ' name-line-' + size : '')}>
+    return <span className={'name-line' + (size ? ' name-line-' + size : '') + (compact ? ' compact' : '')}>
         <span className="nick">{nickname}</span>
         {chip && <>{' '}{chip}</>}
         <Verified badges={badges} />
@@ -63,9 +68,13 @@ export function Modal({ open, onClose, title, description, children, footer, wid
     </Dialog.Root>;
 }
 
-// No icon unless the caller passes one (the old default magnifier had purple fills).
-export function EmptyState({ icon, title, text, action }: { icon?: string; title: string; text?: string; action?: ReactNode }) {
-    return <div className="empty">{icon && <CIcon name={icon} size={56} />}<h3>{title}</h3>{text && <p>{text}</p>}{action}</div>;
+const EMPTY_ICONS = { search: Search, message: MessageCircle, lock: Lock, file: FileText };
+export type EmptyIcon = keyof typeof EMPTY_ICONS;
+
+// No icon unless the caller passes one; an empty state never shows a 3D illustration.
+export function EmptyState({ icon, title, text, action }: { icon?: EmptyIcon; title: string; text?: string; action?: ReactNode }) {
+    const Icon = icon ? EMPTY_ICONS[icon] : null;
+    return <div className="empty">{Icon && <Icon className="empty-icon" size={32} strokeWidth={1.75} aria-hidden="true" />}<h3>{title}</h3>{text && <p>{text}</p>}{action}</div>;
 }
 
 export function SkeletonRows({ count = 4, height = 132 }: { count?: number; height?: number }) {

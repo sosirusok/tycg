@@ -50,6 +50,8 @@ export type Post = {
     status: string;
     created_at: number;
     updated_at: number;
+    // Last 끌올 (equal to created_at until the first bump).
+    bumped_at?: number;
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];

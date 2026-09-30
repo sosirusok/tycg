@@ -36,10 +36,10 @@ export default function ProfilePage({ id }: { id?: string }) {
     }, [id, tab, postsVersion]);
 
     if (error) return <div className="container page">{error.status === 404
-        ? <EmptyState icon="warning" title="없는 회원입니다" />
-        : <EmptyState icon="warning" title="회원 정보를 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); setRetry(n => n + 1); }}>다시 시도</button>} />}</div>;
+        ? <EmptyState icon="search" title="없는 회원입니다" />
+        : <EmptyState title="회원 정보를 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); setRetry(n => n + 1); }}>다시 시도</button>} />}</div>;
     if (!user) return <div className="container page"><SkeletonRows count={2} height={160} /></div>;
-    if (user.deleted) return <div className="container page"><EmptyState icon="warning" title="탈퇴한 회원입니다" /></div>;
+    if (user.deleted) return <div className="container page"><EmptyState title="탈퇴한 회원입니다" /></div>;
 
     async function save() {
         setSaving(true); setEditError('');
@@ -114,8 +114,8 @@ export default function ProfilePage({ id }: { id?: string }) {
 
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }]} />
-            <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} />)}</div></>
-                : <EmptyState title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
+            <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div></>
+                : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>

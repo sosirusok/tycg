@@ -5,7 +5,7 @@ import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound } fro
 import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
 import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
 import { AppProvider, setPageTitle, useApp } from './app/state';
-import { Avatar, CIcon, NameLine, SkeletonRows } from './components/ui';
+import { Avatar, CIcon, EmptyState, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
 import { Home } from './pages/Home';
@@ -94,7 +94,7 @@ function Shell() {
                         <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                             <DropdownMenu.Content className="menu" align="end" sideOffset={8}>
-                                <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} role={me.role} badges={me.badges} /></div>
+                                <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} role={me.role} badges={me.badges} compact /></div>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/profile/' + me.id)}>내 프로필</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/posts')}>내 거래</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/favorites')}>찜한 글</DropdownMenu.Item>
@@ -144,5 +144,5 @@ function Shell() {
 }
 
 function NotFound() {
-    return <div className="container page"><div className="empty"><CIcon name="warning" size={56} /><h3>없는 페이지입니다</h3><Link className="btn btn-primary" to="/">홈으로</Link></div></div>;
+    return <div className="container page"><EmptyState icon="search" title="없는 페이지입니다" action={<Link className="btn btn-primary" to="/">홈으로</Link>} /></div>;
 }

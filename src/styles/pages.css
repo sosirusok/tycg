@@ -146,7 +146,6 @@
 .lightbox-close { position: absolute; top: 16px; right: 16px; color: var(--white); }
 .lightbox-close:hover { background: rgba(255, 255, 255, .12); }
 @media (max-width: 640px) { .hero-write { display: none; } }
-.post-card-specs .spec:first-of-type::before { content: none; }
 
 /* editor */
 .editor { max-width: calc(760px + var(--gutter) * 2); }
@@ -210,7 +209,7 @@
 .chat-item-main { display: grid; gap: 3px; flex: 1; min-width: 0; }
 .chat-item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
 .chat-item-top .name-line { min-width: 0; }
-.chat-item-top time { padding-top: 2px; }
+.chat-item-side { display: grid; justify-items: end; align-content: start; gap: 4px; flex: none; align-self: stretch; }
 .chat-item-last { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-3); font-size: var(--fs-13); }
 .chat-item-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .app-card-who .name-line { display: inline; }

@@ -39,27 +39,28 @@ export default function Chat({ id }: { id?: string }) {
         return () => clearInterval(t);
     }, [me?.id, loadChats]);
 
-    if (!me) return <div className="container page"><EmptyState icon="key" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
 
     return <div className="container chat-page">
         <div className={'chat-shell' + (id ? ' has-room' : '')}>
             <aside className="chat-list" aria-label="채팅 목록">
                 <h1 className="chat-list-title">채팅</h1>
-                {listError === 401 ? <EmptyState icon="key" title="로그인이 필요합니다" action={<button type="button" className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} />
-                    : chats === null && listError !== null ? <EmptyState icon="warning" title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(); }}>다시 시도</button>} />
+                {listError === 401 ? <EmptyState icon="lock" title="로그인이 필요합니다" action={<button type="button" className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} />
+                    : chats === null && listError !== null ? <EmptyState title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(); }}>다시 시도</button>} />
                     : chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
-                    : chats.length === 0 ? <EmptyState title="채팅 내역이 없습니다" />
+                    : chats.length === 0 ? <EmptyState icon="message" title="채팅 내역이 없습니다" />
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
                         <Avatar name={c.nickname} />
                         <span className="chat-item-main">
-                            <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} role={c.role} badges={c.badges} /><time className="muted small nowrap">{relativeTime(c.updated_at)}</time></span>
+                            <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} role={c.role} badges={c.badges} compact /></span>
                             <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}<span className="chat-item-text">{c.last_message || '새 채팅'}</span></span>
                         </span>
-                        {c.unread > 0 && <b className="unread">{c.unread > 99 ? '99+' : c.unread}</b>}
+                        {/* Time above the unread count, so the name line keeps the row's full width. */}
+                        <span className="chat-item-side"><time className="muted small nowrap">{relativeTime(c.updated_at)}</time>{c.unread > 0 && <b className="unread">{c.unread > 99 ? '99+' : c.unread}</b>}</span>
                     </Link></li>)}</ul>}
             </aside>
             {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
-                : <section className="chat-room chat-empty"><EmptyState title="채팅방을 선택하세요" /></section>}
+                : <section className="chat-room chat-empty"><EmptyState icon="message" title="채팅방을 선택하세요" /></section>}
         </div>
     </div>;
 }
@@ -198,7 +199,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         catch (err) { toast.error(errorText(err)); }
     }
 
-    if (error) return <section className="chat-room"><EmptyState icon="warning" title="채팅방을 열 수 없습니다" text={error} action={<Link className="btn btn-line" to="/chat">채팅 목록</Link>} /></section>;
+    if (error) return <section className="chat-room"><EmptyState title="채팅방을 열 수 없습니다" text={error} action={<Link className="btn btn-line" to="/chat">채팅 목록</Link>} /></section>;
 
     const managerView = me.role === 'manager' && partner && partner.role !== 'manager';
     let prevDay = '';
@@ -209,7 +210,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             <header className="room-head">
                 <Link to="/chat" className="icon-btn room-back" aria-label="채팅 목록"><ArrowLeft size={22} /></Link>
                 {partner?.deleted ? <span className="room-who"><Avatar name={partner.nickname} size="sm" /><span>{partner.nickname}</span></span>
-                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /></Link> : <span className="grow" />}
+                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} compact /></Link> : <span className="grow" />}
                 <span className="grow" />
                 {managerView && <button type="button" className="btn btn-line btn-sm room-panel-btn" onClick={() => setPanel(true)}><UserCog size={16} />회원 관리</button>}
                 {partner && partner.role !== 'manager' && !partner.deleted && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}

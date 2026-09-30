@@ -111,15 +111,23 @@
 .avatar-lg { width: 72px; height: 72px; font-size: var(--fs-28); }
 .name-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
 .name-line .nick { color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.grade { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px 0 4px; border: 1px solid var(--line); border-radius: var(--r-4); color: var(--ink-2); font-size: var(--fs-12); font-weight: 700; white-space: nowrap; }
-.grade img { width: 13px; height: 13px; }
-.grade-manager { background: var(--brand); border-color: var(--brand); color: var(--white); padding: 0 6px; }
-.grade-admin { background: var(--ink-2); border-color: var(--ink-2); color: var(--white); }
-.verified { display: inline-flex; align-items: center; gap: 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+/* Grade chips are text only: plus gray outline, premium brand outline, elite brand solid,
+   관리자 ink outline, 매니저 ink solid. */
+.grade { display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--r-4); background: transparent; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; line-height: 1; white-space: nowrap; }
+.grade-plus { border-color: var(--line-2); color: var(--ink-2); }
+.grade-premium { border-color: var(--brand); color: var(--brand); }
+.grade-elite { background: var(--brand); border-color: var(--brand); color: var(--white); }
+.grade-admin { border-color: var(--ink); color: var(--ink); font-weight: 700; }
+.grade-manager { background: var(--ink); border-color: var(--ink); color: var(--white); }
+.verified { display: inline-flex; align-items: center; flex: none; gap: 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
 .verified svg { color: var(--brand); flex: none; }
+/* Compact rows (lists, chat, header menu): one line, short badge names, the nickname ellipsizes first. */
+.name-line.compact { flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; line-height: 20px; }
+.name-line.compact .nick { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-line.compact .v-full { display: none; }
+.name-line:not(.compact) .v-short { display: none; }
 .name-line-lg .nick { font-size: var(--fs-24); font-weight: 700; }
-.name-line-lg .grade { height: 24px; font-size: var(--fs-13); padding: 0 8px 0 6px; }
-.name-line-lg .grade img { width: 16px; height: 16px; }
+.name-line-lg .grade { height: 24px; font-size: var(--fs-13); padding: 0 8px; }
 .name-line-lg .verified { font-size: var(--fs-14); }
 
 .mobile-only { display: none; }

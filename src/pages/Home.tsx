@@ -18,7 +18,7 @@ function MiniCard({ post }: { post: Post }) {
         <h3>{post.title}</h3>
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec">{summary.slice(0, 2).join(' · ')}</span>}</div>}
         <PriceLine post={post} />
-        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="muted small nowrap">{relativeTime(post.created_at)}</span></div>
+        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /><span className="muted small nowrap">{relativeTime(post.created_at)}</span></div>
     </Link>;
 }
 

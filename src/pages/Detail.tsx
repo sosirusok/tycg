@@ -87,8 +87,8 @@ export function Detail({ id }: { id: string }) {
     useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
 
     if (error) return <div className="container page">{error.status === 404
-        ? <EmptyState icon="warning" title="삭제되었거나 없는 글입니다" action={<Link to="/trade" className="btn btn-primary">목록으로</Link>} />
-        : <EmptyState icon="warning" title="글을 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); void load(); }}>다시 시도</button>} />}</div>;
+        ? <EmptyState icon="file" title="삭제되었거나 없는 글입니다" action={<Link to="/trade" className="btn btn-primary">목록으로</Link>} />
+        : <EmptyState title="글을 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); void load(); }}>다시 시도</button>} />}</div>;
     if (!post) return <div className="container page"><SkeletonRows count={3} height={160} /></div>;
 
     const mine = me?.id === post.author_id, manager = me?.role === 'manager';

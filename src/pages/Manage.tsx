@@ -22,7 +22,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
-    if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="key" title="매니저 전용 페이지입니다" /></div>;
+    if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="lock" title="매니저 전용 페이지입니다" /></div>;
     const pendingReports = summary?.reports.filter(r => r.status === 'pending').length || 0;
     return <div className="container page">
         <h1 className="page-title">매니저 메뉴</h1>
@@ -36,7 +36,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
             {tab === 'applications' ? <Applications onChange={loadSummary} />
                 : tab === 'members' ? <Members />
                 : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
-                : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState icon="shield" title="숨긴 글이 없습니다" /> : <SkeletonRows />)
+                : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
                 : tab === 'notices' ? <Notices /> : <Settings />}
         </div>
     </div>;
@@ -65,7 +65,7 @@ function Applications({ onChange }: { onChange: () => void }) {
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
             {a.status === 'pending' && <><button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => act(a, 'approve')}>승인</button><button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => setRejecting(a)}>반려</button></>}
-        </li>)}</ul> : <EmptyState icon="check-mark-button" title={status === 'pending' ? '대기 중인 신청이 없습니다' : '신청 내역이 없습니다'} />}</div>
+        </li>)}</ul> : <EmptyState icon="file" title={status === 'pending' ? '대기 중인 신청이 없습니다' : '신청 내역이 없습니다'} />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => { void load(); onChange(); }} />}</Modal>
         <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="신청 반려" description={rejecting ? `${rejecting.nickname}님의 ${applicationTitle(rejecting)}` : ''}
             footer={<button className="btn btn-dark btn-lg" onClick={() => rejecting && act(rejecting, 'reject', note)}>반려</button>}>
@@ -86,14 +86,14 @@ function Members() {
         <div className="mt-16">{users === null ? <SkeletonRows count={4} height={60} /> : users.length ? <ul className="simple-list">{users.map(u => <li key={u.id}>
             <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
-        </li>)}</ul> : <EmptyState title="검색 결과가 없습니다" />}</div>
+        </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
     </>;
 }
 
 function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
     if (!reports) return <SkeletonRows />;
-    if (!reports.length) return <EmptyState icon="shield" title="접수된 신고가 없습니다" />;
+    if (!reports.length) return <EmptyState title="접수된 신고가 없습니다" />;
     const act = async (task: Promise<unknown>, message: string) => { try { await task; toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } };
     return <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
         <span className="grow">
@@ -125,7 +125,7 @@ function Notices() {
             <span className="grow"><strong>{n.title}</strong><span className="muted small">{dateText(n.created_at)}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setEditing(n)}>수정</button>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setDeleting(n)}>삭제</button>
-        </li>)}</ul> : <EmptyState icon="megaphone" title="공지가 없습니다" />}</div>
+        </li>)}</ul> : <EmptyState title="공지가 없습니다" />}</div>
         <Modal open={!!editing} onClose={() => setEditing(null)} title={editing?.id ? '공지 수정' : '새 공지'} footer={<button className="btn btn-primary btn-lg" onClick={save}>저장</button>}>
             <div className="form-stack">
                 <label className="field"><span className="field-label">제목</span><input className="input" maxLength={100} value={editing?.title || ''} onChange={e => setEditing({ ...editing, title: e.target.value })} /></label>

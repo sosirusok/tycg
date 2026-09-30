@@ -210,8 +210,8 @@ export default function Editor({ id }: { id?: string }) {
         finally { setBusy(false); }
     }
 
-    if (!me) return <div className="container page"><EmptyState icon="key" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
-    if (loadError) return <div className="container page"><EmptyState icon="warning" title="글을 불러오지 못했습니다" text={loadError} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (loadError) return <div className="container page"><EmptyState title="글을 불러오지 못했습니다" text={loadError} /></div>;
     if (!loaded) return <div className="container page"><SkeletonRows count={3} height={180} /></div>;
 
     const { kind, category, details: d } = form;

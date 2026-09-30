@@ -307,9 +307,9 @@ export function Board() {
                     </select>}
                 </div>
                 {loading ? <SkeletonRows />
-                    : data!.error ? <EmptyState icon="warning" title="목록을 불러오지 못했습니다" text={data!.error} action={<button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button>} />
-                    : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>
-                    : <EmptyState icon={kind === 'all' ? undefined : KIND_ICONS[kind]} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
+                    : data!.error ? <EmptyState title="목록을 불러오지 못했습니다" text={data!.error} action={<button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button>} />
+                    : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>
+                    : <EmptyState icon={chips.length ? 'search' : 'file'} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-primary" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">
                     <button type="button" disabled={page <= 1} onClick={() => goPage(page - 1)}>이전</button>
