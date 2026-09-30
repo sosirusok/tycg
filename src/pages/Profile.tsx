@@ -25,7 +25,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             .then(d => { setPosts(d.posts); setTotal(d.total); }).catch(() => setPosts([]));
     }, [id, tab]);
 
-    if (error) return <div className="container page"><EmptyState icon="warning" title="회원을 찾을 수 없어요" text={error} /></div>;
+    if (error) return <div className="container page"><EmptyState icon="warning" title="없는 회원입니다" text={error} /></div>;
     if (!user) return <div className="container page"><SkeletonRows count={2} height={160} /></div>;
 
     async function save() {
@@ -36,7 +36,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             const d = await api<{ user: Profile }>('users/' + user!.id);
             setUser(d.user);
             await refreshMe();
-            setEditing(false); toast('프로필을 저장했습니다.');
+            setEditing(false); toast('저장 완료');
         } catch (e) { toast.error(errorText(e)); }
         finally { setSaving(false); }
     }
@@ -45,7 +45,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         catch (e) { toast.error(errorText(e)); }
     });
     const block = () => requireLogin(async () => {
-        try { await api('blocks', 'POST', { userId: user.id, active: true }); toast('차단했어요. 내 거래 > 차단 목록에서 풀 수 있어요.'); }
+        try { await api('blocks', 'POST', { userId: user.id, active: true }); toast('차단 완료. 해제는 내 거래 > 차단'); }
         catch (e) { toast.error(errorText(e)); }
     });
     const grade = gradeInfo(user.grade);
@@ -84,7 +84,6 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
                     <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
                     {mine && user.grade_expires_at && <p className="muted small">{dateText(user.grade_expires_at)}까지</p>}
-                    <p className="muted small mt-8">일반 → 플러스 → 프리미엄 → 엘리트 → 관리자</p>
                 </>}
             </div>
         </section>
@@ -98,13 +97,13 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래 중' }, { id: 'closed', label: '거래 완료' }]} />
             <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} />)}</div></>
-                : <EmptyState icon="memo" title={tab === 'active' ? '거래 중인 글이 없어요' : '거래 완료된 글이 없어요'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
+                : <EmptyState icon="memo" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>
             <div className="form-stack">
                 <label className="field"><span className="field-label">닉네임</span><input className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager'} /></label>
-                <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="주로 하는 거래, 연락 가능한 시간 등" /></label>
+                <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="예: 래더계 위주 거래, 밤에 답장 빠름" /></label>
             </div>
         </Modal>
     </div>;

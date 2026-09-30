@@ -74,7 +74,7 @@ export function Home() {
             <button type="button" className="promo" onClick={() => proxyReady ? void navigate('/write?kind=proxy_offer&category=ladder') : openApply({ kind: 'badge', target: 'proxy' })}>
                 <span className="promo-text">
                     <span className="promo-eyebrow">대리(진행) 게시판</span>
-                    <strong>{proxyReady ? '대리 인증 회원이에요. 진행 글을 올려 보세요' : '대리 진행 글은 대리 인증 회원만 올릴 수 있어요'}</strong>
+                    <strong>{proxyReady ? '대리 인증 완료' : '대리(진행) 글쓰기는 대리 인증 필요'}</strong>
                 </span>
                 <span className="promo-cta">{proxyReady ? '진행 글 쓰기' : '대리 인증 신청'}<ChevronRight size={18} /></span>
                 <CIcon name={proxyReady ? 'check-mark-button' : 'locked'} size={84} />

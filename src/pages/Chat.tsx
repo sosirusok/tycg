@@ -15,7 +15,7 @@ type Message = { id: number; sender_id: string; body: string; type: string; refe
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'>;
 
-const OFFER_STATUS: Record<string, string> = { pending: '답변 대기', accepted: '수락됨', declined: '거절됨', withdrawn: '철회됨', cancelled: '취소됨' };
+const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Times are shown in Korean time wherever the browser is.
 function timeLabel(t: number) { return new Date(t).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }); }
@@ -33,25 +33,25 @@ export default function Chat({ id }: { id?: string }) {
         return () => clearInterval(t);
     }, [me?.id, loadChats]);
 
-    if (!me) return <div className="container page"><EmptyState icon="speech-balloon" title="로그인하고 채팅을 확인하세요" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="speech-balloon" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
 
     return <div className="container chat-page">
         <div className={'chat-shell' + (id ? ' has-room' : '')}>
             <aside className="chat-list" aria-label="채팅 목록">
                 <h1 className="chat-list-title">채팅</h1>
                 {chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
-                    : chats.length === 0 ? <EmptyState icon="speech-balloon" title="아직 대화가 없어요" text="거래 글에서 ‘채팅으로 문의하기’를 눌러 보세요." />
+                    : chats.length === 0 ? <EmptyState icon="speech-balloon" title="채팅 내역이 없습니다" />
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
                         <Avatar name={c.nickname} />
                         <span className="chat-item-main">
                             <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} role={c.role} badges={c.badges} /><time className="muted small nowrap">{relativeTime(c.updated_at)}</time></span>
-                            <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}<span className="chat-item-text">{c.last_message || '대화를 시작해 보세요'}</span></span>
+                            <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}<span className="chat-item-text">{c.last_message || '새 채팅'}</span></span>
                         </span>
                         {c.unread > 0 && <b className="unread">{c.unread > 99 ? '99+' : c.unread}</b>}
                     </Link></li>)}</ul>}
             </aside>
             {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
-                : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="대화를 선택해 주세요" text="인증/등급 신청도 매니저와의 채팅에서 진행돼요." /></section>}
+                : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="채팅방을 선택하세요" /></section>}
         </div>
     </div>;
 }
@@ -145,23 +145,23 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
     }
     async function offerAction(offer: Offer, action: string) {
-        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '제안을 수락했어요. 거래 상태가 예약중으로 바뀌었어요.' : action === 'declined' ? '제안을 거절했어요.' : '제안을 철회했어요.'); await poll(); }
+        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료. 글이 예약중으로 바뀌었습니다.' : action === 'declined' ? '거절 완료' : '제시 취소 완료'); await poll(); }
         catch (err) { toast.error(errorText(err)); }
     }
     async function appAction(app: Application, action: 'approve' | 'reject' | 'cancel', note = '') {
         if (appBusy) return;
         setAppBusy(app.id);
-        try { await api('applications/' + app.id, 'PATCH', { action, note }); toast(action === 'approve' ? '지급했어요.' : action === 'reject' ? '반려했어요.' : '신청을 취소했어요.'); await poll(); activity.current(); }
+        try { await api('applications/' + app.id, 'PATCH', { action, note }); toast(action === 'approve' ? '지급 완료' : action === 'reject' ? '반려 완료' : '신청 취소 완료'); await poll(); activity.current(); }
         catch (err) { toast.error(errorText(err)); }
         finally { setAppBusy(''); }
     }
     async function toggleBlock() {
         if (!partner) return;
-        try { await api('blocks', 'POST', { userId: partner.id, active: !blocked }); setBlocked(!blocked); toast(blocked ? '차단을 풀었어요.' : '차단했어요. 서로 메시지를 보낼 수 없어요.'); }
+        try { await api('blocks', 'POST', { userId: partner.id, active: !blocked }); setBlocked(!blocked); toast(blocked ? '차단 해제' : '차단 완료'); }
         catch (err) { toast.error(errorText(err)); }
     }
 
-    if (error) return <section className="chat-room"><EmptyState icon="warning" title="대화를 열 수 없어요" text={error} action={<Link className="btn btn-line" to="/chat">채팅 목록</Link>} /></section>;
+    if (error) return <section className="chat-room"><EmptyState icon="warning" title="채팅방을 열 수 없습니다" text={error} action={<Link className="btn btn-line" to="/chat">채팅 목록</Link>} /></section>;
 
     const managerView = me.role === 'manager' && partner && partner.role !== 'manager';
     let prevDay = '';
@@ -174,7 +174,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 {partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /></Link> : <span className="grow" />}
                 <span className="grow" />
                 {managerView && <button type="button" className="btn btn-line btn-sm room-panel-btn" onClick={() => setPanel(true)}><UserCog size={16} />회원 관리</button>}
-                {partner && partner.role !== 'manager' && <button type="button" className="icon-btn" aria-label={blocked ? '차단 풀기' : '차단하기'} title={blocked ? '차단 풀기' : '차단하기'} onClick={toggleBlock}><Ban size={19} /></button>}
+                {partner && partner.role !== 'manager' && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}
             </header>
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 {hasMore && <button type="button" className="btn btn-soft btn-xs older" onClick={loadOlder}>이전 대화 보기</button>}
@@ -198,12 +198,12 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 })}
             </div>
             <form className="composer" onSubmit={send}>
-                {blocked ? <p className="muted small composer-blocked">차단된 대화예요. 메시지를 보낼 수 없어요.</p> : <>
+                {blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p> : <>
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
                         <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => attach(e.target.files)} />
                         <button type="button" className="icon-btn" aria-label="사진 보내기" disabled={uploading || photos.length >= 6} onClick={() => fileInput.current?.click()}>{uploading ? <LoaderCircle size={20} className="spin" /> : <ImagePlus size={22} />}</button>
-                        <textarea ref={input} rows={Math.min(6, Math.max(1, text.split('\n').length))} value={text} maxLength={2000} onChange={e => setText(e.target.value)} onKeyDown={onKey} placeholder="메시지를 입력하세요" aria-label="메시지" />
+                        <textarea ref={input} rows={Math.min(6, Math.max(1, text.split('\n').length))} value={text} maxLength={2000} onChange={e => setText(e.target.value)} onKeyDown={onKey} placeholder="메시지 입력" aria-label="메시지" />
                         <button type="submit" className="send-btn" aria-label="보내기" disabled={sending || uploading || (!text.trim() && !photos.length)}>{sending ? <LoaderCircle size={20} className="spin" /> : <Send size={20} />}</button>
                     </div>
                 </>}
@@ -221,16 +221,16 @@ function ListingCard({ postId, title }: { postId: number; title: string }) {
 }
 
 function OfferCard({ offer, me, onAction }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void }) {
-    if (!offer) return <div className="sys-msg">가격 제안</div>;
+    if (!offer) return <div className="sys-msg">가격 제시</div>;
     const received = offer.sender_id !== me.id;
     return <div className="event-card">
-        <span className="muted small">{received ? '받은 가격 제안' : '보낸 가격 제안'} · <Link to={'/posts/' + offer.post_id}>{offer.title}</Link></span>
+        <span className="muted small">{received ? '받은 제시' : '보낸 제시'} · <Link to={'/posts/' + offer.post_id}>{offer.title}</Link></span>
         <strong className="event-amount">{priceText(offer.amount)}</strong>
         {offer.note && <p className="small">{offer.note}</p>}
         <span className="event-status">{OFFER_STATUS[offer.status] || offer.status}</span>
         {offer.status === 'pending' && <div className="row mt-8">
             {received ? <><button type="button" className="btn btn-primary btn-sm grow" onClick={() => onAction(offer, 'accepted')}>수락</button><button type="button" className="btn btn-line btn-sm grow" onClick={() => onAction(offer, 'declined')}>거절</button></>
-                : <button type="button" className="btn btn-line btn-sm grow" onClick={() => onAction(offer, 'withdrawn')}>제안 철회</button>}
+                : <button type="button" className="btn btn-line btn-sm grow" onClick={() => onAction(offer, 'withdrawn')}>제시 취소</button>}
         </div>}
     </div>;
 }
@@ -241,12 +241,12 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction }: { app
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
         <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : partner ? <><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} />님의 신청</> : `${app.nickname || '회원'}님의 신청`} · {timeLabel(at)}</span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
-        {app.status === 'pending' && !manager && <p className="small muted">필요한 정보를 이 채팅으로 보내 주시면 매니저가 확인 후 지급해요.</p>}
+        {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
         {app.status === 'rejected' && app.note && <p className="small">반려 사유: {app.note}</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <input className="input" value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="반려 사유 (선택)" autoFocus />
-            <div className="row"><button type="button" className="btn btn-dark btn-sm grow" disabled={busy} onClick={() => onAction(app, 'reject', note)}>반려하기</button><button type="button" className="btn btn-line btn-sm" onClick={() => setRejecting(false)}>취소</button></div>
-        </div> : <div className="row mt-8"><button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => onAction(app, 'approve')}>{busy ? <LoaderCircle size={16} className="spin" /> : '승인하고 지급'}</button><button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setRejecting(true)}>반려</button></div>)
+            <div className="row"><button type="button" className="btn btn-dark btn-sm grow" disabled={busy} onClick={() => onAction(app, 'reject', note)}>반려</button><button type="button" className="btn btn-line btn-sm" onClick={() => setRejecting(false)}>취소</button></div>
+        </div> : <div className="row mt-8"><button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => onAction(app, 'approve')}>{busy ? <LoaderCircle size={16} className="spin" /> : '승인'}</button><button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setRejecting(true)}>반려</button></div>)
             : mine && <button type="button" className="btn btn-text small mt-8" disabled={busy} onClick={() => onAction(app, 'cancel')}>신청 취소</button>)}
     </div>;
 }
