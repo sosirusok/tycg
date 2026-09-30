@@ -257,8 +257,13 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             ]);
             return json({ password });
         }
+        // 회수 of an unexpired 6-month row also removes the member's other unexpired 6-month rows of
+        // that grade. Earlier code added a row per renewal (0010_stacked_grades_merge folds those),
+        // and the previous Worker may still add one while a deploy runs; one 회수 ends the period.
         if (p[3] === 'grades' && p[4] && method === 'DELETE') {
-            const r = await db().prepare('DELETE FROM user_grades WHERE id=? AND user_id=?').bind(p[4], p[2]).run();
+            const now = Date.now();
+            const r = await db().prepare('DELETE FROM user_grades WHERE user_id=? AND (id=? OR (expires_at>? AND grade=(SELECT grade FROM user_grades WHERE id=? AND user_id=? AND expires_at>?)))')
+                .bind(p[2], p[4], now, p[4], p[2], now).run();
             if (!r.meta.changes) fail(404, '지급 내역을 찾을 수 없습니다.');
             return json({ ok: true });
         }

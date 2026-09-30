@@ -84,12 +84,14 @@ export function Detail({ id }: { id: string }) {
     if (!post) return <div className="container page"><SkeletonRows count={3} height={160} /></div>;
 
     const mine = me?.id === post.author_id, manager = me?.role === 'manager';
-    const canOffer = !mine && post.status === 'open' && post.kind === 'sell' && (post.accepts_offers === 1 || post.price_mode === 'offer');
+    // A post hidden by 회원 탈퇴 cannot be published again, and its author takes no chats or offers.
+    const authorGone = !!(post as Post & { author_deleted?: boolean }).author_deleted;
+    const withdrawnPost = authorGone || (post as Post & { hidden_reason?: string }).hidden_reason === '탈퇴';
+    // Only the manager and the author see a hidden post, and a hidden post takes no offers.
+    const canOffer = !mine && !withdrawnPost && !post.hidden && post.status === 'open' && post.kind === 'sell' && (post.accepts_offers === 1 || post.price_mode === 'offer');
     const exchangeWanted = post.details.wantedCategory || 'account';
     // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
     const lostProxy = mine && post.kind === 'proxy_offer' && me?.role !== 'manager' && !me?.badges.includes('proxy');
-    // A post hidden by 회원 탈퇴 cannot be published again.
-    const withdrawnPost = (post as Post & { hidden_reason?: string }).hidden_reason === '탈퇴';
 
     async function startChat() {
         requireLogin(async () => {
@@ -164,7 +166,7 @@ export function Detail({ id }: { id: string }) {
                         <select className="select" value={post.status} onChange={e => setStatus(e.target.value)}>{Object.entries(STATUS_NAMES).filter(([k]) => !lostProxy || k === post.status || k === 'closed').map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
                     {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
                     <button type="button" className="btn btn-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} />삭제</button>
-                </div> : <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
+                </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
                     {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
@@ -175,7 +177,7 @@ export function Detail({ id }: { id: string }) {
             </aside>
         </div>
 
-        {!mine && <div className="mobile-cta">
+        {!mine && !withdrawnPost && <div className="mobile-cta">
             <PriceLine post={post} />
             <button type="button" className={'icon-btn' + (post.favorite ? ' is-on' : '')} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={22} fill={post.favorite ? 'currentColor' : 'none'} /></button>
             {canOffer && <button type="button" className="btn btn-line" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
@@ -200,6 +202,11 @@ export function Detail({ id }: { id: string }) {
 }
 
 function AuthorBox({ post, className }: { post: Post; className: string }) {
+    // A withdrawn author has no profile; the name is plain 탈퇴회원 without grade or badges.
+    if ((post as Post & { author_deleted?: boolean }).author_deleted) return <div className={'author-box ' + className}>
+        <Avatar name={post.nickname} />
+        <span className="grow"><NameLine nickname={post.nickname} /></span>
+    </div>;
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats">프로필 보기</span></span>

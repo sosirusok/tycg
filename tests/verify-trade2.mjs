@@ -181,12 +181,13 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal((await q(`chats/${opened.data.id}/messages`, 'POST', { body: '안녕하세요', postId: postA })).status, 201, 'F13 first message about post A');
     equal((await messages(q, opened.data.id)).map(m => [m.type, m.type === 'listing' ? m.reference_id : m.body]),
         [['listing', String(postA)], ['text', '안녕하세요']], 'F13 the chat holds exactly [listing, text]');
-    check((await s('chats/unread')).data.unread > unread, 'F13 the message reaches the seller');
+    equal((await s('chats/unread')).data.unread, unread + 1, 'F13 the message reaches the seller, and the post card is not counted as unread');
     check((await s('chats')).data.chats.some(c => c.id === opened.data.id), 'F13 the chat is listed after the first message');
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '이것도요', postId: postB });
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '다시 A요', postId: postA });
     await q(`chats/${opened.data.id}/messages`, 'POST', { body: '계속 A요', postId: postA });
     equal((await messages(q, opened.data.id)).filter(m => m.type === 'listing').map(m => m.reference_id), [postA, postB, postA].map(String), 'F13 asking about B then A gives cards [A, B, A]');
+    equal([(await s('chats/unread')).data.unread, (await s('chats')).data.chats.find(c => c.id === opened.data.id)?.unread], [unread + 4, 4], 'F13 unread counts only the 4 texts, not the post cards');
     equal((await s(`chats/${opened.data.id}/messages`, 'POST', { body: '제 글이에요', postId: postA })).status, 400, 'F13 the post author cannot attach their own post');
 }
 

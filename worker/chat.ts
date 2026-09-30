@@ -55,15 +55,16 @@ function partner(row: any) {
 export async function chatHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
     const method = req.method, u = await requireUser(req);
     // Polled on every page for the header badge. It also returns the member's current
-    // badges and grade so a grant shows up without reloading the page.
+    // badges and grade so a grant shows up without reloading the page. The post card written
+    // before a first message is not a message of its own, so it never counts as unread.
     if (p[1] === 'unread' && method === 'GET') {
-        const r = await db().prepare('SELECT COUNT(*) AS n FROM conversations c JOIN messages m ON m.conversation_id=c.id AND m.sender_id!=? AND m.read_at IS NULL WHERE c.user_a=? OR c.user_b=?').bind(u.id, u.id, u.id).first<any>();
+        const r = await db().prepare("SELECT COUNT(*) AS n FROM conversations c JOIN messages m ON m.conversation_id=c.id AND m.sender_id!=? AND m.read_at IS NULL AND m.type!='listing' WHERE c.user_a=? OR c.user_b=?").bind(u.id, u.id, u.id).first<any>();
         return json({ unread: r?.n || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
         // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
-            (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL) AS unread,
+            (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL AND type!='listing') AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications
             FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id) ORDER BY c.updated_at DESC LIMIT 100`)
             .bind(u.id, u.id, u.id, u.id).all();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // Only role 'manager' changes grades or badges or decides applications. A member with the 관리자
@@ -165,7 +166,18 @@ const eighteen = new Date(firstGrant);
 eighteen.setUTCMonth(eighteen.getUTCMonth() + 18);
 check(premiumRows.length === 1 && Math.abs(premiumRows[0].expires_at - eighteen.getTime()) <= 2 * DAY, 'the approved renewal extends the same row to 18 months');
 equal(premiumRows[0].application_id, renew.data.id, 'the row records the renewal application');
+// Rows the earlier code stacked (an earlier-ending 6-month row of the same grade): the migration
+// folds them into the latest-ending row, and 회수 of that row removes any row stacked later too.
+const stack = () => sql(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at) SELECT user_id,grade,rank,${Date.now() + 30 * DAY},'manager',granted_at FROM user_grades WHERE id=${premiumRows[0].id}`);
+const premiumCount = async () => (await manager('manage/users/' + C)).data.grants.filter(g => g.grade === 'premium').length;
+stack();
+equal(await premiumCount(), 2, 'a stacked 프리미엄 row is written as the earlier code did');
+sql(readFileSync(new URL('../migrations/0010_stacked_grades_merge.sql', import.meta.url), 'utf8').replace(/^--.*$/gm, '').trim());
+premiumRows = (await manager('manage/users/' + C)).data.grants.filter(g => g.grade === 'premium');
+check(premiumRows.length === 1 && Math.abs(premiumRows[0].expires_at - eighteen.getTime()) <= 2 * DAY, '0010_stacked_grades_merge keeps only the latest-ending row');
+stack();
 equal((await manager(`manage/users/${C}/grades/${premiumRows[0].id}`, 'DELETE')).status, 200, 'manager revokes the 프리미엄 row');
+equal(await premiumCount(), 0, 'the one 회수 also removes the stacked row');
 equal((await guest('users/' + C)).data.user.grade, 'normal', 'C drops to the grade held before 프리미엄 (일반)');
 
 // A grade held permanently is not granted again, for 6 months or for good.

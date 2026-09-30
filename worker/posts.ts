@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting } from './http';
+import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
@@ -26,7 +26,7 @@ function relaxedLimits(req: Request) {
     return (env as Partial<Env>).POST_LIMITS === 'relaxed' && (host === '127.0.0.1' || host === 'localhost');
 }
 
-export const postSelect = `SELECT p.*,u.nickname,u.role,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
+export const postSelect = `SELECT p.*,u.nickname,u.role,u.deleted_at AS author_deleted_at,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
 
 export const parse = (s: string, fallback: any) => { try { return JSON.parse(s); } catch { return fallback; } };
 
@@ -80,6 +80,10 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         const featured = p.featured_at !== null && p.featured_at !== undefined;
         delete p.featured_at;
         delete p.title_key;
+        // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
+        const authorDeleted = !!p.author_deleted_at;
+        delete p.author_deleted_at;
+        if (authorDeleted) p.nickname = WITHDRAWN_NAME;
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -89,6 +93,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
             featured,
+            author_deleted: authorDeleted,
         };
     });
 }

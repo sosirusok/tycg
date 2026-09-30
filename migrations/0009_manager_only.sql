@@ -1,6 +1,5 @@
 -- A 6-month renewal now extends the member's latest-ending 6-month row of that grade. Rows the
--- earlier code stacked stay as they are: they hold the manager's record of each grant, and the
--- latest-ending row already carries the stacked end date, so they change no one's access.
+-- earlier code stacked are folded into that row by 0010_stacked_grades_merge.
 
 -- Defense in depth: only the manager account ('manager') grants grades and badges. The Worker
 -- checks this too (grantGradeStatements, assertBadgeGranter); these triggers refuse any other

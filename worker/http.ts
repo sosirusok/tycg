@@ -201,8 +201,9 @@ export function nicknameField(v: unknown, isManager = false) {
         if (nickname !== MANAGER_NICKNAME) fail(400, '매니저 닉네임은 우와오로 고정됩니다.');
         return nickname;
     }
-    const compact = nickname.replace(/[\s._\-·]/g, '').toLowerCase();
-    if (compact.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => compact.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
+    // Checked on the look-alike key, so '탈퇴!회원' or '매!니저' is refused like the plain word.
+    const key = nicknameKey(nickname);
+    if (key.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => key.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
     return nickname;
 }
 

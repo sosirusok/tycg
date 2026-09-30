@@ -91,7 +91,9 @@ async function offersHandler(req: Request, p: string[]) {
         await limit('offer:' + u.id, 20, 600000);
         const b = await body(req), post = await visiblePost(b.postId, u);
         if (post.kind !== 'sell') fail(400, '판매 글에만 제시할 수 있습니다.');
-        if (post.hidden || post.status !== 'open') fail(409, '제시를 받지 않는 글입니다.');
+        // Only the manager and the author can reach a hidden post; say why it takes no offers.
+        if (post.hidden) fail(409, post.hidden_reason === '탈퇴' ? '탈퇴한 회원의 글입니다.' : '숨김 처리된 글입니다.');
+        if (post.status !== 'open') fail(409, '제시를 받지 않는 글입니다.');
         if (!post.accepts_offers && post.price_mode !== 'offer') fail(400, '제시를 받지 않는 글입니다.');
         if (post.author_id === u.id) fail(400, '내 글에는 제시할 수 없습니다.');
         const n = amount(b.amount, false), note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : '';

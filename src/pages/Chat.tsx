@@ -175,7 +175,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
     }
     async function offerAction(offer: Offer, action: string) {
-        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료. 글이 예약중으로 바뀌었습니다.' : action === 'declined' ? '거절 완료' : '제시 취소 완료'); await poll(); }
+        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료' : action === 'declined' ? '거절 완료' : '제시 취소 완료'); await poll(); activity.current(); }
         catch (err) { toast.error(errorText(err)); }
     }
     async function appAction(app: Application, action: 'approve' | 'reject' | 'cancel', note = '') {

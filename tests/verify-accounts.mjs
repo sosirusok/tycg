@@ -76,6 +76,10 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal([put.status, put.data.error], [409, '비슷한 닉네임이 이미 있습니다.'], 'profile PUT to a look-alike is refused');
     const reserved = await client()('auth/register', 'POST', { username: username('rsv'), password, nickname: `탈퇴회원${run.slice(0, 4)}` });
     equal(reserved.status, 409, '탈퇴회원 is a reserved word');
+    for (const nickname of ['탈퇴!회원', '매!니저', '관리/자' + run.slice(0, 2)]) {
+        const r = await client()('auth/register', 'POST', { username: username('rsvp'), password, nickname });
+        equal([r.status, r.data.error], [409, '사용할 수 없는 닉네임입니다.'], `reserved look-alike ${JSON.stringify(nickname)} is refused`);
+    }
 }
 
 // Rows written without a key (older members, or SQL) are keyed before the next check.
@@ -192,6 +196,10 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).data.error, '탈퇴한 회원입니다.', 'no badge for a withdrawn member');
     const vis = await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: false });
     equal([vis.status, vis.data.error], [409, '탈퇴한 회원의 글입니다.'], 'the manager cannot publish a withdrawn member\'s post');
+    const seen = (await manager('posts/' + post.data.id)).data.post;
+    equal([seen.nickname, seen.author_deleted, seen.author_badges, seen.author_grade], ['탈퇴회원', true, [], 'normal'], 'the manager sees the post\'s author as plain 탈퇴회원');
+    const late = await manager('offers', 'POST', { postId: post.data.id, amount: 250000 });
+    equal([late.status, late.data.error], [409, '탈퇴한 회원의 글입니다.'], 'an offer on a withdrawn member\'s post names the reason');
     // The chat the two offers share: both end with a line, the 예약중 post is 거래중 again, and nobody can write there.
     const lines = (await buyer(`chats/${offer.data.chatId}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
     check(lines.includes('회원 탈퇴로 제시가 마감되었습니다.') && lines.includes('회원 탈퇴로 제시가 마감되었습니다. 글이 거래중으로 바뀌었습니다.'), 'both ended offers leave a line: ' + JSON.stringify(lines));
