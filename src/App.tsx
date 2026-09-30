@@ -63,9 +63,9 @@ function Shell() {
                     <Link to="/guide" className="nav-guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>
                 </nav>
                 <div className="header-right">
-                    <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
+                    {me?.role !== 'manager' && <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
                         <BadgeCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증/등급 신청</span>
-                    </button>
+                    </button>}
                     <button type="button" className="header-link header-chat" aria-label={`채팅${unread ? `, 읽지 않은 메시지 ${unread}개` : ''}`} onClick={() => go('/chat')}>
                         <MessageCircle size={20} /><span className="header-link-text">채팅</span>
                         {unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}
@@ -99,6 +99,7 @@ function Shell() {
                     : page === 'chat' ? <Chat id={parts[1]} />
                     : page === 'profile' ? <Profile key={parts[1]} id={parts[1]} />
                     : page === 'me' ? <Mine tab={parts[1] || 'posts'} />
+                    // Manage renders its tools only for role 'manager' (never for the 관리자 grade).
                     : page === 'manage' ? <Manage tab={parts[1] || 'applications'} />
                     : page === 'guide' ? <Guide />
                     : <NotFound />}

@@ -128,8 +128,11 @@ export async function requireUser(r: Request) {
     return u;
 }
 
+// The only permission check for manager powers. A member's grade (관리자 included) never grants any.
+export const isManager = (u: User | null | undefined) => u?.role === 'manager';
+
 export function requireManager(u: User) {
-    if (u.role !== 'manager') fail(403, '매니저만 사용할 수 있습니다.');
+    if (!isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
 }
 
 export function json(d: unknown, status = 200, h: Record<string, string> = {}) {

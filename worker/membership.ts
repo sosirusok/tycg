@@ -1,4 +1,4 @@
-import { db, fail, requireUser, json, body, limit, initManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID } from './http';
+import { db, fail, requireUser, json, body, limit, initManager, isManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import {
@@ -13,16 +13,29 @@ export async function siteConfig() {
     return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null };
 }
 
-// A 6-month grant extends an unexpired grant of the same grade instead of overlapping it.
-// With a guard, the grant is written only if that SQL condition holds when the batch runs.
+// Only the manager grants grades (the DB triggers in 0009_manager_only refuse any other granted_by).
+// A 6-month grant extends the member's unexpired 6-month row of the same grade by 6 months instead
+// of adding a second row, so one 회수 removes the whole period. A grade already held permanently
+// is not granted again. With a guard, the grant is written only if that SQL condition holds when
+// the batch runs.
 export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
+    if (by !== MANAGER_ID) fail(403, '등급은 매니저만 지급할 수 있습니다.');
     const info = gradeInfo(grade);
-    let expires: number | null = null;
+    if (await db().prepare('SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL LIMIT 1').bind(userId, grade).first()) fail(409, '이미 영구 등급입니다.');
     if (plan === '6m') {
-        const current = await db().prepare('SELECT MAX(expires_at) AS until FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?').bind(userId, grade, now).first<any>();
-        expires = addMonths(Math.max(now, current?.until || 0), 6);
+        const existing = await db().prepare('SELECT id,expires_at FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? ORDER BY expires_at DESC LIMIT 1').bind(userId, grade, now).first<{ id: number; expires_at: number }>();
+        if (existing) {
+            const expires = addMonths(existing.expires_at, 6);
+            return { expires, statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND ${guard}`).bind(expires, by, now, applicationId, existing.id, ...guardArgs) };
+        }
     }
+    const expires = plan === '6m' ? addMonths(now, 6) : null;
     return { expires, statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${guard}`).bind(userId, grade, info.rank, expires, by, now, applicationId, ...guardArgs) };
+}
+
+// Badges too are granted only by the manager account.
+function assertBadgeGranter(u: User) {
+    if (!(u.id === MANAGER_ID && isManager(u))) fail(403, '인증은 매니저만 지급할 수 있습니다.');
 }
 
 function dateLabel(t: number) {
@@ -46,6 +59,7 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
     let message = '';
     if (action === 'approve') {
         if (app.kind === 'badge') {
+            assertBadgeGranter(u);
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
@@ -71,7 +85,7 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         return json({ applications: r.results });
     }
     if (!p[1] && method === 'POST') {
-        if (u.role === 'manager') fail(400, '매니저 계정은 신청할 수 없습니다.');
+        if (isManager(u)) fail(400, '매니저 계정은 신청할 수 없습니다.');
         await limit('apply:' + u.id, 30, 3600000);
         const b = await body(req);
         const kind: ApplicationKind = b.kind === 'grade' ? 'grade' : 'badge';
@@ -120,8 +134,10 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
     }
     if (p[1] && method === 'PATCH') {
         const b = await body(req);
+        // Approving and rejecting are the manager's alone, whoever owns the application.
+        if ((b.action === 'approve' || b.action === 'reject') && !isManager(u)) fail(403, '매니저만 처리할 수 있습니다.');
         const app = await db().prepare('SELECT * FROM applications WHERE id=?').bind(p[1]).first<any>();
-        if (!app || (app.user_id !== u.id && u.role !== 'manager')) fail(404, '신청을 찾을 수 없습니다.');
+        if (!app || (app.user_id !== u.id && !isManager(u))) fail(404, '신청을 찾을 수 없습니다.');
         if (app.status !== 'pending') fail(409, '이미 처리된 신청입니다.');
         if (b.action === 'cancel') {
             if (app.user_id !== u.id) fail(403, '본인 신청만 취소할 수 있습니다.');
@@ -133,7 +149,7 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
             if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
             return json({ ok: true });
         }
-        if (u.role !== 'manager') fail(403, '매니저만 처리할 수 있습니다.');
+        if (!isManager(u)) fail(403, '매니저만 처리할 수 있습니다.');
         if (b.action !== 'approve' && b.action !== 'reject') fail(400, '처리 방식을 확인해 주세요.');
         const note = typeof b.note === 'string' ? b.note.trim().slice(0, 300) : '';
         await decide(u, app, b.action, note);
@@ -154,6 +170,7 @@ function tempPassword(length = 10) {
 }
 
 // Manager-only member administration: search, badges, grades, applications and temporary passwords.
+// manageHandler has already called requireManager; the grant paths check again on their own.
 export async function manageMembers(req: Request, u: User, p: string[], url: URL): Promise<Response | null> {
     const method = req.method;
     if (p[1] === 'applications' && method === 'GET') {
@@ -185,6 +202,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             return json({ user: withMember(target), grants: grants.results, badges: badges.results, applications: apps.results });
         }
         if (p[3] === 'badges' && method === 'POST') {
+            assertBadgeGranter(u);
             const b = await body(req);
             if (!isBadge(b.badge)) fail(400, '인증 종류를 확인해 주세요.');
             if (b.active) await db().prepare('INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES(?,?,?,?)').bind(p[2], b.badge, u.id, Date.now()).run();

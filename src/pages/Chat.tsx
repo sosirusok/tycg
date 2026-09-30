@@ -6,7 +6,7 @@ import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '..
 import { ApiError, api, errorText, imageUrl, uploadPhoto } from '../lib/api';
 import { Link, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
-import { chatDraftKey } from '../app/ApplyModal';
+import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
 
@@ -73,6 +73,10 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const { params } = useLocation();
     const aboutPost = useRef(params.get('post'));
     const scroller = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), idle = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
+    // The application template ApplyModal left for this room goes into the composer once.
+    const takeDraft = () => {
+        try { const draft = sessionStorage.getItem(chatDraftKey(id)); if (draft) { setText(draft); sessionStorage.removeItem(chatDraftKey(id)); setTimeout(() => input.current?.focus(), 50); } } catch { /* ignore */ }
+    };
 
     const merge = (incoming: Message[]) => setMessages(prev => {
         const map = new Map(prev.map(m => [m.id, m]));
@@ -106,12 +110,20 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         let alive = true;
         api<{ chat: { partner: Partner; blocked: boolean } }>('chats/' + id).then(d => { if (alive) { setPartner(d.chat.partner); setBlocked(d.chat.blocked); } }).catch(e => { if (alive) setError(errorText(e)); });
         poll(true).then(() => { if (alive) setLoaded(true); }).catch(e => { if (alive) setError(errorText(e)); });
-        try { const draft = sessionStorage.getItem(chatDraftKey(id)); if (draft) { setText(draft); sessionStorage.removeItem(chatDraftKey(id)); setTimeout(() => input.current?.focus(), 50); } } catch { /* ignore */ }
+        takeDraft();
         // New messages: every 4 s while active, slowing to 15 s after a quiet minute.
         let timer: ReturnType<typeof setTimeout>;
         const tick = () => { timer = setTimeout(async () => { if (!document.hidden) await poll().catch(() => {}); if (alive) tick(); }, idle.current > 15 ? 15000 : 4000); };
         tick();
         return () => { alive = false; clearTimeout(timer); };
+    }, [id, poll]);
+
+    // An application sent while this room is already open (same route, no remount) fills the composer
+    // too, and its card is fetched right away instead of on the next poll.
+    useEffect(() => {
+        const onDraft = (e: Event) => { if ((e as CustomEvent<string>).detail === id) { takeDraft(); void poll().catch(() => {}); } };
+        window.addEventListener(CHAT_DRAFT_EVENT, onDraft);
+        return () => window.removeEventListener(CHAT_DRAFT_EVENT, onDraft);
     }, [id, poll]);
 
     useLayoutEffect(() => { const el = scroller.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [messages, loaded]);

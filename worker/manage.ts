@@ -4,6 +4,9 @@ import { decorate, endOffersStatements, postSelect } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
 
+// Every /api/manage/* route is manager-only: requireManager (role 'manager') runs before any
+// route below or in manageMembers. There is no moderator role, and a member's grade, including
+// 관리자, grants no access here.
 export async function manageHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
     const method = req.method, u = await requireUser(req);
     requireManager(u);

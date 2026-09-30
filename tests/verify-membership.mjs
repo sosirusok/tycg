@@ -96,7 +96,7 @@ equal(managerList.data.chats.find(c => c.id === apply.data.chatId)?.last_message
 const pending = await manager('manage/applications?status=pending');
 check(pending.data.applications.some(a => a.id === apply.data.id && a.nickname === users.applicant.nickname), 'manager sees the pending application');
 equal((await other('manage/applications')).status, 403, 'members cannot open manager tools');
-equal((await other(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 404, 'other members cannot see the application');
+equal((await other(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 403, 'other members cannot approve (403 before any lookup)');
 equal((await applicant(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 403, 'applicant cannot approve');
 equal((await manager(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 200, 'manager approves');
 equal((await manager(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 409, 'approval is one-time');
