@@ -36,12 +36,12 @@ function fromPost(p: Post): Form {
 }
 
 function template(kind: TradeKind, category: string) {
-    if (kind === 'exchange') return '[내놓는 것]\n\n[원하는 조건]\n\n[거래 방법]\n';
-    if (kind === 'proxy_request') return '[원하는 작업]\n\n[현재 상태와 목표]\n\n[희망 일정]\n';
-    if (kind === 'proxy_offer') return '[진행 가능한 작업]\n\n[진행 방식과 기간]\n\n[진행 조건]\n';
-    if (kind === 'buy') return '[원하는 조건]\n\n[우대 사항]\n\n[거래 가능한 시간]\n';
-    if (category === 'account') return '[계정 소개]\n\n[보유 스킨·꾸미기]\n\n[거래 방법]\n';
-    return '[상세 설명]\n\n[거래 방법]\n';
+    if (kind === 'exchange') return '내놓는 것:\n원하는 것:\n추금: 받음 / 드림 / 없음\n';
+    if (kind === 'proxy_request') return '종목:\n현재 -> 목표:\n가능 시간:\n';
+    if (kind === 'proxy_offer') return '가능 종목:\n가격: (예: 천점당 0.7)\n경력: (예: 30 챌린저, 31 마스터)\n조건: (예: 선입금, 동접 시 중단)\n';
+    if (kind === 'buy') return '필수:\n우대:\n거래 방법:\n';
+    if (category === 'account') return '스킨/악세:\n라이드/펫:\n엠블럼:\n거래 방법: (쿨거, 전비변 바로 등)\n';
+    return '내용:\n거래 방법:\n';
 }
 
 function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
@@ -84,7 +84,7 @@ export default function Editor({ id }: { id?: string }) {
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         void refreshMe().catch(() => {});
-        if (proxyBlocked) { openApply({ kind: 'badge', target: 'proxy' }); toast('대리(진행) 글은 대리 인증 후에 쓸 수 있어요. 대리(구함)으로 열었어요.'); }
+        if (proxyBlocked) { openApply({ kind: 'badge', target: 'proxy' }); toast('대리(진행)는 대리 인증이 필요합니다. 대리(구함)으로 열었습니다.'); }
     }, []);
     useEffect(() => {
         if (!me) return;
@@ -93,7 +93,7 @@ export default function Editor({ id }: { id?: string }) {
             .then(([p, d]) => {
                 if (!alive) return;
                 if (p) {
-                    if (p.post.author_id !== me.id) throw new Error('본인이 쓴 글만 수정할 수 있습니다.');
+                    if (p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
                     setForm(fromPost(p.post));
                 }
                 if (d.draft && typeof d.draft.kind === 'string' && 'offer' in d.draft) setRestore(d.draft);
@@ -110,7 +110,7 @@ export default function Editor({ id }: { id?: string }) {
             await api('drafts/' + draftKey, 'PUT', JSON.parse(snapshot));
             lastSaved.current = snapshot;
             setSavedAt(new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' }));
-            if (manual) toast('임시저장했습니다.');
+            if (manual) toast('임시저장 완료');
             return true;
         } catch (e) { if (manual) toast.error(errorText(e)); return false; }
     };
@@ -149,7 +149,7 @@ export default function Editor({ id }: { id?: string }) {
     async function addPhotos(files: FileList | null) {
         if (!files?.length) return;
         const list = Array.from(files).slice(0, 6 - form.images.length);
-        if (files.length > list.length) toast.error('사진은 6장까지 올릴 수 있어요.');
+        if (files.length > list.length) toast.error('사진은 최대 6장입니다.');
         setUploading(true);
         const added: string[] = [];
         try { for (const f of list) added.push(await uploadPhoto(f)); }
@@ -168,7 +168,7 @@ export default function Editor({ id }: { id?: string }) {
         setError('');
         const price = form.kind === 'exchange' ? null : manToWon(form.price);
         const offer = form.kind === 'sell' ? manToWon(form.offer) : null;
-        if (Number.isNaN(price) || Number.isNaN(offer)) { setError('가격은 만원 단위 숫자로 입력해 주세요. 예: 35 또는 1.5'); return; }
+        if (Number.isNaN(price) || Number.isNaN(offer)) { setError('가격은 만원 단위 숫자로 입력하세요. 예: 35, 1.5'); return; }
         if (form.kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
         setBusy(true);
         try {
@@ -178,14 +178,14 @@ export default function Editor({ id }: { id?: string }) {
             const d = await api<{ id: number }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             api('drafts/' + draftKey, 'DELETE').catch(() => {});
             setLeaveGuard(null);
-            toast(id ? '글을 수정했습니다.' : '글을 올렸습니다.');
+            toast(id ? '수정 완료' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
         } catch (err) { done.current = false; setError(errorText(err)); }
         finally { setBusy(false); }
     }
 
-    if (!me) return <div className="container page"><EmptyState icon="locked" title="로그인이 필요해요" text="로그인하면 바로 글을 쓸 수 있어요." action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
-    if (loadError) return <div className="container page"><EmptyState icon="warning" title="글을 불러오지 못했어요" text={loadError} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="locked" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (loadError) return <div className="container page"><EmptyState icon="warning" title="글을 불러오지 못했습니다" text={loadError} /></div>;
     if (!loaded) return <div className="container page"><SkeletonRows count={3} height={180} /></div>;
 
     const { kind, category, details: d } = form;
@@ -200,14 +200,14 @@ export default function Editor({ id }: { id?: string }) {
             <Num label="닉네임 글자 수" value={d.nicknameChars || ''} onChange={v => setDetail('nicknameChars', v)} unit="글자" max={20} placeholder="예: 2" />
             <div className="field"><span className="field-label">닉 등급</span><RankPicker value={d.nicknameRank ? [d.nicknameRank] : []} onChange={v => setDetail('nicknameRank', v[0] || '')} /></div>
         </div>
-        <div className="field"><span className="field-label">보유 우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">목록에 없는 스킨·꾸미기는 상세 설명에 적어 주세요.</span></div>
+        <div className="field"><span className="field-label">보유 우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
         <div className="ed-grid ed-grid-3">
             <Num label="팬텀" value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={5000} placeholder="예: 225" />
-            <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="보유량" />
-            <Num label="미네랄" value={d.minerals || ''} onChange={v => setDetail('minerals', v)} placeholder="보유량" />
+            <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="예: 246" />
+            <Num label="미네랄" value={d.minerals || ''} onChange={v => setDetail('minerals', v)} placeholder="예: 1400000" />
         </div>
         <details className="ed-more" open={['integrated', 'passwordChange', 'phoneChange', 'backupEmail', 'level', 'labLevel', 'humanSkins', 'zombieSkins', 'closet'].some(k => d[k])}>
-            <summary>추가 정보 <span>전번·비번 변경, 보멜, 레벨 등 (선택)</span></summary>
+            <summary>추가 정보 <span>통합, 전비변, 보멜, 레벨, 연구실, 옷장</span></summary>
             <div className="ed-grid mt-16">
                 {(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => <div className="field" key={k}><span className="field-label">{ACCOUNT_CHOICES[k].label}</span><Segmented name={ACCOUNT_CHOICES[k].label} options={ACCOUNT_CHOICES[k].options} label={v => choiceLabel(k, v)} value={d[k] || ''} onChange={v => setDetail(k, v)} /></div>)}
                 <Num label="계정 레벨" value={d.level || ''} onChange={v => setDetail('level', v)} max={999} />
@@ -223,8 +223,8 @@ export default function Editor({ id }: { id?: string }) {
         const k = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
         return <div className="grid-gap-16">
             <div className="ed-grid">
-                <Num label="허용 대주 수" value={d[k('maxOwners')] || ''} onChange={v => setDetail(k('maxOwners'), v)} unit="대주 이하" max={9999} placeholder="상관없으면 비워 두세요" />
-                <div className="field"><span className="field-label">전적 조건</span><Segmented name={prefix + '전적 조건'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
+                <Num label="대주 수" value={d[k('maxOwners')] || ''} onChange={v => setDetail(k('maxOwners'), v)} unit="대주 이하" max={9999} placeholder="상관없음" />
+                <div className="field"><span className="field-label">전적</span><Segmented name={prefix + '전적'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
             </div>
             <div className="field"><span className="field-label">원하는 닉네임</span>
                 <div className="range nick-range">
@@ -233,11 +233,11 @@ export default function Editor({ id }: { id?: string }) {
                     <div className="input-unit"><input className="input" type="number" inputMode="numeric" min="1" max="20" placeholder="최대" aria-label="닉네임 최대 글자 수" value={d[k('nicknameCharsMax')] || ''} onChange={e => setDetail(k('nicknameCharsMax'), wholeNumber(e.target.value))} /><span>글자</span></div>
                 </div>
                 <RankPicker multiple value={ranksOf(k('nicknameRanks'))} onChange={v => setDetail(k('nicknameRanks'), v.length ? JSON.stringify(v) : '')} />
-                <span className="field-hint">닉 등급은 여러 개 고를 수 있어요. 상관없으면 비워 두세요.</span>
+                <span className="field-hint">등급 중복 선택 가능</span>
             </div>
             <div className="field"><span className="field-label">원하는 래더</span>
                 {prefix ? <SeasonPicker value={form.wantedTags} onChange={wantedTags => patch({ wantedTags })} /> : <SeasonPicker value={form.tags} onChange={tags => patch({ tags })} />}
-                <span className="field-hint">상관없으면 비워 두세요.</span></div>
+            </div>
             <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d[k('skinTags')])} onChange={v => setDetail(k('skinTags'), v.length ? JSON.stringify(v) : '')} /></div>
         </div>;
     };
@@ -254,17 +254,17 @@ export default function Editor({ id }: { id?: string }) {
 
     return <div className="container page editor">
         <div className="ed-top">
-            <h1 className="page-title">{id ? '글 수정' : '거래 글쓰기'}</h1>
-            <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : '작성 중인 내용은 자동으로 저장돼요'}</span>
+            <h1 className="page-title">{id ? '글 수정' : '글쓰기'}</h1>
+            <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
         </div>
         {restore && <div className="restore">
-            <span className="grow">작성하던 글이 있어요. <span className="muted small">{new Date(restore.savedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</span></span>
+            <span className="grow">임시저장된 글이 있습니다. <span className="muted small">{new Date(restore.savedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</span></span>
             <button type="button" className="btn btn-primary btn-sm" onClick={() => { const { savedAt: _s, ...rest } = restore; void _s; setForm(normalize(rest)); dirty.current = true; setRestore(null); }}>이어서 쓰기</button>
             <button type="button" className="btn btn-line btn-sm" onClick={() => { setRestore(null); api('drafts/' + draftKey, 'DELETE').catch(() => {}); }}>새로 쓰기</button>
         </div>}
         <form className="ed-form" onSubmit={submit}>
             <fieldset disabled={!!restore || busy}>
-                <Section title="어떤 거래인가요?">
+                <Section title="게시판">
                     <div className="kind-cards" role="radiogroup" aria-label="거래 구분">
                         {TRADE_KINDS.map(k => {
                             const locked = k === 'proxy_offer' && !proxyAllowed;
@@ -285,43 +285,43 @@ export default function Editor({ id }: { id?: string }) {
                     </div>}
                 </Section>
 
-                {kind !== 'exchange' && <Section title={kind === 'sell' ? '가격' : buying ? '예산' : '비용'} desc="만원 단위로 입력해요. 예: 35 = 35만원, 1.5 = 1만 5천원">
+                {kind !== 'exchange' && <Section title="가격" desc="단위: 만원 (1.5 = 15,000원)">
                     {kind === 'sell' ? <div className="grid-gap-16">
                         <div className="ed-grid">
-                            <Num decimal label="즉거가" value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder="미정이면 비워 두세요" />
-                            <Num decimal label="현젯 (현재 제시가)" value={form.offer} onChange={v => patch({ offer: v })} unit="만원" placeholder="받은 제시가 없으면 비워 두세요" />
+                            <Num decimal label="즉거가" value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder="미정" />
+                            <Num decimal label="현젯 (현재 제시가)" value={form.offer} onChange={v => patch({ offer: v })} unit="만원" placeholder="없음" />
                         </div>
-                        {id && <p className="field-hint">즉거가를 바꾸면 이전 가격이 취소선으로 함께 표시돼요.</p>}
-                        <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />채팅으로 가격 제안 받기</label>
+                        {id && <p className="field-hint">이전 즉거가는 취소선으로 남습니다.</p>}
+                        <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />제시 받기</label>
                     </div> : <div className="ed-grid">
-                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : kind === 'proxy_request' ? '희망 비용' : '진행 비용'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder="협의하려면 비워 두세요" />
+                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : kind === 'proxy_request' ? '희망 가격' : '가격'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder="협의" />
                     </div>}
                 </Section>}
 
                 {kind === 'exchange' ? <>
-                    <Section title={`내가 내놓는 ${categoryName(category)}`} desc="아는 항목만 채우면 돼요.">{account ? sellerAccount : generic('clan')}</Section>
-                    <Section title={`내가 구하는 ${categoryName(wanted)}`} desc={wanted === 'account' ? '상관없는 항목은 비워 두세요.' : undefined}>
-                        {wanted === 'account' ? buyerAccount('wanted') : <p className="muted">원하는 클랜 조건은 아래 상세 설명에 적어 주세요.</p>}
+                    <Section title={`내가 내놓는 ${categoryName(category)}`}>{account ? sellerAccount : generic('clan')}</Section>
+                    <Section title={`내가 구하는 ${categoryName(wanted)}`}>
+                        {wanted === 'account' ? buyerAccount('wanted') : <p className="muted">원하는 클랜은 내용에 적어 주세요.</p>}
                     </Section>
-                </> : hasInfo && <Section title={infoTitle} desc={account && !buying ? '아는 항목만 채우면 돼요.' : undefined}>
+                </> : hasInfo && <Section title={infoTitle}>
                     {account ? (buying ? buyerAccount('') : sellerAccount) : generic(category)}
                 </Section>}
 
-                <Section title="제목과 설명">
+                <Section title="내용">
                     <div className="grid-gap-16">
                         <label className="field"><span className="field-label">제목 <em>*</em></span>
-                            <input className="input" required minLength={2} maxLength={100} value={form.title} onChange={e => patch({ title: e.target.value })} placeholder="제목을 입력해 주세요" /></label>
+                            <input className="input" required minLength={2} maxLength={100} value={form.title} onChange={e => patch({ title: e.target.value })} placeholder="예: 28 챌린저 2대주 계정 팝니다" /></label>
                         <div className="field">
-                            <div className="row"><label className="field-label grow" htmlFor="body">상세 설명 <em>*</em></label>
-                                <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patch({ body: template(kind, category) })}>설명 양식 넣기</button></div>
+                            <div className="row"><label className="field-label grow" htmlFor="body">내용 <em>*</em></label>
+                                <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patch({ body: template(kind, category) })}>양식 불러오기</button></div>
                             <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patch({ body: e.target.value })}
-                                placeholder={kind === 'buy' ? '원하는 조건과 거래 방법을 적어 주세요.' : kind === 'exchange' ? '내놓는 것과 원하는 조건, 교환 방법을 적어 주세요.' : kind.startsWith('proxy') ? '작업 범위, 일정, 진행 방식을 적어 주세요.' : '스킨, 꾸미기, 거래 방법 등 자세한 내용을 적어 주세요.'} />
-                            <span className="field-hint">비밀번호, 인증번호, 쿠폰 코드는 쓰지 마세요. · {form.body.length.toLocaleString()} / 10,000</span>
+                                placeholder={kind === 'buy' ? '필수, 우대 조건 등' : kind === 'exchange' ? '원하는 조건, 추금 등' : kind.startsWith('proxy') ? '가격, 경력, 진행 조건 등' : '스킨, 악세, 라이드, 거래 방법 등'} />
+                            <span className="field-hint">비번, 인증번호는 쓰지 마세요. · {form.body.length.toLocaleString()} / 10,000</span>
                         </div>
                     </div>
                 </Section>
 
-                <Section title="사진" desc="첫 번째 사진이 대표 사진이에요. 최대 6장.">
+                <Section title="사진" desc="첫 장이 대표 사진">
                     <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => addPhotos(e.target.files)} />
                     <div className="photo-grid">
                         {form.images.map((img, i) => <div className="photo" key={img}>
@@ -346,7 +346,7 @@ export default function Editor({ id }: { id?: string }) {
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
                 <div className="ed-bar">
                     <button type="button" className="btn btn-line" onClick={() => void persist(true)}>임시저장</button>
-                    <button type="submit" className="btn btn-primary grow" disabled={busy || uploading}>{busy ? <LoaderCircle size={18} className="spin" /> : id ? '수정 완료' : '올리기'}</button>
+                    <button type="submit" className="btn btn-primary grow" disabled={busy || uploading}>{busy ? <LoaderCircle size={18} className="spin" /> : id ? '수정 완료' : '등록'}</button>
                 </div>
             </fieldset>
         </form>

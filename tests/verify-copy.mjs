@@ -68,6 +68,19 @@ function client() {
     check(guide.includes('쿠폰 코드는 입금 확인 후 전달') && !/쿠폰 코드는 글/.test(guide), 'guide coupon rule says 입금 확인 후 전달');
 }
 
+// Detail and editor: 제시 vocabulary, a status toast with no particle after the variable,
+// shared report reasons, cafe-style body templates, and no 해요체 or '비워 두세요' in the form.
+{
+    const page = async name => readFile(new URL(`../src/pages/${name}.tsx`, import.meta.url), 'utf8');
+    const detail = await page('Detail'), editor = await page('Editor');
+    check(!detail.includes('제안') && !editor.includes('제안'), "detail and editor say 제시, never 제안");
+    check(detail.includes('title="가격 제시"') && detail.includes('>제시하기</button>') && detail.includes('채팅하기</button>'), "detail buttons read 채팅하기 and 제시하기, offer modal is 가격 제시");
+    check(detail.includes('`상태 변경: ${STATUS_NAMES[status]}`') && !/\}’?으로/.test(detail), "status toast reads '상태 변경: …' with no (으)로 after the variable");
+    check(/REPORT_REASONS,[^}]*\} from '\.\.\/\.\.\/shared\/market'/.test(detail) && !/const REPORT_REASONS/.test(detail), 'detail uses the shared report reasons');
+    check(editor.includes(String.raw`if (kind === 'buy') return '필수:\n`) && editor.includes('>양식 불러오기</button>'), "editor 양식 불러오기 fills a buy body that starts with '필수:'");
+    check(!/돼요|있어요|해요\.|이에요|비워 두세요|\(선택\)<|어떤 거래인가요/.test(editor), 'editor has no 해요체, 비워 두세요, (선택) or question header');
+}
+
 const member = client(), manager = client(), guest = client();
 const username = `c_${run}_a`, nickname = `copy${run}`;
 const joined = await member('auth/register', 'POST', { username, password, nickname });
