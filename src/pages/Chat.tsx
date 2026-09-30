@@ -240,7 +240,7 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction }: { app
     if (!app) return <div className="sys-msg">{fallback}</div>;
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
-        <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : partner ? <><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} />님의 신청</> : `${app.nickname || '회원'}님의 신청`} · {timeLabel(at)}</span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
+        <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <input className="input" value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="반려 사유" aria-label="반려 사유" autoFocus />

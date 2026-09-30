@@ -25,6 +25,11 @@ export function ApplyModal() {
 
     const ownsBadge = (id: string) => !!me?.badges.includes(id as never);
     const rank = gradeInfo(me?.grade).rank;
+    // The grade shown is the member's best one, and a permanent row wins a tie, so no expiry
+    // means that rank is held for good. The server refuses the same rank or lower then.
+    const permanent = rank > 0 && !me?.grade_expires_at;
+    const gradeClosed = (target: string) => gradeInfo(target).rank < rank || (permanent && gradeInfo(target).rank === rank);
+    const anyGradeOpen = GRADES.some(g => g.plans.length && !gradeClosed(g.id));
 
     useEffect(() => {
         if (!open) return;
@@ -41,7 +46,7 @@ export function ApplyModal() {
 
     // A choice for a verification the member already has (e.g. after logging in) is dropped.
     const raw = choices[tab];
-    const choice = raw && !(raw.kind === 'badge' && ownsBadge(raw.target)) && !(raw.kind === 'grade' && gradeInfo(raw.target).rank < rank) ? raw : null;
+    const choice = raw && !(raw.kind === 'badge' && ownsBadge(raw.target)) && !(raw.kind === 'grade' && gradeClosed(raw.target)) ? raw : null;
     const choose = (c: Choice) => setChoices(v => ({ ...v, [c.kind]: c }));
     const pendingFor = (kind: string, target: string) => mine.find(a => a.kind === kind && a.target === target && a.status === 'pending');
 
@@ -71,7 +76,7 @@ export function ApplyModal() {
     }
 
     const hint = choice ? '신청하면 매니저 채팅방이 열립니다.'
-        : tab === 'badge' ? '모든 인증 보유' : '등급과 기간을 고르세요.';
+        : tab === 'badge' ? '모든 인증 보유' : anyGradeOpen ? '등급과 기간을 고르세요.' : '신청 가능한 등급 없음';
     return <Modal wide open={open} onClose={() => { if (!busy) closeApply(); }} title="인증/등급 신청"
         footer={<div className="apply-footer">
             <p className={'apply-hint' + (choice ? '' : ' is-pending')} aria-live="polite">{hint}</p>
@@ -106,13 +111,12 @@ export function ApplyModal() {
                         <div className="grade-row-name"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {
-                                // Lower grades than the current one cannot be bought; the server also rejects
-                                // a grade already held permanently.
-                                const disabled = g.rank < rank;
-                                return <label key={p.id} className={'plan' + (disabled ? ' is-disabled' : '')}>
+                                // Lower grades cannot be bought, nor the current one once it is permanent.
+                                const disabled = gradeClosed(g.id), owned = current && permanent && p.id === 'permanent';
+                                return <label key={p.id} className={'plan' + (owned ? ' is-owned' : disabled ? ' is-disabled' : '')}>
                                     <input type="radio" name="apply-grade" disabled={disabled} checked={choice?.kind === 'grade' && choice.target === g.id && choice.plan === p.id} onChange={() => choose({ kind: 'grade', target: g.id, plan: p.id })} />
-                                    <span className="radio-dot" aria-hidden="true" />
-                                    <span>{p.label}</span><b>{won(p.price)}</b>
+                                    {!owned && <span className="radio-dot" aria-hidden="true" />}
+                                    <span>{p.label}</span>{owned ? <span className="apply-state on"><VerifiedMark size={14} />보유</span> : <b>{won(p.price)}</b>}
                                 </label>;
                             }) : <span className="muted small">{g.note}</span>}
                         </div>

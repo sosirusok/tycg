@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, type ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
 import { X } from 'lucide-react';
 import { BADGES, gradeInfo, type BadgeId, type GradeId } from '../../shared/membership';
@@ -26,14 +26,17 @@ export function GradeChip({ grade, role }: { grade?: GradeId | string | null; ro
 
 export function Verified({ badges }: { badges?: BadgeId[] | string[] }) {
     if (!badges?.length) return null;
-    return <>{BADGES.filter(b => badges.includes(b.id as never)).map(b => <span className="verified" key={b.id} title={b.name + ' 완료'}><VerifiedMark size={14} />{b.name}</span>)}</>;
+    return <>{BADGES.filter(b => badges.includes(b.id as never)).map(b => <Fragment key={b.id}>{' '}<span className="verified" title={b.name + ' 완료'}><VerifiedMark size={14} />{b.name}</span></Fragment>)}</>;
 }
 
-// Nickname followed by the grade chip and verification checks.
+// Nickname followed by the grade chip and verification checks. Each chip and check is preceded by
+// a space: the inline-flex line drops it, and a caption row that renders the line inline keeps the
+// words apart for screen readers and copying. Nothing trails the last part, so text glued after it stays put.
 export function NameLine({ nickname, grade, role, badges, size = '' }: { nickname: string; grade?: string | null; role?: string; badges?: string[]; size?: '' | 'lg' }) {
+    const chip = GradeChip({ grade, role });
     return <span className={'name-line' + (size ? ' name-line-' + size : '')}>
         <span className="nick">{nickname}</span>
-        <GradeChip grade={grade} role={role} />
+        {chip && <>{' '}{chip}</>}
         <Verified badges={badges} />
     </span>;
 }

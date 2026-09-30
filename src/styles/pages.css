@@ -211,7 +211,7 @@
 .chat-item-top time { padding-top: 2px; }
 .chat-item-last { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-3); font-size: 13px; }
 .chat-item-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.app-card-who .name-line { display: inline-flex; vertical-align: middle; }
+.app-card-who .name-line { display: inline; }
 .app-card-who .name-line .nick { font-size: 13px; color: var(--ink-2); }
 .app-flag { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--ink-2); color: var(--white); font-size: 11px; }
 .unread { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--brand); color: var(--white); font-size: 12px; line-height: 20px; text-align: center; }
@@ -346,6 +346,11 @@
 .rules a { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 960px) { .steps { grid-template-columns: 1fr 1fr; } .guide-cards { grid-template-columns: 1fr; } }
 
-/* Inline nickname with checks inside a gray caption line. */
-.simple-list .muted .name-line, .simple-list .small .name-line { display: inline-flex; vertical-align: middle; }
+/* Inline nickname with checks inside a gray caption line. The name line and its chips flow as
+   text, so a narrow row wraps between chips and the no-break space before '· 2분 전' keeps the
+   time on the last chip (Chrome always allows a break after an inline-flex box). */
+.simple-list .muted .name-line, .simple-list .small .name-line { display: inline; }
+:is(.app-card-who, .simple-list .muted, .simple-list .small) .name-line > * + * { margin-left: 2px; }
+:is(.app-card-who, .simple-list .muted, .simple-list .small) .name-line > :is(.grade, .verified) { display: inline; padding-block: 2px; }
+:is(.app-card-who, .simple-list .muted, .simple-list .small) .name-line > :is(.grade, .verified) > :is(img, svg) { display: inline; margin-right: 3px; vertical-align: -2px; }
 .simple-list .muted .name-line .nick { font-size: 13px; color: var(--ink-2); }

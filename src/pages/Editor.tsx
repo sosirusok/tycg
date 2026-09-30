@@ -44,6 +44,32 @@ function template(kind: TradeKind, category: string) {
     return '내용:\n거래 방법:\n';
 }
 
+// Title examples per board, written the way cafe titles are (5렙 공백클랜, 코믹스 1권 미쿺, 은하고 올클, 래더 대리·서폿).
+// Exchange is keyed by 내놓는 대상:구하는 대상 and follows the board's '[계정|클랜]에서 [계정|클랜] 구함'.
+const TITLE_EXAMPLES: Record<TradeKind, Record<string, string>> = {
+    sell: { account: '예: 28 챌린저 2대주 계정 팝니다', clan: '예: 5렙 공백클랜 팝니다', goods_coupon: '예: 코믹스 1권 미쿺 팝니다', other: '예: 기여 용병 합니다' },
+    buy: { account: '예: 3대주 이하 무전적 계정 구합니다', clan: '예: 5렙 이상 공백클랜 구합니다', goods_coupon: '예: 유루미 스쿺 구합니다', other: '예: 기여 용병 구합니다' },
+    exchange: {
+        'account:account': '예: 2글자 닉 계정에서 래더계 구함', 'account:clan': '예: 래더계에서 5렙 공백클랜 구함',
+        'clan:account': '예: 5렙 공백클랜에서 계정 구함', 'clan:clan': '예: 5렙 공백클랜에서 10렙 클랜 구함',
+    },
+    proxy_request: { ladder: '예: 32시즌 다이아 래더 대리 구합니다', story: '예: 은하고 올클 대리 구합니다', event: '예: 이벤트 코인 대리 구합니다' },
+    proxy_offer: { ladder: '예: 32시즌 래더 대리·서폿 합니다', story: '예: 마법고 대리 합니다', event: '예: 이벤트 코인 대리 합니다' },
+};
+
+function titlePlaceholder(kind: TradeKind, category: string, wanted: string) {
+    return TITLE_EXAMPLES[kind][kind === 'exchange' ? category + ':' + wanted : category] || '';
+}
+
+// Body hints mirror each board's 양식; the clan and goods hints skip what their fields already ask (레벨, 인원, 상태, 거래 방법).
+function bodyPlaceholder(kind: TradeKind, category: string) {
+    if (kind === 'buy') return '필수, 우대 조건 등';
+    if (kind === 'exchange') return '원하는 조건, 추금 등';
+    if (kind === 'proxy_request') return '종목, 현재 -> 목표, 가능 시간 등';
+    if (kind === 'proxy_offer') return '가격, 경력, 진행 조건 등';
+    return ({ account: '스킨, 악세, 라이드, 거래 방법 등', clan: '순위, 기여, 거래 방법 등', goods_coupon: '구성, 특이 사항 등' } as Record<string, string>)[category] || '상태, 거래 방법 등';
+}
+
 function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
     return <section className="ed-section"><div className="ed-head"><h2>{title}</h2>{desc && <p>{desc}</p>}</div>{children}</section>;
 }
@@ -310,12 +336,12 @@ export default function Editor({ id }: { id?: string }) {
                 <Section title="제목/내용">
                     <div className="grid-gap-16">
                         <label className="field"><span className="field-label">제목 <em>*</em></span>
-                            <input className="input" required minLength={2} maxLength={100} value={form.title} onChange={e => patch({ title: e.target.value })} placeholder="예: 28 챌린저 2대주 계정 팝니다" /></label>
+                            <input className="input" required minLength={2} maxLength={100} value={form.title} onChange={e => patch({ title: e.target.value })} placeholder={titlePlaceholder(kind, category, wanted)} /></label>
                         <div className="field">
                             <div className="row"><label className="field-label grow" htmlFor="body">내용 <em>*</em></label>
                                 <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patch({ body: template(kind, category) })}>양식 불러오기</button></div>
                             <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patch({ body: e.target.value })}
-                                placeholder={kind === 'buy' ? '필수, 우대 조건 등' : kind === 'exchange' ? '원하는 조건, 추금 등' : kind.startsWith('proxy') ? '가격, 경력, 진행 조건 등' : '스킨, 악세, 라이드, 거래 방법 등'} />
+                                placeholder={bodyPlaceholder(kind, category)} />
                             <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span></div>
                         </div>
                     </div>

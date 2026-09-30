@@ -37,7 +37,6 @@ export function AuthModal() {
             {error && <p className="field-error" role="alert">{error}</p>}
             <button className="btn btn-primary btn-lg btn-block" disabled={busy}>{busy ? <LoaderCircle size={20} className="spin" /> : register ? '가입하기' : '로그인'}</button>
         </form>
-        <p className="auth-switch">{register ? '이미 계정이 있나요?' : '아직 회원이 아닌가요?'}
-            <button type="button" disabled={busy} onClick={() => openAuth(register ? 'login' : 'register')}>{register ? '로그인' : '회원가입'}</button></p>
+        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => openAuth(register ? 'login' : 'register')}>{register ? '로그인' : '회원가입'}</button></p>
     </Modal>;
 }
