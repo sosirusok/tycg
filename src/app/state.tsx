@@ -3,7 +3,7 @@ import type { User } from '../../shared/market';
 import { LATEST_SEASON } from '../../shared/market';
 import type { ApplicationKind, PlanId } from '../../shared/membership';
 import { toast } from 'sonner';
-import { api, errorText } from '../lib/api';
+import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText } from '../lib/api';
 import { navigate } from '../lib/router';
 
 export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null };
@@ -34,6 +34,15 @@ type AppState = {
 const Ctx = createContext<AppState>(null!);
 const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.badges]);
 export const useApp = () => useContext(Ctx);
+
+// The tab title: '(2) 판매 · 좀비고 거래소' while two chats are unread.
+const SITE_NAME = '좀비고 거래소';
+let pageTitle = SITE_NAME, unreadCount = 0;
+const applyTitle = () => { document.title = (unreadCount > 0 ? `(${unreadCount}) ` : '') + pageTitle; };
+export function setPageTitle(name: string) {
+    pageTitle = name ? `${name} · ${SITE_NAME}` : SITE_NAME;
+    applyTitle();
+}
 
 const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };
 
@@ -77,6 +86,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         document.addEventListener('visibilitychange', onVisible);
         return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
     }, [signedIn, refreshUnread]);
+
+    useEffect(() => { unreadCount = unread; applyTitle(); }, [unread]);
+
+    // api() reports a 401 (the session ended or was signed out elsewhere): sign out on the page too.
+    const meRef = useRef(me);
+    meRef.current = me;
+    useEffect(() => {
+        const onUnauthorized = () => {
+            if (!meRef.current) return;
+            meRef.current = null;
+            setMe(null);
+            setUnread(0);
+            setAuthMode('login');
+            // The failed action usually shows the same message already; one toast is enough.
+            setTimeout(() => {
+                if (!toast.getToasts().some(t => 'title' in t && t.title === LOGIN_REQUIRED)) toast.error(LOGIN_REQUIRED);
+            }, 0);
+        };
+        window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+        return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    }, []);
 
     const requireLogin = useCallback((next?: (u: User) => void) => {
         if (me) { next?.(me); return true; }

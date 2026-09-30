@@ -24,11 +24,16 @@ function dayLabel(t: number) { return new Date(t).toLocaleDateString('ko-KR', { 
 
 export default function Chat({ id }: { id?: string }) {
     const { me, ready, requireLogin, refreshUnread, refreshMe } = useApp();
-    const [chats, setChats] = useState<ChatItem[] | null>(null);
-    const loadChats = useCallback(() => { api<{ chats: ChatItem[] }>('chats').then(d => setChats(d.chats)).catch(() => setChats([])); }, []);
+    const [chats, setChats] = useState<ChatItem[] | null>(null), [listError, setListError] = useState<number | null>(null);
+    // A failed refresh keeps the list on screen; it never turns into an empty list.
+    const loadChats = useCallback(() => {
+        api<{ chats: ChatItem[] }>('chats').then(d => { setChats(d.chats); setListError(null); })
+            .catch(e => setListError(e instanceof ApiError ? e.status : 0));
+    }, []);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
+        setChats(null); setListError(null);
         loadChats();
         const t = setInterval(() => { if (!document.hidden) loadChats(); }, 20000);
         return () => clearInterval(t);
@@ -40,7 +45,9 @@ export default function Chat({ id }: { id?: string }) {
         <div className={'chat-shell' + (id ? ' has-room' : '')}>
             <aside className="chat-list" aria-label="채팅 목록">
                 <h1 className="chat-list-title">채팅</h1>
-                {chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
+                {listError === 401 ? <EmptyState icon="key" title="로그인이 필요합니다" action={<button type="button" className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} />
+                    : chats === null && listError !== null ? <EmptyState icon="warning" title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(); }}>다시 시도</button>} />
+                    : chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
                     : chats.length === 0 ? <EmptyState title="채팅 내역이 없습니다" />
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
                         <Avatar name={c.nickname} />

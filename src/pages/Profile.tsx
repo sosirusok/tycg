@@ -5,7 +5,7 @@ import { dateText, type Post, type User } from '../../shared/market';
 import { BADGES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
-import { useApp } from '../app/state';
+import { setPageTitle, useApp } from '../app/state';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 
@@ -28,6 +28,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         api<{ user: Profile }>('users/' + id).then(d => { setError(null); setUser(d.user); })
             .catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     }, [id, me?.grade, me?.badges.length, retry]);
+    useEffect(() => { if (user) setPageTitle(user.nickname); }, [user?.nickname]);
     useEffect(() => {
         setPosts(null);
         api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: '20', ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }))

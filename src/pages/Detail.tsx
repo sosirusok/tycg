@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { ChevronRight, Flag, Heart, Link2, MessageCircle, Pencil, Trash2, X } from 'lucide-react';
 import { Dialog } from 'radix-ui';
 import { toast } from 'sonner';
@@ -7,8 +7,8 @@ import {
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
-import { Link, navigate, withParams } from '../lib/router';
-import { useApp } from '../app/state';
+import { Link, navigate, takeScrollRestore, withParams } from '../lib/router';
+import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
 
@@ -70,12 +70,20 @@ function GenericFields({ post, category }: { post: Post; category: string }) {
 }
 
 export function Detail({ id }: { id: string }) {
-    const { me, requireLogin, refreshUnread } = useApp();
+    const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
     const [post, setPost] = useState<Post | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const load = () => api<{ post: Post }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
-    useEffect(() => { void load(); }, [id, me?.id]);
+    // Waits for the session check, so a full page load asks for the post once.
+    useEffect(() => { if (!ready) return; void load(); }, [id, me?.id, ready]);
+    useEffect(() => { if (post) setPageTitle(post.title); }, [post?.title]);
+    // Back to this post: return to where the member was once the post is on screen.
+    useLayoutEffect(() => {
+        if (!post) return;
+        const y = takeScrollRestore();
+        if (y !== null) window.scrollTo(0, y);
+    }, [!!post]);
     useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
 
     if (error) return <div className="container page">{error.status === 404

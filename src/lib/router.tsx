@@ -6,7 +6,25 @@ let leaveGuard: Guard | null = null;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach(l => l());
 
-if (typeof window !== 'undefined') window.addEventListener('popstate', notify);
+// Scroll positions live in each history entry's state ({ y }). The browser's own restoration is
+// off because it runs before the list below has rendered; pages restore y themselves instead.
+let restore: { href: string; y: number } | null = null;
+if (typeof window !== 'undefined') {
+    try { history.scrollRestoration = 'manual'; } catch { /* ignore */ }
+    window.addEventListener('popstate', e => {
+        const y = Number((e.state as { y?: unknown } | null)?.y);
+        restore = { href: location.pathname + location.search, y: Number.isFinite(y) ? y : 0 };
+        notify();
+    });
+}
+
+// The scroll position to restore for the current address after Back/Forward, once; null otherwise.
+export function takeScrollRestore(): number | null {
+    if (!restore || restore.href !== location.pathname + location.search) return null;
+    const { y } = restore;
+    restore = null;
+    return y;
+}
 
 export function setLeaveGuard(guard: Guard | null) { leaveGuard = guard; }
 
@@ -14,9 +32,14 @@ export async function navigate(to: string, options: { replace?: boolean; force?:
     if (!options.force && leaveGuard && !(await leaveGuard())) return;
     const current = location.pathname + location.search;
     if (to === current) return;
-    if (options.replace) history.replaceState(null, '', to);
-    else history.pushState(null, '', to);
-    if (!options.replace) window.scrollTo(0, 0);
+    restore = null;
+    if (options.replace) history.replaceState(history.state, '', to);
+    else {
+        // Remembers where the member was on the page being left, for Back.
+        history.replaceState({ ...history.state, y: window.scrollY }, '');
+        history.pushState({ y: 0 }, '', to);
+        window.scrollTo(0, 0);
+    }
     notify();
 }
 

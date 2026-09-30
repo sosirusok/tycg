@@ -1,17 +1,32 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import {
     KIND_ICONS, KIND_NAMES, RECORD_PREFERENCES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, isTradeKind, manToWon, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
-import { navigate, useLocation, withParams } from '../lib/router';
+import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
+
+// Lists already seen in this tab, per member and query (the 20 most recent). Back and tab
+// switches render from here at once while a background request checks for changes.
+type ListData = { posts: Post[]; total: number; featured?: Post[]; counts?: Record<string, number> };
+const listCache = new Map<string, ListData>();
+function cacheGet(key: string) {
+    const hit = listCache.get(key);
+    if (hit) { listCache.delete(key); listCache.set(key, hit); }
+    return hit;
+}
+function cachePut(key: string, data: ListData) {
+    listCache.delete(key);
+    listCache.set(key, data);
+    while (listCache.size > 20) listCache.delete(listCache.keys().next().value!);
+}
 
 type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
 
@@ -148,7 +163,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
 
 export function Board() {
     const { params } = useLocation();
-    const { me, requireLogin, openApply } = useApp();
+    const { me, ready, requireLogin, openApply } = useApp();
     const rawKind = params.get('kind');
     const kind: TradeKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
     const categories = kind === 'all' ? [] : categoriesForKind(kind);
@@ -163,21 +178,46 @@ export function Board() {
     for (const key of allowedKeys(ctx)) { const v = params.get(key); if (v && !query.has(key)) query.set(key, v); }
     const queryString = query.toString();
 
-    const [data, setData] = useState<{ key: string; posts: Post[]; total: number; error: string } | null>(null);
+    const cacheKey = (me?.id || '') + '|' + queryString;
+    const [fetched, setFetched] = useState<(ListData & { key: string; error: string }) | null>(null);
+    const cached = fetched?.key === cacheKey ? undefined : cacheGet(cacheKey);
+    const data = fetched?.key === cacheKey ? fetched : cached ? { key: cacheKey, ...cached, error: '' } : null;
     const [reload, setReload] = useState(0), [sheet, setSheet] = useState(false);
     // Follows the address (back/forward, chips) without overwriting what the member is typing.
     const urlQ = params.get('q') || '';
     const [q, setQ] = useState(urlQ);
     useEffect(() => { setQ(urlQ); }, [urlQ]);
     const tabsRef = useRef<HTMLDivElement>(null);
-    useEffect(() => { tabsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [kind]);
+    // Brings the selected tab into view sideways only; scrollIntoView would also move the page
+    // and undo the scroll position restored on Back.
     useEffect(() => {
+        const bar = tabsRef.current, tab = bar?.querySelector('[aria-selected="true"]');
+        if (!bar || !tab) return;
+        const b = bar.getBoundingClientRect(), t = tab.getBoundingClientRect();
+        if (t.left < b.left) bar.scrollLeft += t.left - b.left;
+        else if (t.right > b.right) bar.scrollLeft += t.right - b.right;
+    }, [kind]);
+    // Waits for the session check, so a full page load asks for the list once.
+    useEffect(() => {
+        if (!ready) return;
         let alive = true;
-        api<{ posts: Post[]; total: number }>('posts?' + queryString)
-            .then(d => { if (alive) setData({ key: queryString, posts: d.posts, total: d.total, error: '' }); })
-            .catch(e => { if (alive) setData({ key: queryString, posts: [], total: 0, error: errorText(e) }); });
+        const key = cacheKey;
+        api<ListData>('posts?' + queryString)
+            .then(d => {
+                if (!alive) return;
+                const next: ListData = { posts: d.posts, total: d.total, featured: d.featured, counts: d.counts };
+                const same = JSON.stringify(listCache.get(key)) === JSON.stringify(next);
+                if (!same) cachePut(key, next);
+                setFetched(prev => same && prev?.key === key ? prev : { key, ...(same ? listCache.get(key)! : next), error: '' });
+            })
+            .catch(e => {
+                if (!alive) return;
+                // A failed background check keeps the list already on screen.
+                if (listCache.has(key)) return;
+                setFetched({ key, posts: [], total: 0, error: errorText(e) });
+            });
         return () => { alive = false; };
-    }, [queryString, reload, me?.id]);
+    }, [cacheKey, reload, ready]);
 
     const update = (values: Record<string, string>) => {
         const next = new URLSearchParams(query);
@@ -207,7 +247,13 @@ export function Board() {
     // Resets every filter, including the search word and 거래완료 제외.
     const clearAll = () => { setQ(''); switchTo(kind, category, wanted, false); };
     const page = Math.max(1, Number(params.get('page')) || 1);
-    const loading = !data || data.key !== queryString;
+    const loading = !data;
+    // Back to this list: return to where the member was once its rows are on screen.
+    useLayoutEffect(() => {
+        if (loading) return;
+        const y = takeScrollRestore();
+        if (y !== null) window.scrollTo(0, y);
+    }, [loading, cacheKey]);
     const chips = activeChips(ctx, query, update);
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));

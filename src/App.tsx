@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
 import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound } from 'lucide-react';
-import { Link, navigate, useLocation } from './lib/router';
-import { KIND_NAMES, TRADE_KINDS, type User } from '../shared/market';
-import { AppProvider, useApp } from './app/state';
+import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
+import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
+import { AppProvider, setPageTitle, useApp } from './app/state';
 import { Avatar, CIcon, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
@@ -38,6 +38,22 @@ function Shell() {
     // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, chat room).
     const hideBottomNav = page === 'write' || page === 'edit' || (page === 'chat' && !!parts[1]);
     useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
+
+    // Tab title per screen. A post and a profile add their title or nickname once loaded.
+    useEffect(() => {
+        const kind = params.get('kind');
+        setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : '전체')
+            : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
+            : page === 'me' ? '내 거래'
+            : page === 'manage' ? '매니저 메뉴' : '');
+    }, [page, params]);
+    // Back/Forward returns to the stored scroll position; the board and a post do it themselves
+    // once their data is on screen.
+    useLayoutEffect(() => {
+        if (page === 'trade' || page === 'posts') return;
+        const y = takeScrollRestore();
+        if (y !== null) window.scrollTo(0, y);
+    }, [path, params, page]);
 
     // Links from the previous version (board at "/?kind=…", "/activity/…").
     useEffect(() => {
