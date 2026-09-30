@@ -1,0 +1,261 @@
+name: Deploy to Cloudflare
+
+# One-time setup (repository Settings > Secrets and variables > Actions > New repository secret):
+#   CLOUDFLARE_API_TOKEN   required  API token from the "Edit Cloudflare Workers" template,
+#                                    plus the permission Account > D1 > Edit
+#   MANAGER_PASSWORD       optional  password for the reserved manager account (sosirusok / 우와오),
+#                                    used only when that account does not exist yet
+#   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
+# Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1).
+# Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
+
+env:
+  WORKER_NAME: zombiego-market
+  D1_NAME: zombiego-market-db
+  D1_LOCATION: apac
+  R2_BUCKET: zombiego-market-uploads
+  WRANGLER_SEND_METRICS: "false"
+  NO_COLOR: "1"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Cloudflare 배포 건너뜀::CLOUDFLARE_API_TOKEN 저장소 비밀값이 없어 배포하지 않았습니다. README의 '서버 배포' 절차대로 한 번만 등록하면 이후 main에 반영될 때마다 자동 배포됩니다."
+          {
+            echo "### Cloudflare 배포를 건너뛰었습니다"
+            echo ""
+            echo "저장소 Settings > Secrets and variables > Actions에 \`CLOUDFLARE_API_TOKEN\`(필수)과 \`MANAGER_PASSWORD\`를 등록한 뒤"
+            echo "Actions 탭에서 이 워크플로를 다시 실행하세요."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_API: https://api.cloudflare.com/client/v4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          cache: true
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve Cloudflare account
+        env:
+          GIVEN_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GIVEN_ACCOUNT_ID:-}" ]; then
+            id="$GIVEN_ACCOUNT_ID"
+          else
+            res="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts?per_page=50")"
+            if [ "$(jq -r '.success' <<<"$res")" != "true" ]; then
+              echo "::error::API 토큰을 확인하지 못했습니다: $(jq -c '[.errors[]?|{code,message}]' <<<"$res")"
+              exit 1
+            fi
+            count="$(jq '.result | length' <<<"$res")"
+            if [ "$count" != "1" ]; then
+              echo "::error::토큰으로 접근 가능한 계정이 ${count}개입니다. 저장소 비밀값 CLOUDFLARE_ACCOUNT_ID에 배포할 계정 ID를 넣어 주세요."
+              exit 1
+            fi
+            id="$(jq -r '.result[0].id' <<<"$res")"
+          fi
+          if ! [[ "$id" =~ ^[0-9a-f]{32}$ ]]; then echo "::error::Cloudflare 계정 ID 형식이 올바르지 않습니다."; exit 1; fi
+          echo "::add-mask::$id"
+          echo "CLOUDFLARE_ACCOUNT_ID=$id" >> "$GITHUB_ENV"
+
+      - name: Ensure D1 database exists and resolve its id
+        run: |
+          set -euo pipefail
+          find_id() {
+            pnpm exec wrangler d1 list --json | node -e '
+              let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                const a = s.indexOf("["), b = s.lastIndexOf("]");
+                if (a < 0 || b < a) { console.error("wrangler d1 list did not return JSON"); process.exit(2); }
+                const hit = JSON.parse(s.slice(a, b + 1)).find(d => d.name === process.env.D1_NAME);
+                process.stdout.write(hit ? hit.uuid : "");
+              });'
+          }
+          id="$(find_id)"
+          if [ -z "$id" ]; then
+            echo "Creating D1 database $D1_NAME"
+            pnpm exec wrangler d1 create "$D1_NAME" --location "$D1_LOCATION"
+            id="$(find_id)"
+          fi
+          if ! [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "::error::D1 ID를 확인하지 못했습니다. API 토큰에 Account > D1 > Edit 권한이 있는지 확인하세요."
+            exit 1
+          fi
+          echo "D1_ID=$id" >> "$GITHUB_ENV"
+
+      - name: Detect or create R2 bucket (optional)
+        env:
+          USE_R2: ${{ vars.USE_R2 }}
+        run: |
+          set -uo pipefail
+          r2=false
+          if [ "${USE_R2:-}" = "false" ]; then
+            echo "R2 disabled by repository variable USE_R2=false"
+          else
+            body="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_BUCKET")"
+            codes="$(jq -r '[.errors[]?.code] | map(tostring) | join(",")' <<<"$body")"
+            if [ "$(jq -r '.success' <<<"$body")" = "true" ]; then
+              r2=true
+            elif [[ ",$codes," == *",10006,"* ]]; then
+              if pnpm exec wrangler r2 bucket create "$R2_BUCKET"; then r2=true; fi
+            fi
+            if [ "$r2" != "true" ]; then
+              echo "::notice title=R2 미사용::R2를 쓸 수 없어(오류 코드: ${codes:-없음}; 10042는 R2 미가입) 사진을 D1에 저장하는 방식으로 배포합니다."
+            fi
+          fi
+          echo "R2_ENABLED=$r2" >> "$GITHUB_ENV"
+
+      - name: Put real ids into wrangler.jsonc (runner copy only, never committed)
+        # Must run before `vite build`: @cloudflare/vite-plugin copies bindings into the build output.
+        run: |
+          node - <<'JS'
+          const path = require("path");
+          const { experimental_readRawConfig, experimental_patchConfig } = require("wrangler");
+          const file = path.resolve("wrangler.jsonc");
+          const { rawConfig } = experimental_readRawConfig({ config: file });
+          if (rawConfig.name !== process.env.WORKER_NAME) throw new Error(`wrangler name "${rawConfig.name}" != WORKER_NAME`);
+          const idx = (rawConfig.d1_databases || []).findIndex((d) => d.binding === "DB");
+          if (idx < 0) throw new Error("DB binding missing in wrangler.jsonc");
+          const d1 = rawConfig.d1_databases.map(() => ({}));
+          d1[idx] = { database_id: process.env.D1_ID, database_name: process.env.D1_NAME };
+          experimental_patchConfig(file, { d1_databases: d1 }, false);
+          if (process.env.R2_ENABLED === "true") {
+            if (!(rawConfig.r2_buckets || []).some((b) => b.binding === "BUCKET")) {
+              experimental_patchConfig(file, { r2_buckets: [{ binding: "BUCKET", bucket_name: process.env.R2_BUCKET }] }, true);
+            }
+          } else if (rawConfig.r2_buckets) {
+            // Otherwise deploy's auto-provisioning tries to create the bucket and fails (10042).
+            experimental_patchConfig(file, { r2_buckets: undefined }, false);
+          }
+          const after = experimental_readRawConfig({ config: file }).rawConfig;
+          if (after.d1_databases[idx].database_id !== process.env.D1_ID) throw new Error("database_id injection failed");
+          if (process.env.R2_ENABLED !== "true" && after.r2_buckets?.length) throw new Error("r2_buckets removal failed");
+          console.log(`config ready: D1 ${process.env.D1_NAME}, R2 ${process.env.R2_ENABLED === "true" ? "on" : "off (photos in D1)"}`);
+          JS
+
+      - run: pnpm typecheck
+      - run: pnpm build
+
+      - name: Apply D1 migrations (remote)
+        run: pnpm exec wrangler d1 migrations apply DB --remote --config wrangler.jsonc
+
+      - name: Ensure the account workers.dev subdomain
+        env:
+          WANTED_SUBDOMAIN: ${{ vars.WORKERS_SUBDOMAIN }}
+        run: |
+          set -euo pipefail
+          api() { curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" "$@"; }
+          url="$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain"
+          res="$(api "$url")"
+          sub="$(jq -r '.result.subdomain // empty' <<<"$res")"
+          if [ -z "$sub" ]; then
+            base="${WANTED_SUBDOMAIN:-$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//' | cut -c1-40)}"
+            for cand in "$base" "$base-$(openssl rand -hex 3)"; do
+              put="$(api -X PUT --data "{\"subdomain\":\"$cand\"}" "$url")"
+              sub="$(jq -r '.result.subdomain // empty' <<<"$put")"
+              [ -n "$sub" ] && break
+            done
+            if [ -z "$sub" ]; then
+              echo "::error::workers.dev 주소를 등록하지 못했습니다. 저장소 변수 WORKERS_SUBDOMAIN에 다른 이름을 넣고 다시 실행해 주세요."
+              exit 1
+            fi
+            echo "::notice::workers.dev 주소 $sub 을 등록했습니다. 처음에는 연결까지 몇 분 걸릴 수 있습니다."
+          fi
+          echo "WORKERS_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Prepare Worker secrets (only values that are set)
+        env:
+          MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
+          MANAGER_PASSWORD_HASH: ${{ secrets.MANAGER_PASSWORD_HASH }}
+          MANAGER_PASSWORD_SALT: ${{ secrets.MANAGER_PASSWORD_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node - <<'JS'
+          const fs = require("fs");
+          const out = {};
+          if (process.env.MANAGER_PASSWORD) {
+            if (process.env.MANAGER_PASSWORD.length < 8) throw new Error("MANAGER_PASSWORD는 8자 이상이어야 합니다.");
+            out.MANAGER_PASSWORD = process.env.MANAGER_PASSWORD;
+          }
+          const pair = ["MANAGER_PASSWORD_HASH", "MANAGER_PASSWORD_SALT"].filter((n) => process.env[n]);
+          if (pair.length === 1) throw new Error("MANAGER_PASSWORD_HASH와 MANAGER_PASSWORD_SALT는 함께 등록해야 합니다.");
+          for (const n of pair) out[n] = process.env[n];
+          if (!Object.keys(out).length) { console.log("No manager secrets provided; existing Worker secrets stay as they are."); process.exit(0); }
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/worker-secrets.json`, JSON.stringify(out));
+          JS
+          if [ -f "$RUNNER_TEMP/worker-secrets.json" ]; then
+            echo "SECRETS_ARGS=--secrets-file $RUNNER_TEMP/worker-secrets.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          # vite build writes .wrangler/deploy/config.json pointing at dist/<worker>/wrangler.json.
+          # Deploy that built config; the source wrangler.jsonc would re-bundle without assets.
+          cfg="$(node -e '
+            const fs = require("fs"), p = require("path"), f = ".wrangler/deploy/config.json";
+            if (!fs.existsSync(f)) { console.error("missing " + f + " (did vite build run?)"); process.exit(1); }
+            const c = JSON.parse(fs.readFileSync(f, "utf8"));
+            process.stdout.write(p.relative(".", p.resolve(p.dirname(f), c.configPath)));')"
+          echo "Deploying with $cfg"
+          # --secrets-file is additive (other secrets are kept) and works on the very first deploy.
+          pnpm exec wrangler deploy --config "$cfg" ${SECRETS_ARGS:-} --message "github ${GITHUB_SHA::7}"
+
+      - name: Remove secrets file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/worker-secrets.json"
+
+      - name: Check the live site
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS "$WORKERS_URL/api/health" | grep -q '"ok":true'; then echo "Healthy: $WORKERS_URL"; ok=1; break; fi
+            sleep 10
+          done
+          if [ -z "${ok:-}" ]; then
+            echo "::warning::$WORKERS_URL/api/health 가 아직 응답하지 않습니다. 새 주소는 연결까지 몇 분 걸릴 수 있습니다."
+          fi
+          {
+            echo "### 배포 완료"
+            echo ""
+            echo "- 주소: $WORKERS_URL"
+            echo "- 데이터베이스: D1 \`$D1_NAME\`"
+            echo "- 사진 저장: $([ "$R2_ENABLED" = true ] && echo "R2 ($R2_BUCKET)" || echo "D1 (R2 미사용)")"
+          } >> "$GITHUB_STEP_SUMMARY"

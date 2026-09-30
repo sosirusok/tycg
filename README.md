@@ -1,147 +1,81 @@
 # 좀비고 거래소
 
-구매, 판매, 교환, 대리 모집을 위한 한국어 거래 게시판입니다. 아이디 로그인, 프로필, 게시글 수정과 삭제, 사진 첨부, 회원 간 1대1 채팅을 제공합니다.
+좀비고 계정·클랜·굿즈 거래와 대리를 위한 한국어 거래 게시판입니다. 화면 구조는 숨고(soomgo.com)의 목록·프로필·채팅 흐름을 따르고, 메인 색은 파랑 `#0066FF` 한 가지만 씁니다.
 
-이 저장소는 애플리케이션 소스와 검증 워크플로를 관리합니다. 실제 서비스는 Cloudflare Workers에서 실행하며 D1 데이터베이스와 R2 파일 저장소가 필요합니다. GitHub에 코드를 올리거나 CI가 성공하는 것만으로 운영 서비스가 배포되지는 않습니다. GitHub Pages는 이 앱의 서버 기능을 실행할 수 없습니다.
+- 거래 탭: **구매 · 판매 · 교환 · 대리(구함) · 대리(진행)**
+- 세부 분류: 구매·판매는 계정/클랜/굿즈 및 쿠폰/기타, 대리는 래더/스토리 및 재화/이벤트, 교환은 “[계정·클랜]에서 [계정·클랜] 구함”
+- 판매: 즉거가·현젯(만원 단위), 즉거가를 바꾸면 이전 가격이 취소선으로 남음(예: ~~60만원~~ ~~50만원~~ 40만원)
+- 구매: 최대 사용 가능 금액(MAX), 허용 대주 수, 전적 조건, 원하는 닉 조건
+- 래더 시즌 체크(아이언 25~, 마스터 17~, 챔피언 8~, 나머지 6~현재 시즌), 우대 스킨, 대주 수, 팬텀 %, 닉 글자 수·등급으로 검색
+- 회원가입·로그인(30일 유지), 프로필, 1:1 채팅(사진 첨부), 가격 제안, 찜, 신고, 차단
+- **인증**: 대리 인증 · 본인 인증 · 신용인. 닉네임 옆에 인증 이름과 체크 표시. 대리(진행) 글은 대리 인증 회원만 작성
+- **등급**: 일반 → 플러스 → 프리미엄 → 엘리트 → 관리자. 플러스 영구 3만원, 프리미엄 영구 5만원/6개월 3만원, 엘리트 영구 10만원/6개월 6만원, 관리자는 매니저 지정
+- 인증·등급 신청: 우측 상단 **인증/등급 신청하기** → 설명 창 → **신청하러 가기** → 매니저와의 채팅. 매니저는 채팅의 신청 카드에서 바로 승인·반려하고, 오른쪽 회원 관리 패널에서 인증·등급을 지급·회수
+- 매니저 관리: 신청, 회원 검색, 신고, 숨긴 글, 공지, 설정(등급 입금 안내 문구, 현재 래더 시즌)
 
-## 거래 분류
+결제·에스크로·거래 보증 기능은 없습니다. 등급 결제는 매니저 계좌 입금을 매니저가 확인한 뒤 지급하는 방식입니다.
 
-| 탭 | 세부 분류 | 입력 방식 |
-| --- | --- | --- |
-| 구매 | 계정, 클랜, 굿즈 및 쿠폰, 기타 | 최대 사용 금액과 원하는 조건 |
-| 판매 | 계정, 클랜, 굿즈 및 쿠폰, 기타 | 판매 대상의 실제 정보, 즉거가, 현젯 |
-| 교환 | 계정 또는 클랜 → 계정 또는 클랜 | 내놓는 대상과 구하는 대상을 따로 선택 |
-| 대리(구함) | 래더, 스토리 및 재화, 이벤트 | 원하는 작업과 조건 |
-| 대리(진행) | 래더, 스토리 및 재화, 이벤트 | 진행 가능한 작업과 조건 |
+## 서버 배포 (한 번만 설정)
 
-계정 구매에는 허용 대주 수, 전적 조건, 원하는 닉네임 조건을 받습니다. 보유 가스나 미네랄, 판매자의 실제 대주 수를 구매자에게 묻지 않습니다. 계정 판매에는 실제 대주 수를 숫자로 입력하고 보유 닉네임과 재화를 기록합니다. 교환은 제공 정보와 원하는 조건을 분리합니다.
+서비스는 Cloudflare Workers(서버)와 D1(데이터베이스)에서 무료 요금제로 동작합니다. 저장소의 GitHub Actions가 데이터베이스 생성, 테이블 준비, 배포까지 모두 처리하므로 **로그인이나 명령어 입력 없이** 아래 두 가지만 한 번 등록하면 됩니다.
 
-판매 글의 즉거가를 바꾸면 서버에 이전 금액을 기록합니다. 공개 화면에는 이전 가격을 취소선으로 표시하고 현재 가격을 강조합니다. 현젯은 판매자가 기재하는 별도 금액이며, 플랫폼에서 확인한 거래 성사 금액을 뜻하지 않습니다. 구매 예산 변경은 판매 가격 이력에 섞이지 않습니다.
+1. **Cloudflare API 토큰 만들기**
+   1. <https://dash.cloudflare.com/sign-up> 에서 무료 가입(이미 있으면 로그인)
+   2. <https://dash.cloudflare.com/profile/api-tokens> → **Create Token** → **Edit Cloudflare Workers** 템플릿의 **Use template**
+   3. Permissions에 **+ Add more** → `Account` · `D1` · `Edit` 한 줄 추가
+   4. Account Resources는 본인 계정 선택 → **Continue to summary** → **Create Token** → 표시된 토큰 복사
+2. **GitHub 저장소에 비밀값 등록**: 저장소 **Settings → Secrets and variables → Actions → New repository secret**
+   - `CLOUDFLARE_API_TOKEN`: 위에서 복사한 토큰
+   - `MANAGER_PASSWORD`: 매니저 계정(아이디 `sosirusok`, 닉네임 `우와오`)의 비밀번호. 매니저 계정이 처음 만들어질 때만 쓰입니다.
+3. **Actions → Deploy to Cloudflare → Run workflow** (이후에는 main 브랜치에 반영될 때마다 자동 배포)
 
-래더는 티어와 시즌의 정확한 조합을 체크합니다. 아이언은 25~32시즌, 마스터는 17~32시즌, 챔피언은 8~32시즌, 나머지 티어는 6~32시즌입니다. 우대 스킨 목록은 사용자 요청과 공개 자료에서 확인한 표기를 반영하며 인기 순위나 자동 시세로 사용하지 않습니다. 제목, 설명, 가격과 상세 조건은 각각 분리합니다.
+실행 결과 요약(Summary)에 사이트 주소 `https://zombiego-market.<계정 이름>.workers.dev` 가 표시됩니다. 처음 만든 주소는 연결까지 몇 분 걸릴 수 있습니다.
 
-회원은 자신의 글을 수정하고 삭제할 수 있습니다. 매니저는 신고 검토, 게시글 숨김과 복원, 공지 관리를 할 수 있습니다. 등급은 매니저와 일반 회원만 있으며 자동 승급은 없습니다. 결제, 에스크로, 거래 보증과 소유권 인증 기능은 제공하지 않습니다.
+- 사진은 R2가 켜진 계정이면 R2에, 아니면 D1에 저장합니다. R2는 결제수단 등록이 필요하므로 켜지 않아도 됩니다.
+- 토큰으로 볼 수 있는 Cloudflare 계정이 여러 개라면 `CLOUDFLARE_ACCOUNT_ID` 비밀값도 추가하세요.
+- 원하는 주소 이름이 있으면 저장소 **Variables**에 `WORKERS_SUBDOMAIN`을 넣으세요. 개인 도메인은 Cloudflare의 Worker 설정에서 연결합니다.
+- 비밀값이 없으면 배포 작업은 아무것도 바꾸지 않고 안내만 남깁니다.
 
-## 로컬 실행
+## 운영 메모
 
-Node.js 22.13 이상과 `package.json`에 지정된 pnpm을 사용합니다.
+- **새 래더 시즌**: 매니저 관리 → 설정에서 현재 시즌을 올리면 글쓰기·검색의 시즌 선택지가 늘어납니다.
+- **등급 입금 안내**: 매니저 관리 → 설정의 문구가 인증·등급 신청 창에 그대로 표시됩니다.
+- **6개월 등급**: 지급일부터 6개월 뒤 자동으로 내려가며, 영구 등급이 있으면 그 등급으로 돌아갑니다. 같은 등급을 기간 중에 다시 지급하면 남은 기간 뒤로 6개월이 이어집니다.
+- **관리자 등급**은 표시용 등급입니다. 매니저 권한(신청 처리, 신고, 숨김)은 매니저 계정에만 있습니다.
+- 무료 요금제 기준으로 요청당 CPU 시간이 짧아 비밀번호 해시는 PBKDF2-SHA256 20,000회로 저장하며, 해시에 반복 횟수를 함께 기록합니다.
+
+## 로컬 개발
+
+Node.js 22.13 이상과 pnpm(`packageManager`에 지정된 버전)을 사용합니다.
 
 ```bash
 pnpm install --frozen-lockfile
+echo 'MANAGER_PASSWORD=원하는-비밀번호' > .dev.vars   # 로컬 매니저 계정용, Git에 올라가지 않음
 pnpm db:migrate:local
 pnpm dev
 ```
 
-로컬 개발은 모의 D1과 R2를 사용하므로 Cloudflare 계정이 없어도 실행할 수 있습니다. `wrangler.jsonc`의 기본 D1 ID는 로컬 전용 자리표시자입니다. 로컬 데이터는 Git에서 제외된 `.wrangler/state`에 저장됩니다.
+로컬에서는 D1과 R2를 흉내 낸 저장소(`.wrangler/state`)를 쓰므로 Cloudflare 계정이 없어도 됩니다.
 
-빌드와 API 검증은 다음과 같이 실행합니다.
+검사:
 
 ```bash
 pnpm typecheck
 pnpm build
-pnpm test:v9
+pnpm test      # 로컬 서버를 띄워 API 검증 3종(거래, 인증·등급, R2 없는 사진 저장)을 실행
 ```
 
-`test:v9`는 로컬 마이그레이션을 적용하고 8790번 포트에 빌드된 Worker를 띄워 거래 분류, 구매와 판매 조건, 교환 방향, 숫자 대주 수, 가격 이력과 검색을 검증한 뒤 서버를 종료합니다. 테스트 대상은 로컬 서버로 제한됩니다. 브라우저 검증용 미리보기와 운영 배포는 별개입니다.
-
-## Cloudflare에 처음 배포하기
-
-아래 명령은 운영자가 자신의 Cloudflare 계정에서 실행하는 절차입니다. 저장소의 CI는 이 명령을 자동 실행하지 않습니다.
-
-GitHub 연결과 Cloudflare 인증은 별개입니다. 이 프로젝트는 GitHub에서 소스를 관리하고 Cloudflare에서 서버, 데이터베이스와 사진 저장소를 실행합니다. 먼저 `pnpm exec wrangler login`으로 배포할 계정에 인증해야 합니다. 인증 정보를 코드나 GitHub 공개 파일에 넣지 않습니다.
-
-인증과 자원 설정이 끝나면 다음 명령으로 운영 연결을 검사하고 배포할 수 있습니다.
-
-```bash
-pnpm cloudflare:check
-pnpm cloudflare:deploy
-```
-
-검사 명령은 서버를 배포하지 않습니다. 배포 명령은 실제 D1 데이터베이스와 R2 버킷을 확인한 뒤 실행하며, 로컬용 DB 자리표시자나 잘못된 계정 설정이 남아 있으면 중단합니다. 계정이 여러 개라면 `CLOUDFLARE_ACCOUNT_ID`로 사용할 계정을 지정합니다. 처음 자원을 만드는 절차는 아래와 같습니다.
-
-먼저 Cloudflare에 인증하고 사용할 D1 데이터베이스와 R2 버킷을 만듭니다.
-
-```bash
-pnpm exec wrangler login
-pnpm exec wrangler d1 create zombiego-market-db
-pnpm exec wrangler r2 bucket create zombiego-market-uploads
-```
-
-`wrangler.jsonc`에서 다음을 설정합니다.
-
-- `name`: 배포할 Worker 이름
-- `d1_databases[0].database_id`: 생성 결과에 나온 실제 D1 ID
-- `d1_databases[0].database_name`: 실제 데이터베이스 이름
-- `r2_buckets[0].bucket_name`: 실제 업로드 버킷 이름
-
-R2 버킷은 공개 버킷으로 설정하지 않습니다. 앱의 사진 API가 게시글 공개 여부와 접근 권한을 검사합니다. 기존 운영 데이터를 이전하는 경우 새 DB 생성만으로 회원, 게시글이나 업로드가 옮겨지지는 않으므로 별도 이관이 필요합니다.
-
-실제 D1 ID를 설정한 다음 마이그레이션과 빌드를 실행합니다. 원격 마이그레이션 스크립트는 자리표시자 ID가 남아 있으면 실행을 중단합니다.
-
-```bash
-pnpm db:migrate:remote
-pnpm typecheck
-pnpm build
-pnpm exec wrangler deploy --config dist/server/wrangler.json
-```
-
-배포 명령이 출력한 주소에서 서비스를 확인할 수 있습니다. 도메인은 Cloudflare의 해당 Worker 설정에서 연결합니다. `wrangler.jsonc`를 수정하면 반드시 다시 빌드한 뒤 배포합니다. 빌드된 설정 파일을 직접 수정하지 않습니다.
-
-## 초기 매니저 설정
-
-예약된 매니저 아이디는 `sosirusok`, 닉네임은 `우와오`입니다. 실제 비밀번호는 저장소에 포함하지 않습니다. 서버 비밀값 `MANAGER_PASSWORD_HASH`, `MANAGER_PASSWORD_SALT`가 설정된 후 형식에 맞는 로그인 또는 회원가입 요청이 들어오면 매니저를 생성합니다. 이미 존재하는 매니저의 비밀번호는 이 설정을 바꿔도 덮어쓰지 않습니다.
-
-해시는 PBKDF2 SHA-256, 100000회, 32바이트입니다. salt는 임의 32바이트의 16진수 문자열이며 해시 계산에는 그 문자열의 UTF-8 바이트를 사용합니다.
-
-다음 명령은 비밀번호를 화면에 표시하지 않고 입력받아, salt와 해시만 로컬 `.dev.vars`에 저장합니다. Python 3가 필요합니다. 기존 파일이 있으면 덮어쓰지 않습니다.
-
-```bash
-python3 - <<'PY'
-import getpass
-import hashlib
-import os
-from pathlib import Path
-
-path = Path('.dev.vars')
-if path.exists():
-    raise SystemExit('.dev.vars가 이미 있습니다. 기존 설정을 확인하세요.')
-password = getpass.getpass('초기 매니저 비밀번호: ')
-confirm = getpass.getpass('비밀번호 확인: ')
-if len(password) < 8 or password != confirm:
-    raise SystemExit('8자 이상이며 두 입력이 같아야 합니다.')
-salt = os.urandom(32).hex()
-digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32).hex()
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w') as file:
-    file.write(f'MANAGER_PASSWORD_SALT={salt}\nMANAGER_PASSWORD_HASH={digest}\n')
-print('.dev.vars에 매니저 해시 설정을 저장했습니다.')
-PY
-```
-
-로컬 개발에서는 이 파일을 자동으로 읽습니다. 위 Cloudflare 최초 배포가 끝난 뒤 다음 명령으로 같은 두 값을 Worker 비밀값에 등록할 수 있습니다. 이 명령은 Worker의 새 버전을 즉시 배포합니다.
-
-```bash
-pnpm exec wrangler secret bulk .dev.vars --config wrangler.jsonc
-```
-
-`.dev.vars`에는 이 두 설정만 넣고 원문 비밀번호를 넣지 않습니다. `.env*`, `.dev.vars*`, 로컬 DB와 업로드는 Git에서 제외됩니다. GitHub Actions 검증에는 매니저 비밀값이나 Cloudflare API 토큰이 필요하지 않습니다.
-
-`pnpm cloudflare:deploy`는 `.dev.vars` 또는 환경 변수에 있는 매니저 해시와 salt를 첫 배포에 함께 등록합니다. 둘 다 없으면 기존 Worker에 두 비밀값이 등록됐는지 확인하고, 없을 경우 배포를 중단합니다. 기존 매니저의 비밀번호를 자동 변경하지는 않습니다.
-
-운영 배포 후에는 `/api/posts?kind=sell`이 정상 응답하는지 확인해야 실제 DB 연결을 확인할 수 있습니다. 비로그인 상태의 `/api/auth/me`만으로는 DB 연결을 검증할 수 없습니다. 사진 저장소는 로그인 후 사진 업로드와 조회까지 확인합니다.
-
-## 구성
+## 구조
 
 | 경로 | 역할 |
 | --- | --- |
-| `app/`, `components/market/` | 화면과 라우팅 |
-| `lib/market.ts`, `lib/trade-server.ts` | 거래 규칙과 서버 검증 |
-| `lib/server.ts` | 인증, 세션, DB와 파일 저장소 |
-| `db/schema.ts`, `drizzle/` | 스키마와 추가형 마이그레이션 |
-| `build/standalone-worker.ts`, `wrangler.jsonc` | 독립 Cloudflare Worker 진입점과 바인딩 |
-| `.github/workflows/ci.yml` | 고정된 의존성 설치, 타입 검사, 빌드, 로컬 API 검증 |
-| `docs/` | 조사 근거와 검증 기록 |
+| `src/` | 화면(React). `pages/`는 화면별, `components/`는 공용 부품, `styles/`는 디자인 토큰과 스타일 |
+| `worker/` | API 서버(Cloudflare Worker). 게시글, 사진, 채팅, 인증·등급 신청, 매니저 기능 |
+| `shared/` | 화면과 서버가 함께 쓰는 거래 규칙(티어·시즌, 분류, 우대 스킨, 등급·인증 정의) |
+| `migrations/` | D1 테이블 변경 기록(추가만 함) |
+| `tests/`, `scripts/test-local.mjs` | 로컬 API 검증 |
+| `public/icons/` | Microsoft Fluent Emoji 컬러 아이콘(MIT, `LICENSE.md` 포함) |
+| `.github/workflows/` | CI(타입 검사·빌드·검증)와 Cloudflare 자동 배포 |
+| `docs/research.md` | 거래 용어·우대 스킨·배포 제약 조사 근거 |
 
-실행 경로는 별도 사이트 프로젝트 ID, ChatGPT 로그인 또는 커넥터 연결에 의존하지 않습니다. 남아 있는 이전 개발 도구 파일은 Worker 진입점에 연결되지 않습니다.
-
-참고 문서: [Cloudflare Vite 플러그인](https://developers.cloudflare.com/workers/vite-plugin/get-started/), [D1 명령](https://developers.cloudflare.com/d1/wrangler-commands/), [R2 버킷 생성](https://developers.cloudflare.com/r2/buckets/create-buckets/), [Worker 비밀값](https://developers.cloudflare.com/workers/configuration/secrets/).
+글꼴은 Pretendard(SIL OFL)를 사이트에 포함해 배포합니다.

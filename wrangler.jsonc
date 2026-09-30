@@ -1,20 +1,26 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "zombiego-market",
-  "main": "./build/standalone-worker.ts",
+  "main": "./worker/index.ts",
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
   "assets": {
-    "binding": "ASSETS"
+    // The React app is a single-page app; unknown paths fall back to index.html.
+    // Only /api/* requests invoke the Worker, so static files never cost CPU time.
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "zombiego-market-db",
+      // Local placeholder. The deploy script fills in the real ID in CI only.
       "database_id": "00000000-0000-4000-8000-000000000000",
-      "migrations_dir": "drizzle"
+      "migrations_dir": "migrations"
     }
   ],
+  // Optional. Without an R2 bucket, uploaded photos are stored in D1.
   "r2_buckets": [
     {
       "binding": "BUCKET",
