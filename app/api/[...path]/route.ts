@@ -8,6 +8,24 @@ async function tagsFor(posts: any[]) { if (!posts.length)
 async function getPost(id: string) { return db().prepare(postSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 async function memberConversation(id: string, uid: string) { const c = await db().prepare('SELECT * FROM conversations WHERE id=? AND (user_a=? OR user_b=?)').bind(id, uid, uid).first<any>(); if (!c)
     fail(404, '대화를 찾을 수 없습니다.'); return c; }
+async function discardUnreadBody(req: Request) {
+    // Drain bounded rejected payloads before responding so workerd can reuse the connection.
+    if (!req.body || req.bodyUsed) return;
+    const reader = req.body.getReader();
+    try {
+        let bytes = 0;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > 120000) {
+                await reader.cancel();
+                break;
+            }
+        }
+    } catch { /* A disconnected client must not replace the API response. */ }
+    finally { reader.releaseLock(); }
+}
 async function handler(req: Request) {
     try {
         const url = new URL(req.url), p = url.pathname.slice(5).split('/').filter(Boolean), method = req.method;
@@ -100,6 +118,9 @@ async function handler(req: Request) {
             return json({ error: e.message }, e.status);
         console.error('Market request failed', e instanceof Error ? e.message : 'unknown');
         return json({ error: '서버 연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.' }, 503);
+    }
+    finally {
+        await discardUnreadBody(req);
     }
 }
 export const GET = handler;
