@@ -174,7 +174,7 @@ export async function limit(key: string, max: number, ms: number) {
 }
 
 export function textField(v: unknown, min: number, max: number, label: string) {
-    if (typeof v !== 'string' || v.trim().length < min || v.trim().length > max) fail(400, `${label}은 ${min}~${max}자로 입력해 주세요.`);
+    if (typeof v !== 'string' || v.trim().length < min || v.trim().length > max) fail(400, `${label}: ${min}~${max}자로 입력해 주세요.`);
     return v.trim();
 }
 

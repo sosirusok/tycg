@@ -34,7 +34,7 @@ async function authHandler(req: Request, p: string[]) {
         return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
     }
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
-    if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문, 숫자, 밑줄로 4~24자까지 입력해 주세요.');
+    if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
     // Limits are per address, and per id from each address, so nobody can lock
     // another member (such as the manager) out by failing logins on purpose.
@@ -52,7 +52,7 @@ async function authHandler(req: Request, p: string[]) {
             await db().prepare('INSERT INTO users (id,username,nickname,password_hash,salt,role,bio,created_at) VALUES (?,?,?,?,?,?,?,?)')
                 .bind(id, username, nickname, await storedHash(b.password, salt), salt, 'member', '', Date.now()).run();
         } catch (e) {
-            if (String(e).includes('UNIQUE')) fail(409, '이미 사용 중인 아이디 또는 닉네임입니다.');
+            if (String(e).includes('UNIQUE')) fail(409, String(e).includes('users.nickname') ? '이미 사용 중인 닉네임입니다.' : '이미 사용 중인 아이디입니다.');
             throw e;
         }
     } else if (p[1] === 'login') {

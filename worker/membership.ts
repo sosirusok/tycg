@@ -47,14 +47,14 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
     if (action === 'approve') {
         if (app.kind === 'badge') {
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
-            message = `${badgeInfo(app.target)?.name} 지급을 완료했습니다.`;
+            message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
             const { expires, statement } = await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args);
             statements.push(statement);
-            message = `${gradeInfo(app.target).name} 등급 지급을 완료했습니다.${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}`;
+            message = `${gradeInfo(app.target).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}`;
         }
     } else {
-        message = `${applicationTitle(app)}이 반려되었습니다.${note ? ' 사유: ' + note : ''}`;
+        message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
     }
     if (app.conversation_id) statements.push(...guardedMessageStatements(app.conversation_id, u.id, message, 'system', app.id, DECIDED, args, now));
     const r = await db().batch(statements);
@@ -71,7 +71,7 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         return json({ applications: r.results });
     }
     if (!p[1] && method === 'POST') {
-        if (u.role === 'manager') fail(400, '매니저는 신청할 필요가 없습니다.');
+        if (u.role === 'manager') fail(400, '매니저 계정은 신청할 수 없습니다.');
         await limit('apply:' + u.id, 30, 3600000);
         const b = await body(req);
         const kind: ApplicationKind = b.kind === 'grade' ? 'grade' : 'badge';
@@ -128,7 +128,7 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
             const now = Date.now(), decision = crypto.randomUUID();
             const r = await db().batch([
                 db().prepare("UPDATE applications SET status='cancelled',updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(now, decision, app.id),
-                ...(app.conversation_id ? guardedMessageStatements(app.conversation_id, u.id, `${applicationTitle(app)}을 취소했습니다.`, 'system', app.id, DECIDED, [app.id, decision], now) : []),
+                ...(app.conversation_id ? guardedMessageStatements(app.conversation_id, u.id, `신청 취소: ${applicationTitle(app)}`, 'system', app.id, DECIDED, [app.id, decision], now) : []),
             ]);
             if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
             return json({ ok: true });

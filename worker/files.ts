@@ -54,13 +54,13 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
         const storage = storageMode();
         // Photos that no post, chat or draft uses are removed a day after upload (see cleanup.ts).
         const mine = await db().prepare("SELECT COUNT(*) AS n,COALESCE(SUM(CASE WHEN storage='d1' THEN size ELSE 0 END),0) AS d1 FROM uploads WHERE owner_id=?").bind(u.id).first<any>();
-        if (mine.n >= 600) fail(409, '올린 사진이 너무 많습니다. 쓰지 않는 사진은 하루 뒤 자동으로 정리됩니다.');
+        if (mine.n >= 600) fail(409, '사진 업로드 한도를 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
         const bytes = await readBody(req, photoLimit());
         const mime = sniff(bytes);
         if (!mime) fail(400, 'JPG, PNG, WebP 사진을 선택해 주세요.');
         if (storage === 'd1') {
             // Without R2, photos share the database's 500 MB, so each member and the whole site have a budget.
-            if (mine.d1 + bytes.byteLength > D1_USER_BYTES) fail(409, '사진 저장 공간(1인 30MB)을 다 썼습니다. 쓰지 않는 사진은 하루 뒤 자동으로 정리됩니다.');
+            if (mine.d1 + bytes.byteLength > D1_USER_BYTES) fail(409, '사진 용량(1인 30MB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
             const site = await db().prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE storage='d1'").first<any>();
             if (site.bytes + bytes.byteLength > D1_SITE_BYTES) fail(507, '사이트의 사진 저장 공간이 가득 찼습니다. 매니저에게 알려 주세요.');
         }

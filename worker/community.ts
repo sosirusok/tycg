@@ -22,7 +22,7 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         if (method === 'PUT') {
             const b = await body(req);
             const count = await db().prepare('SELECT COUNT(*) AS n FROM drafts WHERE user_id=?').bind(u.id).first<any>();
-            if (count.n >= 100 && !await db().prepare('SELECT 1 FROM drafts WHERE user_id=? AND draft_key=?').bind(u.id, key).first()) fail(409, '임시저장이 너무 많습니다.');
+            if (count.n >= 100 && !await db().prepare('SELECT 1 FROM drafts WHERE user_id=? AND draft_key=?').bind(u.id, key).first()) fail(409, '임시저장은 100개까지입니다.');
             await db().prepare('INSERT INTO drafts(user_id,draft_key,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id,draft_key) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at').bind(u.id, key, JSON.stringify(b), Date.now()).run();
             return json({ ok: true });
         }
@@ -68,7 +68,7 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         const u = await requireUser(req);
         await limit('report:' + u.id, 8, 3600000);
         const b = await body(req), post = await visiblePost(b.postId, u), reason = textField(b.reason, 2, 50, '신고 사유'), detail = textField(b.details, 1, 1000, '신고 설명');
-        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '이미 접수한 신고가 검토 중입니다.');
+        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
         await db().prepare('INSERT INTO reports(post_id,reporter_id,reason,details,created_at) VALUES(?,?,?,?,?)').bind(post.id, u.id, reason, detail, Date.now()).run();
         return json({ ok: true });
     }
@@ -89,29 +89,29 @@ async function offersHandler(req: Request, p: string[]) {
     if (method === 'POST' && !p[1]) {
         await limit('offer:' + u.id, 20, 600000);
         const b = await body(req), post = await visiblePost(b.postId, u);
-        if (post.hidden || post.status !== 'open') fail(409, '현재 가격 제안을 받지 않는 글입니다.');
-        if (!post.accepts_offers && post.price_mode !== 'offer') fail(400, '작성자가 가격 제안을 받지 않습니다.');
-        if (post.author_id === u.id) fail(400, '내 글에는 제안할 수 없습니다.');
+        if (post.hidden || post.status !== 'open') fail(409, '제시를 받지 않는 글입니다.');
+        if (!post.accepts_offers && post.price_mode !== 'offer') fail(400, '제시를 받지 않는 글입니다.');
+        if (post.author_id === u.id) fail(400, '내 글에는 제시할 수 없습니다.');
         const n = amount(b.amount, false), note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : '';
-        if (await db().prepare("SELECT id FROM offers WHERE post_id=? AND sender_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '대기 중인 제안을 먼저 철회해 주세요.');
+        if (await db().prepare("SELECT id FROM offers WHERE post_id=? AND sender_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '대기 중인 제시를 먼저 취소해 주세요.');
         const chat = await ensureChat(u.id, post.author_id), id = crypto.randomUUID(), now = Date.now();
         const result = await db().batch([
             db().prepare("INSERT INTO offers(id,post_id,sender_id,recipient_id,conversation_id,amount,note,created_at,updated_at) SELECT ?,p.id,?,p.author_id,?,?,?,?,? FROM posts p WHERE p.id=? AND p.hidden=0 AND p.status='open' AND (p.accepts_offers=1 OR p.price_mode='offer') AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=p.author_id) OR (target_id=? AND user_id=p.author_id)) AND NOT EXISTS(SELECT 1 FROM offers WHERE post_id=p.id AND sender_id=? AND status='pending')")
                 .bind(id, u.id, chat, n, note, now, now, post.id, u.id, u.id, u.id),
-            db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,created_at) SELECT ?,?,?,'offer',?,? WHERE EXISTS(SELECT 1 FROM offers WHERE id=?)").bind(chat, u.id, '가격 제안', id, now, id),
+            db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,created_at) SELECT ?,?,?,'offer',?,? WHERE EXISTS(SELECT 1 FROM offers WHERE id=?)").bind(chat, u.id, '가격 제시', id, now, id),
             db().prepare('UPDATE conversations SET updated_at=? WHERE id=?').bind(now, chat),
         ]);
-        if (!result[0].meta.changes) fail(409, '제안이 이미 있거나 거래 조건이 바뀌었습니다.');
+        if (!result[0].meta.changes) fail(409, '이미 제시했거나 글이 바뀌었습니다.');
         return json({ id, chatId: chat }, 201);
     }
     if (method === 'PATCH' && p[1]) {
         const b = await body(req), offer = await db().prepare('SELECT * FROM offers WHERE id=? AND (sender_id=? OR recipient_id=?)').bind(p[1], u.id, u.id).first<any>();
-        if (!offer) fail(404, '제안을 찾을 수 없습니다.');
-        if (offer.status !== 'pending') fail(409, '이미 처리된 제안입니다.');
+        if (!offer) fail(404, '제시를 찾을 수 없습니다.');
+        if (offer.status !== 'pending') fail(409, '이미 처리된 제시입니다.');
         const action = b.action;
-        if (!['accepted', 'declined', 'withdrawn'].includes(action)) fail(400, '제안 처리 방식을 확인해 주세요.');
-        if (action === 'withdrawn' ? offer.sender_id !== u.id : offer.recipient_id !== u.id) fail(403, '제안 처리 권한이 없습니다.');
-        if (action === 'accepted' && await blocked(offer.sender_id, offer.recipient_id)) fail(403, '차단된 회원의 제안은 수락할 수 없습니다.');
+        if (!['accepted', 'declined', 'withdrawn'].includes(action)) fail(400, '잘못된 요청입니다.');
+        if (action === 'withdrawn' ? offer.sender_id !== u.id : offer.recipient_id !== u.id) fail(403, '권한이 없습니다.');
+        if (action === 'accepted' && await blocked(offer.sender_id, offer.recipient_id)) fail(403, '차단된 회원의 제시는 수락할 수 없습니다.');
         const now = Date.now();
         if (action === 'accepted') {
             const r = await db().batch([
@@ -119,10 +119,10 @@ async function offersHandler(req: Request, p: string[]) {
                 db().prepare("UPDATE posts SET status='reserved',updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM offers WHERE id=? AND status='accepted')").bind(now, offer.post_id, offer.id),
                 db().prepare("UPDATE offers SET status='declined',updated_at=? WHERE post_id=? AND status='pending' AND EXISTS(SELECT 1 FROM offers x WHERE x.id=? AND x.status='accepted')").bind(now, offer.post_id, offer.id),
             ]);
-            if (!r[0].meta.changes) fail(409, '다른 제안이 처리되었거나 거래 상태가 바뀌었습니다.');
+            if (!r[0].meta.changes) fail(409, '다른 제시를 이미 수락했거나 글 상태가 바뀌었습니다.');
         } else {
             const r = await db().prepare("UPDATE offers SET status=?,updated_at=? WHERE id=? AND status='pending'").bind(action, now, offer.id).run();
-            if (!r.meta.changes) fail(409, '이미 처리된 제안입니다.');
+            if (!r.meta.changes) fail(409, '이미 처리된 제시입니다.');
         }
         return json({ ok: true });
     }

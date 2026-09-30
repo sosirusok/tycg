@@ -60,14 +60,14 @@ export function amount(v: any, optional = true) {
 
 function numericDetail(details: Record<string, string>, key: string, label: string, min: number, max: number) {
     if (!details[key]) return;
-    if (!/^\d+$/.test(details[key]) || Number(details[key]) < min || Number(details[key]) > max) fail(400, `${label}은 ${min}~${max} 사이의 정수로 입력해 주세요.`);
+    if (!/^\d+$/.test(details[key]) || Number(details[key]) < min || Number(details[key]) > max) fail(400, `${label}: ${min}~${max} 사이 숫자로 입력해 주세요.`);
     details[key] = String(Number(details[key]));
 }
 
 function selectedDetails(details: Record<string, string>, key: string, allowed: readonly string[], label: string, includeLegacySet = false) {
     if (!details[key]) return;
     const chosen = parse(details[key], null);
-    if (!Array.isArray(chosen) || chosen.length > allowed.length || chosen.some(v => typeof v !== 'string' || !allowed.includes(v))) fail(400, `${label}을 확인해 주세요.`);
+    if (!Array.isArray(chosen) || chosen.length > allowed.length || chosen.some(v => typeof v !== 'string' || !allowed.includes(v))) fail(400, `${label}: 확인해 주세요.`);
     if (includeLegacySet && chosen.includes(FULL_SET) && !chosen.includes(LEGACY_SKELETON)) chosen.push(LEGACY_SKELETON);
     details[key] = JSON.stringify([...new Set(chosen)]);
 }
@@ -94,12 +94,12 @@ function seasonFilter(table: string, tags: SeasonTag[], all: boolean) {
 }
 
 async function validatePost(b: any, u: User, existing?: any) {
-    const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '설명');
+    const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '내용');
     if (!TRADE_KINDS.includes(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
     const category = b.category || categoriesForKind(b.kind)[0].id;
-    if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '거래 구분에 맞는 종류를 선택해 주세요.');
+    if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '세부 분류를 선택해 주세요.');
     // 대리(진행) is limited to members with 대리 인증, for new posts and for edits.
-    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증을 받은 회원만 올리거나 고칠 수 있습니다.');
+    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 쓸 수 있습니다.');
     const latest = await latestSeason();
     if (!validTags(b.tags, latest)) fail(400, '티어와 시즌을 확인해 주세요.');
     const tags = category === 'account' || category === 'ladder' ? uniqueTags(b.tags) : [];
@@ -120,15 +120,14 @@ async function validatePost(b: any, u: User, existing?: any) {
     for (const f of fields) {
         const raw = b.details?.[f.id];
         if (raw === undefined || raw === '') continue;
-        if (typeof raw !== 'string' || raw.length > 500) fail(400, `${f.label}은 500자 이내로 입력해 주세요.`);
+        if (typeof raw !== 'string' || raw.length > 500) fail(400, `${f.label}: 500자 이내로 입력해 주세요.`);
         const v = raw.trim();
         if (!v) continue;
-        if (f.type === 'number' && (!/^\d+$/.test(v) || Number(v) > 1000000000)) fail(400, `${f.label}에 올바른 숫자를 입력해 주세요.`);
         details[f.id] = v;
     }
     if (category === 'account' && b.kind !== 'buy') {
         for (const [key, f] of Object.entries(ACCOUNT_CHOICES)) {
-            if (details[key] && !choiceAllowed(key, details[key])) fail(400, `${f.label}을 확인해 주세요.`);
+            if (details[key] && !choiceAllowed(key, details[key])) fail(400, `${f.label}: 확인해 주세요.`);
         }
         numericDetail(details, 'ownerCount', '대주 수', 1, 9999);
         numericDetail(details, 'nicknameChars', '닉 글자 수', 1, 20);
@@ -137,6 +136,10 @@ async function validatePost(b: any, u: User, existing?: any) {
     }
     if (category === 'account' && b.kind === 'buy') validateBuyerDetails(details);
     if (b.kind === 'exchange' && details.wantedCategory === 'account') validateBuyerDetails(details, 'wanted');
+    // Runs after the range checks above so a bounded field reports its own range.
+    for (const f of fields) {
+        if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}에 올바른 숫자를 입력해 주세요.`);
+    }
     if (details.currentOffer) details.currentOffer = String(amount(details.currentOffer, false));
     // This retired free-text field has no input anymore. Keep the seller's original data on edits.
     if (category === 'account' && b.kind !== 'buy' && existing?.category === 'account') {
@@ -148,7 +151,7 @@ async function validatePost(b: any, u: User, existing?: any) {
         fail(400, '사진은 최대 6장까지 첨부할 수 있습니다.');
     if (images.length) {
         const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
-        if (r.results.length !== images.length) fail(403, '본인이 업로드한 사진만 사용할 수 있습니다.');
+        if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 쓸 수 있습니다.');
     }
     const status = b.status || 'open';
     if (!['open', 'reserved', 'closed'].includes(status)) fail(400, '거래 상태를 확인해 주세요.');
@@ -211,7 +214,7 @@ async function listPosts(req: Request, url: URL) {
     for (const [key, f] of Object.entries(ACCOUNT_CHOICES)) {
         const v = s.get(key);
         if (!v) continue;
-        if (!choiceAllowed(key, v)) fail(400, `${f.label} 검색 조건을 확인해 주세요.`);
+        if (!choiceAllowed(key, v)) fail(400, `${f.label}: 확인해 주세요.`);
         if (buying && key === 'nicknameRank') where.push("(json_array_length(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]')) WHERE value=?))");
         else where.push(`json_extract(p.details,'$.${key}')=?`);
         values.push(v);
@@ -308,7 +311,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         ]);
         return json({ ok: true });
     }
-    if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '수정 또는 삭제 권한이 없습니다.');
+    if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '권한이 없습니다.');
     if (method === 'DELETE' && existing) {
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
