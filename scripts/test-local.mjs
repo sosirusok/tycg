@@ -61,6 +61,9 @@ async function waitFor(origin, server) {
 }
 
 const base = 'http://127.0.0.1:8790';
+// TEST_SUITES=perks,roles runs only the suites whose file name contains one of the words.
+const only = (process.env.TEST_SUITES || '').split(',').map(v => v.trim()).filter(Boolean);
+const pick = list => only.length ? list.filter(f => only.some(w => f.includes(w))) : list;
 try {
     await completed(child([wrangler, 'd1', 'migrations', 'apply', 'DB', '--local', '--config', 'wrangler.jsonc'], { stdio: 'inherit' }), 90000);
     // Rate limits and settings from earlier local runs must not leak into this run.
@@ -68,7 +71,7 @@ try {
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of ['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs']) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -85,7 +88,7 @@ try {
     await writeFile(noR2, JSON.stringify(built));
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
-    for (const suite of ['tests/verify-storage.mjs', 'tests/verify-cleanup.mjs']) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-cleanup.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791' } }), 90000);
     }
 } catch (error) {
