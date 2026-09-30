@@ -36,7 +36,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         return () => { alive = false; };
     }, [tab, me?.id, rev]);
 
-    if (!me) return <div className="container page"><EmptyState icon="locked" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="key" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     const items = data?.tab === tab ? data.items : null;
 
     async function unblock(id: string) {
@@ -49,7 +49,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
                 : (tab === 'posts' || tab === 'favorites' || tab === 'recent') ? (items.length ? <div className="post-list">{(items as Post[]).map(p => <PostCard key={p.id} post={p} onChange={() => setRev(n => n + 1)} />)}</div>
-                    : <EmptyState icon={tab === 'favorites' ? 'red-heart' : 'memo'} title={tab === 'posts' ? '작성한 글이 없습니다' : tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={tab === 'posts' ? <Link to="/write" className="btn btn-primary">글쓰기</Link> : <Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
+                    : <EmptyState icon={tab === 'favorites' ? 'red-heart' : undefined} title={tab === 'posts' ? '작성한 글이 없습니다' : tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={tab === 'posts' ? <Link to="/write" className="btn btn-primary">글쓰기</Link> : <Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
                 : tab === 'offers' ? (items.length ? <ul className="simple-list">{(items as Offer[]).map(o => <li key={o.id}>
                     <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? <><NameLine nickname={o.recipient_name} grade={o.recipient_grade} badges={o.recipient_badges} />님에게 보냄</> : <><NameLine nickname={o.sender_name} grade={o.sender_grade} badges={o.sender_badges} />님이 보냄</>} · {relativeTime(o.created_at)}</span></span>
                     <b>{priceText(o.amount)}</b><span className="event-status">{OFFER_STATUS[o.status] || o.status}</span>

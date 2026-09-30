@@ -7,11 +7,14 @@ import { CIcon } from '../components/ui';
 
 type Notice = { id: number; title: string; body: string; created_at: number };
 
+// Row text is the final 거래 순서 wording (WP18 later restyles the list itself).
 const STEPS = [
-    ['magnifying-glass-tilted-left', '찾기', '거래 탭과 필터로 래더 시즌, 우대 스킨, 대주 수를 골라 찾아요.'],
-    ['speech-balloon', '문의', '글에서 ‘채팅으로 문의하기’를 눌러 조건을 맞춰요. 판매 글에는 가격을 제안할 수도 있어요.'],
-    ['shield', '확인', '상대의 인증 표시를 보고, 전화번호·계좌를 조회해요. 필요하면 이중창 인증을 요청하세요.'],
-    ['check-mark-button', '거래', '합의가 끝나면 글을 예약중·거래완료로 바꿔 주세요.'],
+    ['문의', '채팅하기로 문의. 판매 글은 제시도 가능.'],
+    ['인증 확인', '닉네임 옆 인증 표시 확인. 필요하면 계좌·이중창 인증 요청.'],
+    ['더치트 조회', '입금 전 더치트(thecheat.co.kr)로 상대 전번·계좌 조회.'],
+    ['입금', '입금 후 채팅에 입금자명, 시간 남기기.'],
+    ['계정 넘김', '입금 확인 후 계정 전달. 받은 쪽은 바로 비번·전번·보안 메일 변경.'],
+    ['거래완료', '글을 거래완료로 변경.'],
 ] as const;
 
 export default function Guide() {
@@ -34,7 +37,7 @@ export default function Guide() {
 
         <section className="section">
             <h2 className="section-title">거래 순서</h2>
-            <ol className="steps">{STEPS.map(([icon, title, text], i) => <li key={title}><CIcon name={icon} size={36} /><b>{i + 1}. {title}</b><p>{text}</p></li>)}</ol>
+            <ol className="steps">{STEPS.map(([title, text], i) => <li key={title}><b>{i + 1}. {title}</b><p>{text}</p></li>)}</ol>
         </section>
 
         <section className="section">

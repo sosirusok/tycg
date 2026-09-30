@@ -331,7 +331,7 @@
 .notice-acc li { border-bottom: 1px solid var(--line); }
 .notice-acc button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 4px; text-align: left; font-size: 15px; font-weight: 600; color: var(--ink); }
 .notice-acc .body-text { padding: 0 4px 20px; font-size: 15px; }
-.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; }
 .steps li { display: grid; gap: 8px; align-content: start; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-l); }
 .steps b { color: var(--ink); font-size: 16px; }
 .steps p { color: var(--ink-2); font-size: 14px; }

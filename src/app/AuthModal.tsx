@@ -29,7 +29,7 @@ export function AuthModal() {
     return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title={register ? '회원가입' : '로그인'}>
         <form className="form-stack" onSubmit={submit}>
             <label className="field"><span className="field-label">아이디</span>
-                <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="영문 소문자, 숫자, 밑줄 4~24자" minLength={4} maxLength={24} required autoFocus /></label>
+                <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="영문 소문자, 숫자, _ 4~24자" minLength={4} maxLength={24} required autoFocus /></label>
             {register && <label className="field"><span className="field-label">닉네임</span>
                 <input className="input" autoComplete="nickname" value={nickname} onChange={e => setNickname(e.target.value)} placeholder="2~16자" minLength={2} maxLength={16} required /></label>}
             <label className="field"><span className="field-label">비밀번호</span>

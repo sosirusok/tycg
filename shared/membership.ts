@@ -107,4 +107,4 @@ export function applicationTemplate(kind: ApplicationKind, target: string, plan?
     return `[${gradeInfo(target).name} 등급 신청]\n기간: ${p ? `${p.label} (${p.price.toLocaleString('ko-KR')}원)` : ''}\n입금자명: \n입금 일시: `;
 }
 
-export const APPLICATION_STATUS_NAMES: Record<ApplicationStatus, string> = { pending: '확인 중', approved: '지급 완료', rejected: '반려', cancelled: '취소' };
+export const APPLICATION_STATUS_NAMES: Record<ApplicationStatus, string> = { pending: '대기', approved: '지급 완료', rejected: '반려', cancelled: '취소' };

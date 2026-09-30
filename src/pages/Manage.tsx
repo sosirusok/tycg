@@ -22,7 +22,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
-    if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="locked" title="매니저 전용 페이지입니다" /></div>;
+    if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="key" title="매니저 전용 페이지입니다" /></div>;
     const pendingReports = summary?.reports.filter(r => r.status === 'pending').length || 0;
     return <div className="container page">
         <h1 className="page-title">매니저 메뉴</h1>
@@ -56,7 +56,7 @@ function Applications({ onChange }: { onChange: () => void }) {
         finally { setBusy(''); }
     }
     return <>
-        <div className="chip-row"><button type="button" className="chip chip-sm" aria-pressed={status === 'pending'} onClick={() => setStatus('pending')}>확인 중</button><button type="button" className="chip chip-sm" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>전체</button></div>
+        <div className="chip-row"><button type="button" className="chip chip-sm" aria-pressed={status === 'pending'} onClick={() => setStatus('pending')}>신청 대기</button><button type="button" className="chip chip-sm" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>전체</button></div>
         <div className="mt-16">{apps === null ? <SkeletonRows count={3} height={72} /> : apps.length ? <ul className="simple-list">{apps.map(a => <li key={a.id}>
             <span className="grow">
                 <strong>{applicationTitle(a)}</strong>
@@ -68,8 +68,8 @@ function Applications({ onChange }: { onChange: () => void }) {
         </li>)}</ul> : <EmptyState icon="check-mark-button" title={status === 'pending' ? '대기 중인 신청이 없습니다' : '신청 내역이 없습니다'} />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => { void load(); onChange(); }} />}</Modal>
         <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="신청 반려" description={rejecting ? `${rejecting.nickname}님의 ${applicationTitle(rejecting)}` : ''}
-            footer={<button className="btn btn-dark btn-lg" onClick={() => rejecting && act(rejecting, 'reject', note)}>반려하기</button>}>
-            <label className="field"><span className="field-label">반려 사유 (선택)</span><input className="input" maxLength={300} value={note} onChange={e => setNote(e.target.value)} placeholder="채팅에 표시됨" /></label>
+            footer={<button className="btn btn-dark btn-lg" onClick={() => rejecting && act(rejecting, 'reject', note)}>반려</button>}>
+            <label className="field"><span className="field-label">반려 사유</span><input className="input" maxLength={300} value={note} onChange={e => setNote(e.target.value)} placeholder="채팅에 표시됨" /></label>
         </Modal>
     </>;
 }
@@ -93,7 +93,7 @@ function Members() {
 
 function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
     if (!reports) return <SkeletonRows />;
-    if (!reports.length) return <EmptyState icon="police-car-light" title="접수된 신고가 없습니다" />;
+    if (!reports.length) return <EmptyState icon="shield" title="접수된 신고가 없습니다" />;
     const act = async (task: Promise<unknown>, message: string) => { try { await task; toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } };
     return <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
         <span className="grow">
@@ -132,7 +132,7 @@ function Notices() {
                 <label className="field"><span className="field-label">내용</span><textarea className="textarea" maxLength={10000} value={editing?.body || ''} onChange={e => setEditing({ ...editing, body: e.target.value })} /></label>
             </div>
         </Modal>
-        <Modal open={!!deleting} onClose={() => setDeleting(null)} title="공지를 삭제할까요?" description={deleting?.title}
+        <Modal open={!!deleting} onClose={() => setDeleting(null)} title="공지 삭제" description={deleting?.title}
             footer={<><button className="btn btn-line" onClick={() => setDeleting(null)}>취소</button><button className="btn btn-dark" onClick={() => deleting && remove(deleting.id)}>삭제</button></>}><span /></Modal>
     </>;
 }

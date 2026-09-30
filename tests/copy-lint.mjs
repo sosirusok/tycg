@@ -9,9 +9,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const MARKER = 'copy-lint-ignore-next-line';
+// 해요체 endings ('있어요' also covers '할 수(도) 있어요'), 제안 in any form (the word is 제시),
+// '(선택)' labels and '비워 두세요' hints, question titles, and words the cafes never use (쪽지, 보조 메일).
 const BANNED = [
-    '할 수 있어요', '해 보세요', '준비 중', '돼요', '이에요', '예요',
-    '가격 제안', '제안하기', '제안을', '반갑습니다', '환영합니다',
+    '있어요', '없어요', '해요', '해 보세요', '준비 중', '돼요', '이에요', '예요',
+    '제안', '(선택)', '비워 두세요', '할까요?', '쪽지', '보조 메일', '반갑습니다', '환영합니다',
     '한눈에', '손쉽게', '편리하게', '간편하게', '혜택을 누려',
     '→', '—', '인증·등급',
 ];
@@ -102,9 +104,10 @@ function selfTest() {
         "{/* copy-lint-ignore-next-line */}",
         '<p>돼요</p>',
         '<span>인증·등급</span>',
+        '<p>가격을 제안할 수도 있어요 (선택)</p>',
     ].join('\n');
     const got = lint('self', sample).map(h => `${h.line}:${h.word}`).join(' ');
-    const want = '1:준비 중 1:이에요 3:돼요 5:한눈에 5:— 10:인증·등급';
+    const want = '1:준비 중 1:이에요 3:돼요 5:한눈에 5:— 10:인증·등급 11:있어요 11:제안 11:(선택)';
     if (got === want) return true;
     console.error(`copy-lint self-test failed: got "${got}", want "${want}"`);
     return false;

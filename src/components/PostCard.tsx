@@ -84,7 +84,7 @@ export function PostCard({ post, highlight = [], onChange }: { post: Post; highl
             {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">
                 {tags.slice(0, 3).map(t => <span className="tag" key={t.tier + t.season}>{tagName(t)}</span>)}
                 {tags.length > 3 && <span className="tag">+{tags.length - 3}</span>}
-                {summary.length > 0 && <span className="spec">{summary.slice(0, 4).join(' · ')}</span>}
+                {summary.length > 0 && <span className="spec">{summary.slice(0, 5).join(' · ')}</span>}
             </div>}
             <div className="post-card-bottom">
                 <PriceLine post={post} />

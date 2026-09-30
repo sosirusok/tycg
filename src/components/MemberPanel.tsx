@@ -38,7 +38,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span>
         </div>
         {pending.length > 0 && !inChat && <div className="mp-block">
-            <h4>대기 중인 신청</h4>
+            <h4>신청 대기</h4>
             {pending.map(a => <div key={a.id} className="mp-app">
                 <span>{applicationTitle(a)}</span>
                 <div className="row">
@@ -62,7 +62,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             {active.length > 0 ? active.map(g => <div key={g.id} className="mp-row">
                 <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${dateText(g.expires_at)}까지` : '영구'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => run(() => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), '등급 회수 완료')}>회수</button>
-            </div>) : <p className="muted small">일반 (지급 내역 없음)</p>}
+            </div>) : <p className="muted small">지급 내역 없음</p>}
             <div className="mp-grant">
                 <select className="select" aria-label="지급할 등급" value={grade} onChange={e => setGrade(e.target.value as GradeId)}>{GRADES.filter(g => g.id !== 'normal').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select className="select" aria-label="기간" value={plan} onChange={e => setPlan(e.target.value as PlanId)}>{(plans.length ? plans : [{ id: 'permanent', label: '영구' }]).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>

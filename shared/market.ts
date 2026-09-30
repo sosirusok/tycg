@@ -149,11 +149,11 @@ const PROXY_FIELDS: DetailField[] = [
 
 export const DETAIL_FIELDS: Record<string, DetailField[]> = {
     account: [
-        { id: 'level', label: '계정 레벨', type: 'number' },
-        { id: 'labLevel', label: '연구실 레벨', type: 'number' },
+        { id: 'level', label: '레벨', type: 'number' },
+        { id: 'labLevel', label: '연구실', type: 'number' },
         { id: 'humanSkins', label: '인간 스킨 수', type: 'number' },
         { id: 'zombieSkins', label: '좀비 스킨 수', type: 'number' },
-        { id: 'closet', label: '옷장 칸 수', type: 'number' },
+        { id: 'closet', label: '옷장', type: 'number' },
         { id: 'phantom', label: '팬텀', type: 'number' },
         { id: 'rides', label: '라이드' },
         { id: 'emblems', label: '주요 엠블럼' },
@@ -256,11 +256,11 @@ export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·�
 export const ACCOUNT_CHOICES: Record<string, { label: string; options: readonly string[]; legacy?: readonly string[]; labels?: Record<string, string> }> = {
     nicknameRank: { label: '닉 등급', options: NICK_RANKS },
     recordStatus: { label: '전적', options: ['무전적', '전적 있음'] },
-    integrated: { label: '통합', options: ['통합', '미통합'], legacy: ['모름'], labels: { '미통합': '미통' } },
+    integrated: { label: '통합/미통', options: ['통합', '미통합'], legacy: ['모름'], labels: { '미통합': '미통' } },
     passwordChange: { label: '비번 변경 (비변)', options: ['가능', '불가'], legacy: ['확인 필요'] },
     // 영전: the phone number goes with the account ('31 다야 3대주 영전').
     phoneChange: { label: '전번 변경 (전변)', options: ['가능', '영전', '쿨타임 남음', '불가'], legacy: ['확인 필요'], labels: { '영전': '영전 (같이 넘김)' } },
-    backupEmail: { label: '보안 메일 (보멜)', options: ['없음', '있음', '있음 (변경 불가)'] },
+    backupEmail: { label: '보안 메일 (보멜)', options: ['없음', '있음', '있음 (변경 불가)'], labels: { '없음': '없음 (보멜X)' } },
 };
 export function choiceAllowed(key: string, value: string) {
     const f = ACCOUNT_CHOICES[key];
@@ -282,7 +282,7 @@ export const BUYER_DETAIL_FIELDS: DetailField[] = [
 DETAIL_FIELDS.account.push(
     { id: 'nicknameChars', label: '닉네임 글자 수', type: 'number' },
     ...Object.entries(ACCOUNT_CHOICES).filter(([id]) => id !== 'recordStatus').map(([id, f]) => ({ id, label: f.label })),
-    { id: 'skinTags', label: '보유 스킨' },
+    { id: 'skinTags', label: '우대 스킨' },
 );
 
 export function parseList(raw: string | undefined, allowed: readonly string[]): string[] {
@@ -303,24 +303,29 @@ export function rankText(ranks: readonly string[]) {
     return [graded.length ? graded.join('/') + '급' : '', ranks.includes('잡') ? '잡' : ''].filter(Boolean).join('/');
 }
 
-// Short condition list for cards: owners, record, 전비변/영전/보멜/미통, nickname, skins, currency.
+// Short condition list for cards, most-scanned first: owners, record, nickname, skins,
+// then the cafe flags as one token ('전비변O 영전 보멜X 미통'), then currency. Cards show
+// only the first few items, so the nickname grade and skins must come before the flags.
 export function accountSummary(d: Record<string, string>) {
     const wantedRanks = parseList(d.nicknameRanks, NICK_RANKS);
     const min = d.nicknameCharsMin, max = d.nicknameCharsMax;
     const wantedChars = min && max ? (min === max ? `${min}글자 닉` : `${min}~${max}글자 닉`) : min ? `${min}글자 이상 닉` : max ? `${max}글자 이하 닉` : '';
     const skins = skinDisplay(skinTags(d.skinTags));
     const rank = d.nicknameRank ? rankText([d.nicknameRank]) : '';
-    return [
-        d.ownerCount ? `${d.ownerCount}대주` : '',
-        d.maxOwners ? `${d.maxOwners}대주 이하` : '',
-        d.recordStatus || d.recordPreference || '',
+    const flags = [
         d.passwordChange === '가능' && (d.phoneChange === '가능' || d.phoneChange === '영전') ? '전비변O' : '',
         d.phoneChange === '영전' ? '영전' : '',
         d.backupEmail === '없음' ? '보멜X' : '',
         d.integrated === '미통합' ? '미통' : '',
+    ].filter(Boolean).join(' ');
+    return [
+        d.ownerCount ? `${d.ownerCount}대주` : '',
+        d.maxOwners ? `${d.maxOwners}대주 이하` : '',
+        d.recordStatus || d.recordPreference || '',
         wantedChars + (wantedRanks.length ? `${wantedChars ? ' · ' : '닉 '}${rankText(wantedRanks)}` : ''),
         d.nicknameChars ? `${d.nicknameChars}글자 닉${rank ? ' · ' + rank : ''}` : rank ? `닉 ${rank}` : '',
         skins.length ? skins[0] + (skins.length > 1 ? ` 외 ${skins.length - 1}` : '') : '',
+        flags,
         d.phantom ? `팬텀 ${d.phantom}%` : '',
         d.gas ? `가스 ${Number(d.gas).toLocaleString('ko-KR')}` : '',
         d.minerals ? `미네랄 ${Number(d.minerals).toLocaleString('ko-KR')}` : '',

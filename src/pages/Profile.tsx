@@ -3,7 +3,7 @@ import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, type Post, type User } from '../../shared/market';
 import { BADGES, gradeInfo } from '../../shared/membership';
-import { api, errorText } from '../lib/api';
+import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
@@ -13,19 +13,25 @@ type Profile = User & { postCount: number; closedCount: number };
 
 export default function ProfilePage({ id }: { id?: string }) {
     const { me, refreshMe, requireLogin, openApply, logout } = useApp();
-    const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState('');
+    // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
+    const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
     const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false);
     const mine = me?.id === id;
 
-    useEffect(() => { api<{ user: Profile }>('users/' + id).then(d => setUser(d.user)).catch(e => setError(errorText(e))); }, [id, me?.grade, me?.badges.length]);
+    useEffect(() => {
+        api<{ user: Profile }>('users/' + id).then(d => { setError(null); setUser(d.user); })
+            .catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
+    }, [id, me?.grade, me?.badges.length, retry]);
     useEffect(() => {
         setPosts(null);
         api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: '20', ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }))
             .then(d => { setPosts(d.posts); setTotal(d.total); }).catch(() => setPosts([]));
     }, [id, tab]);
 
-    if (error) return <div className="container page"><EmptyState icon="warning" title="없는 회원입니다" text={error} /></div>;
+    if (error) return <div className="container page">{error.status === 404
+        ? <EmptyState icon="warning" title="없는 회원입니다" />
+        : <EmptyState icon="warning" title="회원 정보를 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); setRetry(n => n + 1); }}>다시 시도</button>} />}</div>;
     if (!user) return <div className="container page"><SkeletonRows count={2} height={160} /></div>;
 
     async function save() {
@@ -95,9 +101,9 @@ export default function ProfilePage({ id }: { id?: string }) {
         </nav>}
 
         <section className="section">
-            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래 중' }, { id: 'closed', label: '거래 완료' }]} />
+            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }]} />
             <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} />)}</div></>
-                : <EmptyState icon="memo" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
+                : <EmptyState title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>

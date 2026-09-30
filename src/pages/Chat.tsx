@@ -33,14 +33,14 @@ export default function Chat({ id }: { id?: string }) {
         return () => clearInterval(t);
     }, [me?.id, loadChats]);
 
-    if (!me) return <div className="container page"><EmptyState icon="speech-balloon" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
+    if (!me) return <div className="container page"><EmptyState icon="key" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
 
     return <div className="container chat-page">
         <div className={'chat-shell' + (id ? ' has-room' : '')}>
             <aside className="chat-list" aria-label="채팅 목록">
                 <h1 className="chat-list-title">채팅</h1>
                 {chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
-                    : chats.length === 0 ? <EmptyState icon="speech-balloon" title="채팅 내역이 없습니다" />
+                    : chats.length === 0 ? <EmptyState title="채팅 내역이 없습니다" />
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
                         <Avatar name={c.nickname} />
                         <span className="chat-item-main">
@@ -51,7 +51,7 @@ export default function Chat({ id }: { id?: string }) {
                     </Link></li>)}</ul>}
             </aside>
             {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
-                : <section className="chat-room chat-empty"><EmptyState icon="speech-balloon" title="채팅방을 선택하세요" /></section>}
+                : <section className="chat-room chat-empty"><EmptyState title="채팅방을 선택하세요" /></section>}
         </div>
     </div>;
 }
@@ -242,9 +242,8 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction }: { app
     return <div className="event-card app-card">
         <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : partner ? <><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} />님의 신청</> : `${app.nickname || '회원'}님의 신청`} · {timeLabel(at)}</span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
-        {app.status === 'rejected' && app.note && <p className="small">반려 사유: {app.note}</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
-            <input className="input" value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="반려 사유 (선택)" autoFocus />
+            <input className="input" value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="반려 사유" aria-label="반려 사유" autoFocus />
             <div className="row"><button type="button" className="btn btn-dark btn-sm grow" disabled={busy} onClick={() => onAction(app, 'reject', note)}>반려</button><button type="button" className="btn btn-line btn-sm" onClick={() => setRejecting(false)}>취소</button></div>
         </div> : <div className="row mt-8"><button type="button" className="btn btn-primary btn-sm grow" disabled={busy} onClick={() => onAction(app, 'approve')}>{busy ? <LoaderCircle size={16} className="spin" /> : '승인'}</button><button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setRejecting(true)}>반려</button></div>)
             : mine && <button type="button" className="btn btn-text small mt-8" disabled={busy} onClick={() => onAction(app, 'cancel')}>신청 취소</button>)}

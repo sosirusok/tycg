@@ -72,17 +72,21 @@ function selectedDetails(details: Record<string, string>, key: string, allowed: 
     details[key] = JSON.stringify([...new Set(chosen)]);
 }
 
+// Error labels come from the same field lists the editor shows, so they cannot drift apart.
+const fieldLabel = (fields: DetailField[], id: string) => fields.find(f => f.id === id)?.label || id;
+
 function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
-    numericDetail(details, key('maxOwners'), '허용 대주 수', 1, 9999);
-    numericDetail(details, key('nicknameCharsMin'), '닉네임 최소 글자 수', 1, 20);
-    numericDetail(details, key('nicknameCharsMax'), '닉네임 최대 글자 수', 1, 20);
+    const label = (name: string) => fieldLabel(BUYER_DETAIL_FIELDS, name);
+    numericDetail(details, key('maxOwners'), label('maxOwners'), 1, 9999);
+    numericDetail(details, key('nicknameCharsMin'), label('nicknameCharsMin'), 1, 20);
+    numericDetail(details, key('nicknameCharsMax'), label('nicknameCharsMax'), 1, 20);
     if (details[key('nicknameCharsMin')] && details[key('nicknameCharsMax')] && Number(details[key('nicknameCharsMin')]) > Number(details[key('nicknameCharsMax')]))
         fail(400, '닉네임 최소 글자 수가 최대 글자 수보다 클 수 없습니다.');
     if (details[key('recordPreference')] && !RECORD_PREFERENCES.includes(details[key('recordPreference')] as typeof RECORD_PREFERENCES[number]))
-        fail(400, '전적 조건을 확인해 주세요.');
-    selectedDetails(details, key('nicknameRanks'), NICK_RANKS, '닉 등급 선택');
-    selectedDetails(details, key('skinTags'), SKIN_TAGS, '스킨 선택', true);
+        fail(400, `${label('recordPreference')}: 확인해 주세요.`);
+    selectedDetails(details, key('nicknameRanks'), NICK_RANKS, label('nicknameRanks'));
+    selectedDetails(details, key('skinTags'), SKIN_TAGS, label('skinTags'), true);
 }
 
 export const canOfferProxy = (u: User) => u.role === 'manager' || u.badges.includes('proxy');
@@ -129,16 +133,17 @@ async function validatePost(b: any, u: User, existing?: any) {
         for (const [key, f] of Object.entries(ACCOUNT_CHOICES)) {
             if (details[key] && !choiceAllowed(key, details[key])) fail(400, `${f.label}: 확인해 주세요.`);
         }
-        numericDetail(details, 'ownerCount', '대주 수', 1, 9999);
-        numericDetail(details, 'nicknameChars', '닉 글자 수', 1, 20);
-        numericDetail(details, 'phantom', '팬텀 %', 0, 5000);
-        selectedDetails(details, 'skinTags', SKIN_TAGS, '스킨 선택', true);
+        const label = (id: string) => fieldLabel(DETAIL_FIELDS.account, id);
+        numericDetail(details, 'ownerCount', label('ownerCount'), 1, 9999);
+        numericDetail(details, 'nicknameChars', label('nicknameChars'), 1, 20);
+        numericDetail(details, 'phantom', label('phantom'), 0, 5000);
+        selectedDetails(details, 'skinTags', SKIN_TAGS, label('skinTags'), true);
     }
     if (category === 'account' && b.kind === 'buy') validateBuyerDetails(details);
     if (b.kind === 'exchange' && details.wantedCategory === 'account') validateBuyerDetails(details, 'wanted');
     // Runs after the range checks above so a bounded field reports its own range.
     for (const f of fields) {
-        if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}에 올바른 숫자를 입력해 주세요.`);
+        if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}: 숫자로 입력해 주세요.`);
     }
     if (details.currentOffer) details.currentOffer = String(amount(details.currentOffer, false));
     // This retired free-text field has no input anymore. Keep the seller's original data on edits.

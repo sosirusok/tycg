@@ -22,7 +22,7 @@ function MiniCard({ post }: { post: Post }) {
     </Link>;
 }
 
-function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebrow: string; title: string; kind: TradeKind; withCategories?: boolean; empty: string }) {
+function Shelf({ title, kind, withCategories = false, empty }: { title: string; kind: TradeKind; withCategories?: boolean; empty: string }) {
     const { requireLogin, openApply } = useApp();
     const [category, setCategory] = useState(withCategories ? categoriesForKind(kind)[0].id : '');
     const [posts, setPosts] = useState<Post[] | null>(null);
@@ -35,7 +35,7 @@ function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebro
     }, [kind, category]);
     return <section className="section">
         <div className="section-head">
-            <div><span className="section-eyebrow">{eyebrow}</span><h2 className="section-title">{title}</h2></div>
+            <h2 className="section-title">{title}</h2>
             <Link to={withParams('/trade', { kind, category })} className="more-link">더보기<ChevronRight size={16} /></Link>
         </div>
         {withCategories && <div className="chip-scroll shelf-chips">{categoriesForKind(kind).map(c => <button key={c.id} type="button" className="chip chip-sm" aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{c.name}</button>)}</div>}
@@ -77,15 +77,15 @@ export function Home() {
                     <strong>{proxyReady ? '대리 인증 완료' : '대리(진행) 글쓰기는 대리 인증 필요'}</strong>
                 </span>
                 <span className="promo-cta">{proxyReady ? '진행 글 쓰기' : '대리 인증 신청'}<ChevronRight size={18} /></span>
-                <CIcon name={proxyReady ? 'check-mark-button' : 'locked'} size={84} />
+                <CIcon name={proxyReady ? 'check-mark-button' : KIND_ICONS.proxy_offer} size={84} />
             </button>
 
-            <Shelf eyebrow="판매" title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." />
-            <Shelf eyebrow="구매" title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." />
-            <Shelf eyebrow={KIND_NAMES.proxy_offer} title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." />
+            <Shelf title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." />
+            <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." />
+            <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." />
 
             <section className="section">
-                <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">전체 보기<ChevronRight size={16} /></Link></div>
+                <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">더보기<ChevronRight size={16} /></Link></div>
                 {notices.length ? <ol className="notice-list">{notices.map((n, i) => <li key={n.id}><Link to={'/guide#notice-' + n.id}><b>{i + 1}</b><span className="grow">{n.title}</span><span className="muted small nowrap">{dateText(n.created_at)}</span></Link></li>)}</ol>
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>

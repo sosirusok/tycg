@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { BADGES, GRADES, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, BADGES, GRADES, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { CIcon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
@@ -88,7 +88,7 @@ export function ApplyModal() {
                         <CIcon name={b.icon} size={40} />
                         <span className="apply-option-body">
                             <span className="apply-option-title">{b.name}
-                                {owned ? <span className="apply-state on"><VerifiedMark size={14} />보유</span> : pending ? <span className="apply-state">확인 중</span> : null}</span>
+                                {owned ? <span className="apply-state on"><VerifiedMark size={14} />보유</span> : pending ? <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span> : null}</span>
                             <span className="apply-option-text">{b.summary}</span>
                             <span className="apply-need">제출: {b.requirements.join(', ')}</span>
                         </span>
@@ -103,7 +103,7 @@ export function ApplyModal() {
                     const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id;
                     return <div key={g.id} className={'grade-row' + (current ? ' is-current' : '')}>
                         <CIcon name={g.icon} size={32} />
-                        <div className="grade-row-name"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">확인 중</span>}</div>
+                        <div className="grade-row-name"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {
                                 // Lower grades than the current one cannot be bought; the server also rejects

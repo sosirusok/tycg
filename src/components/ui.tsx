@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
 import { X } from 'lucide-react';
 import { BADGES, gradeInfo, type BadgeId, type GradeId } from '../../shared/membership';
@@ -59,8 +59,9 @@ export function Modal({ open, onClose, title, description, children, footer, wid
     </Dialog.Root>;
 }
 
-export function EmptyState({ icon = 'magnifying-glass-tilted-left', title, text, action }: { icon?: string; title: string; text?: string; action?: ReactNode }) {
-    return <div className="empty"><CIcon name={icon} size={56} /><h3>{title}</h3>{text && <p>{text}</p>}{action}</div>;
+// No icon unless the caller passes one (the old default magnifier had purple fills).
+export function EmptyState({ icon, title, text, action }: { icon?: string; title: string; text?: string; action?: ReactNode }) {
+    return <div className="empty">{icon && <CIcon name={icon} size={56} />}<h3>{title}</h3>{text && <p>{text}</p>}{action}</div>;
 }
 
 export function SkeletonRows({ count = 4, height = 132 }: { count?: number; height?: number }) {
@@ -68,7 +69,23 @@ export function SkeletonRows({ count = 4, height = 132 }: { count?: number; heig
 }
 
 export function Tabs<T extends string>({ items, value, onChange, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (v: T) => void; label: string }) {
-    return <div className="tabs" role="tablist" aria-label={label}>
+    const row = useRef<HTMLDivElement>(null);
+    // On phones the row scrolls sideways: keep the selected tab in view. Only the row
+    // scrolls, never the page, so a tab row below the fold does not move the page.
+    useEffect(() => {
+        const show = () => {
+            const box = row.current, tab = box?.querySelector<HTMLElement>('[aria-selected=true]');
+            if (!box || !tab || box.scrollWidth <= box.clientWidth) return;
+            const b = box.getBoundingClientRect(), t = tab.getBoundingClientRect();
+            if (t.left < b.left || t.right > b.right) box.scrollLeft += t.left - b.left - (b.width - t.width) / 2;
+        };
+        show();
+        // The web font widens the labels after first paint; measure again once it is in.
+        let alive = true;
+        void document.fonts?.ready.then(() => { if (alive) show(); });
+        return () => { alive = false; };
+    }, [value]);
+    return <div ref={row} className="tabs" role="tablist" aria-label={label}>
         {items.map(item => <button key={item.id} role="tab" type="button" className="tab" aria-selected={item.id === value} onClick={() => onChange(item.id)}>{item.label}</button>)}
     </div>;
 }

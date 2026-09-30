@@ -32,53 +32,30 @@ function client() {
     return call;
 }
 
-// No worker template joins a variable straight to a particle ('신고 사유은', '대주 수은').
+// No template or JSX expression joins a variable straight to a particle ('신고 사유은',
+// '대주 수은', '{status}으로'). Other banned wording is checked by tests/copy-lint.mjs, and
+// page layouts by the Playwright screen runs, so this file only greps for rules that hold
+// across every package.
 {
-    const dir = new URL('../worker/', import.meta.url), hits = [];
-    for (const file of (await readdir(dir)).filter(f => f.endsWith('.ts'))) {
-        (await readFile(new URL(file, dir), 'utf8')).split('\n').forEach((line, i) => {
-            if (/\$\{[^}]+\}(은|는|이|가|을|를|으로)[ .]/.test(line)) hits.push(`worker/${file}:${i + 1}`);
-        });
+    const hits = [];
+    for (const [dir, recursive] of [['worker', false], ['shared', false], ['src', true]]) {
+        const root = new URL(`../${dir}/`, import.meta.url);
+        for (const file of (await readdir(root, { recursive })).filter(f => /\.tsx?$/.test(f))) {
+            (await readFile(new URL(file, root), 'utf8')).split('\n').forEach((line, i) => {
+                if (/(\$\{[^}]+\}|\{[^{}]+\}’?)(은|는|이|가|을|를|으로)[ .<]/.test(line)) hits.push(`${dir}/${file}:${i + 1}`);
+            });
+        }
     }
-    equal(hits, [], 'no worker template joins a variable to 은/는/이/가/을/를/으로');
+    equal(hits, [], 'no template or JSX expression joins a variable to 은/는/이/가/을/를/으로');
 }
 
-// Screens write '인증/등급' with a slash, keep the owner's header label, and never greet on login.
+// The owner's header label stays exactly '인증/등급 신청하기', and the guide keeps the
+// style guide's coupon rule ('쿠폰 코드는 입금 확인 후 전달').
 {
-    const root = new URL('../src/', import.meta.url), slash = [], greetings = [];
-    for (const file of (await readdir(root, { recursive: true })).filter(f => /\.(tsx?|css)$/.test(f))) {
-        (await readFile(new URL(file, root), 'utf8')).split('\n').forEach((line, i) => {
-            if (line.includes('인증·등급')) slash.push(`src/${file}:${i + 1}`);
-            if (/반갑습니다|환영합니다/.test(line)) greetings.push(`src/${file}:${i + 1}`);
-        });
-    }
-    equal(slash, [], "src writes '인증/등급' with a slash");
-    equal(greetings, [], 'src has no login or sign-up greeting');
-    check((await readFile(new URL('App.tsx', root), 'utf8')).includes('인증/등급 신청하기'), "header keeps '인증/등급 신청하기'");
-}
-
-// Home, board and guide: empty states are one title, the guide has no em dash or '준비 중',
-// and the coupon rule matches the 굿즈 및 쿠폰 board ('쿠폰 코드는 입금 확인 후 전달').
-{
-    const page = async name => readFile(new URL(`../src/pages/${name}.tsx`, import.meta.url), 'utf8');
-    const home = await page('Home'), board = await page('Board'), guide = await page('Guide');
-    check(!home.includes('첫 글') && (home.match(/empty="등록된 글이 없습니다\."/g) || []).length === 3, "home shelves read '등록된 글이 없습니다.' with a 글쓰기 button");
-    check(!/첫 글|보세요|없어요/.test(board) && board.includes("'등록된 글이 없습니다'"), 'board empty state is a title with no nudge line');
-    check(!/준비 중|—/.test(guide), "guide has no '준비 중' or em dash");
+    const src = async name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8');
+    check((await src('App.tsx')).includes('인증/등급 신청하기'), "header keeps '인증/등급 신청하기'");
+    const guide = await src('pages/Guide.tsx');
     check(guide.includes('쿠폰 코드는 입금 확인 후 전달') && !/쿠폰 코드는 글/.test(guide), 'guide coupon rule says 입금 확인 후 전달');
-}
-
-// Detail and editor: 제시 vocabulary, a status toast with no particle after the variable,
-// shared report reasons, cafe-style body templates, and no 해요체 or '비워 두세요' in the form.
-{
-    const page = async name => readFile(new URL(`../src/pages/${name}.tsx`, import.meta.url), 'utf8');
-    const detail = await page('Detail'), editor = await page('Editor');
-    check(!detail.includes('제안') && !editor.includes('제안'), "detail and editor say 제시, never 제안");
-    check(detail.includes('title="가격 제시"') && detail.includes('>제시하기</button>') && detail.includes('채팅하기</button>'), "detail buttons read 채팅하기 and 제시하기, offer modal is 가격 제시");
-    check(detail.includes('`상태 변경: ${STATUS_NAMES[status]}`') && !/\}’?으로/.test(detail), "status toast reads '상태 변경: …' with no (으)로 after the variable");
-    check(/REPORT_REASONS,[^}]*\} from '\.\.\/\.\.\/shared\/market'/.test(detail) && !/const REPORT_REASONS/.test(detail), 'detail uses the shared report reasons');
-    check(editor.includes(String.raw`if (kind === 'buy') return '필수:\n`) && editor.includes('>양식 불러오기</button>'), "editor 양식 불러오기 fills a buy body that starts with '필수:'");
-    check(!/돼요|있어요|해요\.|이에요|비워 두세요|\(선택\)<|어떤 거래인가요/.test(editor), 'editor has no 해요체, 비워 두세요, (선택) or question header');
 }
 
 const member = client(), manager = client(), guest = client();
@@ -124,6 +101,15 @@ check(cancelNote?.body.startsWith('신청 취소: 프리미엄 등급 신청'), 
 
 // Cafe vocabulary: 영전 is a stored choice, 미통합 keeps its stored value (shown as 미통).
 const account = (title, details) => member('posts', 'POST', { kind: 'sell', category: 'account', title: `[QA] ${title} ${run}`, body: '자동 검증용 게시글입니다.', price: 10000, status: 'open', tags: [], images: [], details });
+
+// Field errors name the field as the editor shows it (대주 수, 전적, 레벨), never a retired label.
+const wanting = details => member('posts', 'POST', { kind: 'buy', category: 'account', title: `[QA] 구매 ${run}`, body: '자동 검증용 게시글입니다.', price: null, status: 'open', tags: [], images: [], details });
+const badRecord = await wanting({ recordPreference: '상관없음' });
+equal([badRecord.status, badRecord.data.error], [400, '전적: 확인해 주세요.'], "buy record error reads '전적: 확인해 주세요.'");
+const badMax = await wanting({ maxOwners: '0' });
+equal([badMax.status, badMax.data.error], [400, '대주 수: 1~9999 사이 숫자로 입력해 주세요.'], "buy owner error reads '대주 수: …'");
+const badLevel = await account('레벨', { level: '1.5' });
+equal([badLevel.status, badLevel.data.error], [400, '레벨: 숫자로 입력해 주세요.'], "number error reads '레벨: 숫자로 입력해 주세요.'");
 const moved = await account('영전', { ownerCount: '3', phoneChange: '영전', passwordChange: '가능' });
 equal(moved.status, 201, 'phoneChange 영전 is accepted');
 check((await guest(`posts?kind=sell&category=account&phoneChange=${encodeURIComponent('영전')}&size=40`)).data.posts.some(p => p.id === moved.data.id), 'phoneChange=영전 filter finds the post');

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import {
-    KIND_ICONS, KIND_NAMES, RECORD_PREFERENCES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, isTradeKind, manToWon, priceLabel, priceText, skinTags, tagName, validTags, wonToMan,
+    KIND_ICONS, KIND_NAMES, RECORD_PREFERENCES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, isTradeKind, manToWon, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -82,12 +82,12 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
                 <RankPicker value={params.get('nicknameRank') ? [params.get('nicknameRank')!] : []} onChange={v => update({ nicknameRank: v[0] || '' })} />
             </div>
         </Group>}
-        {account && buying && <Group title="전적 조건"><Segmented name="전적 조건" options={RECORD_PREFERENCES} value={params.get('recordPreference') || ''} onChange={v => update({ recordPreference: v })} /></Group>}
+        {account && buying && <Group title="전적"><Segmented name="전적" options={RECORD_PREFERENCES} value={params.get('recordPreference') || ''} onChange={v => update({ recordPreference: v })} /></Group>}
         {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'}>
             <SeasonPicker value={tags} onChange={v => update({ tags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
             {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌 모두 포함</label>}
         </Group>}
-        {account && <Group title={buying ? '원하는 우대 스킨' : '보유 우대 스킨'}>
+        {account && <Group title="우대 스킨">
             <SkinPicker compact value={skinTags(params.get('skinTags') || '')} onChange={v => update({ skinTags: v.length ? JSON.stringify(v) : '' })} />
         </Group>}
         {account && !buying && <Group title="닉네임">
@@ -130,11 +130,11 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     if (wantedTags.length) chips.push({ key: 'wantedTags', label: '구하는 래더 ' + (wantedTags.length > 1 ? `${tagName(wantedTags[0])} 외 ${wantedTags.length - 1}` : tagName(wantedTags[0])), clear: () => update({ wantedTags: '' }) });
     add('wantedOwnerCountOfMine', `내 계정 ${params.get('wantedOwnerCountOfMine')}대주`);
     add('wantedNicknameChars', `내 닉 ${params.get('wantedNicknameChars')}글자`);
-    add('wantedNicknameRank', `내 닉 ${params.get('wantedNicknameRank')}`);
+    add('wantedNicknameRank', `내 닉 ${rankText([params.get('wantedNicknameRank') || ''])}`);
     add('wantedRecordPreference', `구함 · ${params.get('wantedRecordPreference')}`);
     const buying = ctx.kind === 'buy';
     add('nicknameChars', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameChars')}글자`);
-    add('nicknameRank', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameRank')}`);
+    add('nicknameRank', `${buying ? '내 닉 ' : '닉 '}${rankText([params.get('nicknameRank') || ''])}`);
     add('maxOwners', `${params.get('maxOwners')}대주 이하`);
     add('ownerCountOfMine', `내 계정 ${params.get('ownerCountOfMine')}대주`);
     add('recordStatus', params.get('recordStatus') || '');
@@ -237,7 +237,7 @@ export function Board() {
                 <span>구함</span>
             </div> : <div className="chip-scroll">{categories.map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
         </div>}
-        {proxyLocked && <div className="board-notice"><CIcon name="video-game" size={28} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
+        {proxyLocked && <div className="board-notice"><CIcon name={KIND_ICONS.proxy_offer} size={28} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
 
         <div className="board-layout">
             <aside className="filter-panel" aria-label="필터">
@@ -263,7 +263,7 @@ export function Board() {
                 {loading ? <SkeletonRows />
                     : data!.error ? <EmptyState icon="warning" title="목록을 불러오지 못했습니다" text={data!.error} action={<button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button>} />
                     : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>
-                    : <EmptyState icon={kind === 'all' ? 'magnifying-glass-tilted-left' : KIND_ICONS[kind]} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
+                    : <EmptyState icon={kind === 'all' ? undefined : KIND_ICONS[kind]} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-primary" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">
                     <button type="button" disabled={page <= 1} onClick={() => goPage(page - 1)}>이전</button>

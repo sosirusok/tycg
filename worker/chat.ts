@@ -37,7 +37,8 @@ export function guardedMessageStatements(conversationId: string, senderId: strin
     ];
 }
 
-const preview = "(SELECT CASE WHEN m.body='' AND m.attachments!='[]' THEN '사진' ELSE m.body END FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1)";
+// Offer rows written before the 제시 wording still hold '가격 제안', so the preview names the type instead.
+const preview = "(SELECT CASE WHEN m.type='offer' THEN '가격 제시' WHEN m.body='' AND m.attachments!='[]' THEN '사진' ELSE m.body END FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1)";
 
 // Partner details in chat lists; when a 6-month grade ends stays private.
 function partner(row: any) {

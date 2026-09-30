@@ -6,7 +6,7 @@ import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, parseList, rankText, relativeTime, skinDisplay, skinTags, tagName,
     type Post,
 } from '../../shared/market';
-import { api, errorText, imageUrl } from '../lib/api';
+import { ApiError, api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
 import { useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
@@ -54,7 +54,7 @@ function WantedAccount({ post, prefix = '' }: { post: Post; prefix?: '' | 'wante
     return <>
         <SpecList rows={[
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['전적', d[key('recordPreference')]],
-            ['닉 글자 수', nicknameRange(d, prefix)], ['닉 등급', ranks.join(', ')],
+            ['닉 글자 수', nicknameRange(d, prefix)], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]} />
         {ladder.length > 0 && <><h3>원하는 래더</h3><div className="tags">{[...ladder].sort((a, b) => b.season - a.season).map(t => <span className="tag tag-line" key={t.tier + t.season}>{tagName(t)}</span>)}</div></>}
         {skins.length > 0 && <><h3>우대 스킨</h3><div className="tags">{skins.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div></>}
@@ -71,13 +71,16 @@ function GenericFields({ post, category }: { post: Post; category: string }) {
 
 export function Detail({ id }: { id: string }) {
     const { me, requireLogin, refreshUnread } = useApp();
-    const [post, setPost] = useState<Post | null>(null), [error, setError] = useState('');
+    // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
+    const [post, setPost] = useState<Post | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
-    const load = () => api<{ post: Post }>('posts/' + id).then(d => setPost(d.post)).catch(e => setError(errorText(e)));
+    const load = () => api<{ post: Post }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     useEffect(() => { void load(); }, [id, me?.id]);
     useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
 
-    if (error) return <div className="container page"><EmptyState icon="warning" title="삭제되었거나 없는 글입니다" text={error} action={<Link to="/trade" className="btn btn-primary">목록으로</Link>} /></div>;
+    if (error) return <div className="container page">{error.status === 404
+        ? <EmptyState icon="warning" title="삭제되었거나 없는 글입니다" action={<Link to="/trade" className="btn btn-primary">목록으로</Link>} />
+        : <EmptyState icon="warning" title="글을 불러오지 못했습니다" text={error.text} action={<button type="button" className="btn btn-line" onClick={() => { setError(null); void load(); }}>다시 시도</button>} />}</div>;
     if (!post) return <div className="container page"><SkeletonRows count={3} height={160} /></div>;
 
     const mine = me?.id === post.author_id, manager = me?.role === 'manager';
@@ -186,7 +189,7 @@ export function Detail({ id }: { id: string }) {
         </Dialog.Root>
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
-        <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글을 삭제할까요?" description="복구할 수 없습니다."
+        <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
             footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-dark" onClick={remove}>삭제</button></>}><span /></Modal>
     </div>;
 }
@@ -203,7 +206,7 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
     const [amount, setAmount] = useState(''), [note, setNote] = useState(''), [busy, setBusy] = useState(false);
     const won = manToWon(amount);
     async function send() {
-        if (won === null || Number.isNaN(won)) { toast.error('제시가를 만원 단위로 입력하세요. 예: 45'); return; }
+        if (won === null || Number.isNaN(won)) { toast.error('제시가를 만원 단위로 입력해 주세요. 예: 45'); return; }
         setBusy(true);
         try { const d = await api<{ chatId: string }>('offers', 'POST', { postId: post.id, amount: won, note }); onClose(); toast('제시 완료'); void navigate('/chat/' + d.chatId); }
         catch (e) { toast.error(errorText(e)); }
@@ -214,7 +217,7 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
         <div className="form-stack">
             <label className="field"><span className="field-label">제시가</span><div className="input-unit"><input className="input" type="number" inputMode="decimal" min="0" step="0.1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="예: 45" autoFocus /><span>만원</span></div>
                 {won !== null && !Number.isNaN(won) && <span className="field-hint">{won.toLocaleString('ko-KR')}원</span>}</label>
-            <label className="field"><span className="field-label">메시지 (선택)</span><input className="input" maxLength={500} value={note} onChange={e => setNote(e.target.value)} placeholder="예: 바로 쿨거 가능" /></label>
+            <label className="field"><span className="field-label">메시지</span><input className="input" maxLength={500} value={note} onChange={e => setNote(e.target.value)} placeholder="예: 바로 쿨거 가능" /></label>
         </div>
     </Modal>;
 }
@@ -227,7 +230,7 @@ function ReportModal({ open, onClose, postId }: { open: boolean; onClose: () => 
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
-    return <Modal open={open} onClose={onClose} title="신고" footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고하기</button>}>
+    return <Modal open={open} onClose={onClose} title="신고" footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고</button>}>
         <div className="form-stack">
             <div className="chip-row">{REPORT_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={reason === r} onClick={() => setReason(r)}>{r}</button>)}</div>
             <label className="field"><span className="field-label">내용</span><textarea className="textarea" style={{ minHeight: 120 }} maxLength={1000} value={details} onChange={e => setDetails(e.target.value)} placeholder="예: 입금 후 잠수, 사진 도용" /></label>
