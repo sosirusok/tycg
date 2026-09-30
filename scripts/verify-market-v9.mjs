@@ -48,7 +48,7 @@ function client() {
         const raw = await response.text();
         let result;
         try { result = JSON.parse(raw); }
-        catch { throw new Error(`${method} ${path}: expected JSON, received HTTP ${response.status}`); }
+        catch { throw new Error(`${method} ${path}: expected JSON, received HTTP ${response.status}; content-type=${response.headers.get('content-type')}; body=${raw.slice(0, 500)}`); }
         return { status: response.status, data: result };
     };
 }
