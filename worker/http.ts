@@ -77,7 +77,7 @@ export async function initManager() {
 // `alias` is the users table alias in the surrounding query. 회원 탈퇴 keeps the grade and badge
 // rows (the manager's record of each grant), so a withdrawn member simply shows none of them.
 export function memberColumns(alias: string, prefix = '') {
-    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at,'trial',g.source='trial') FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
+    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at,'trial',g.source='trial') FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 

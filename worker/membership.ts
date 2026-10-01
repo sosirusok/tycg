@@ -298,7 +298,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         const where: string[] = [], values: any[] = [];
         if (q) { where.push('(instr(lower(u.nickname),lower(?))>0 OR instr(lower(u.username),lower(?))>0)'); values.push(q, q); }
         if (filter === 'badged') where.push('EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id)');
-        if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000))");
+        if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)))");
         const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,u.suspended_until,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
         return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
