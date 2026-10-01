@@ -2,13 +2,17 @@
 // built Worker on 127.0.0.1:8790 and runs every API verification suite against it.
 import { access, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
+// The copy lint needs no build or server, so it runs first and stops the run on a forbidden phrase.
+if (spawnSync(process.execPath, ['tests/copy-lint.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
+// The static migration check (additive only from 0016 on) needs no server either.
+if (spawnSync(process.execPath, ['tests/verify-migrations.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
 const config = 'dist/zombiego_market/wrangler.json';
 await access(config).catch(() => { throw new Error('빌드 결과가 없습니다. 먼저 pnpm build를 실행해 주세요.'); });
 
@@ -61,14 +65,22 @@ async function waitFor(origin, server) {
 }
 
 const base = 'http://127.0.0.1:8790';
+// TEST_SUITES=perks,roles runs only the suites whose file name contains one of the words.
+const only = (process.env.TEST_SUITES || '').split(',').map(v => v.trim()).filter(Boolean);
+const pick = list => only.length ? list.filter(f => only.some(w => f.includes(w))) : list;
 try {
     await completed(child([wrangler, 'd1', 'migrations', 'apply', 'DB', '--local', '--config', 'wrangler.jsonc'], { stdio: 'inherit' }), 90000);
     // Rate limits and settings from earlier local runs must not leak into this run.
-    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings;'], { stdio: 'ignore' }), 60000);
+    // The 플러스 무료 체험 window (0016_plus_trial) starts now and is closed right away, so the suites
+    // keep 일반 sign-ups; verify-trial opens it for itself.
+    const trialSettings = `INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now()}',0),('sys:trial_end','-1',0);`;
+    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings; ' + trialSettings + " UPDATE settings SET value='-1' WHERE key='sys:trial_end';"], { stdio: 'ignore' }), 60000);
+    // POST_LIMITS=relaxed lifts the post caps (open posts, posts per day, same title) on this server only,
+    // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of ['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs']) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -83,10 +95,11 @@ try {
     delete built.assets;
     const noR2 = path.join(path.dirname(config), 'wrangler.no-r2.json');
     await writeFile(noR2, JSON.stringify(built));
-    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
-    for (const suite of ['tests/verify-storage.mjs', 'tests/verify-cleanup.mjs']) {
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791' } }), 90000);
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs'])) {
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
 } catch (error) {
     console.error(error.message);

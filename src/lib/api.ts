@@ -2,6 +2,15 @@ export class ApiError extends Error {
     constructor(public status: number, message: string) { super(message); }
 }
 
+export const UNAUTHORIZED_EVENT = 'zg:unauthorized';
+export const LOGIN_REQUIRED = '로그인이 필요합니다.';
+
+// Every 401 means the session is gone, except a login attempt's (a wrong id or password).
+// AppProvider listens and signs the member out on the page.
+function sessionEnded(path: string) {
+    if (path !== 'auth/login') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+}
+
 export async function api<T = any>(path: string, method = 'GET', data?: unknown): Promise<T> {
     let response: Response;
     try {
@@ -14,9 +23,11 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
     } catch {
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
-    let body: any;
-    try { body = await response.json(); }
-    catch { throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.'); }
+    let body: any, parsed = true;
+    try { body = await response.json(); } catch { parsed = false; }
+    // Right before the throw, so the caller's own error toast comes first (AppProvider skips a duplicate).
+    if (response.status === 401) sessionEnded(path);
+    if (!parsed) throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     if (!response.ok) throw new ApiError(response.status, body?.error || '요청을 처리하지 못했습니다.');
     return body as T;
 }
@@ -28,7 +39,9 @@ export const errorText = (e: unknown) => e instanceof Error ? e.message : '다�
 async function compress(file: File): Promise<Blob> {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('JPG, PNG, WebP 사진만 올릴 수 있습니다.');
     if (file.size > 20 * 1024 * 1024) throw new Error('20MB 이하의 사진을 선택해 주세요.');
-    const bitmap = await createImageBitmap(file);
+    let bitmap: ImageBitmap;
+    try { bitmap = await createImageBitmap(file); }
+    catch { throw new Error('사진을 열 수 없습니다. JPG, PNG, WebP 사진인지 확인해 주세요.'); }
     let edge = 1600, quality = 0.85, blob: Blob | null = null;
     for (let attempt = 0; attempt < 5; attempt++) {
         const ratio = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
@@ -56,8 +69,25 @@ export async function uploadPhoto(file: File): Promise<string> {
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
     const body = await response.json().catch(() => ({}));
+    if (response.status === 401) sessionEnded('uploads');
     if (!response.ok) throw new ApiError(response.status, body.error || '사진을 올리지 못했습니다.');
     return body.id;
 }
 
 export const imageUrl = (id: string) => '/api/images/' + id;
+
+// The image files of a paste or a drop (clipboardData.files, dataTransfer.files). Other files are
+// left out; uploadPhoto still refuses image types other than JPG, PNG and WebP with its own message.
+export const imageFiles = (files: FileList | null | undefined) => Array.from(files || []).filter(f => f.type.startsWith('image/'));
+// Whether a drag carries files, so dragover can accept it (text and links are left alone).
+export const dragsFiles = (types: readonly string[]) => types.includes('Files');
+// A paste into a text field that carries text stays text: Excel and Word also put a picture of the
+// copied cells on the clipboard, which must not replace them. Only a paste of pictures alone (a
+// screenshot, a copied image) anywhere, or any paste outside a text field, becomes photos.
+export function pastesText(target: EventTarget | null, data: DataTransfer | null) {
+    const el = target instanceof HTMLElement ? target : null;
+    const field = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    return field && !!data && Array.from(data.types).includes('text/plain');
+}
+// Shown when photos arrive while the previous ones are still uploading.
+export const UPLOAD_BUSY = '사진을 올리는 중입니다.';

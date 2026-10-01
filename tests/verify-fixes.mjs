@@ -203,4 +203,25 @@ const a = await register('fa'), b = await register('fb'), c = await register('fc
     equal((await guest('images/' + inPost)).status, 404, 'removed photo is no longer public');
 }
 
+// Photo totals (0018_upload_totals) and the R2 per-member quota (1GB, tier table). This server has R2.
+{
+    const q = await register('fq');
+    await photo(q);
+    await photo(q);
+    const totals = () => sql(`SELECT upload_rows AS n,upload_bytes AS b FROM users WHERE id='${q.user.id}'`)[0];
+    equal(totals(), { n: 2, b: 2 * png.byteLength }, 'the triggers count the member\'s uploads and bytes');
+    const one = await photo(q);
+    equal((await q('uploads/' + one, 'DELETE')).status, 200, 'an unused photo is deleted');
+    equal(totals(), { n: 2, b: 2 * png.byteLength }, 'a delete takes it off the totals');
+    sql(`UPDATE users SET upload_bytes=${1024 * 1024 * 1024 - 10} WHERE id='${q.user.id}'`);
+    const over = await q('uploads', 'POST', undefined, { type: 'image/png', bytes: png });
+    equal([over.status, over.data.error], [409, '사진 용량(1인 1GB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.'], 'R2: an upload over 1GB per member is refused');
+    sql(`UPDATE users SET upload_rows=10000,upload_bytes=0 WHERE id='${q.user.id}'`);
+    equal((await q('uploads', 'POST', undefined, { type: 'image/png', bytes: png })).status, 409, 'the row ceiling (10,000) is read from the totals');
+    sql(`UPDATE users SET upload_rows=1000000,upload_bytes=${1024 * 1024 * 1024 * 50} WHERE id='manager'`);
+    const mgr = await manager('uploads', 'POST', undefined, { type: 'image/png', bytes: png });
+    equal(mgr.status, 201, 'the manager has only the site limits');
+    sql(`UPDATE users SET upload_rows=(SELECT COUNT(*) FROM uploads WHERE owner_id='manager'),upload_bytes=(SELECT COALESCE(SUM(size),0) FROM uploads WHERE owner_id='manager') WHERE id='manager'`);
+}
+
 console.log(`\n${checks} fix checks passed`);

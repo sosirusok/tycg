@@ -8,6 +8,9 @@ interface Env {
     MANAGER_PASSWORD?: string;
     MANAGER_PASSWORD_HASH?: string;
     MANAGER_PASSWORD_SALT?: string;
+    // Test only: 'relaxed' lifts the post caps (open posts, posts per day, same title) for requests
+    // to 127.0.0.1 or localhost. scripts/test-local.mjs sets it for the API suites; deploys never do.
+    POST_LIMITS?: string;
 }
 
 declare module 'cloudflare:workers' {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { dateText } from '../../shared/market';
-import { BADGES, GRADES } from '../../shared/membership';
+import { Check } from 'lucide-react';
+import { dateText, priceText } from '../../shared/market';
+import { BADGES, GRADES, PERKS, SITE_RULES, gapText, type GradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -8,21 +9,56 @@ import { CIcon } from '../components/ui';
 type Notice = { id: number; title: string; body: string; created_at: number };
 
 const STEPS = [
-    ['magnifying-glass-tilted-left', '찾기', '거래 탭과 필터로 래더 시즌, 우대 스킨, 대주 수를 골라 찾아요.'],
-    ['speech-balloon', '문의', '글에서 ‘채팅으로 문의하기’를 눌러 조건을 맞춰요. 판매 글에는 가격을 제안할 수도 있어요.'],
-    ['shield', '확인', '상대의 인증 표시를 보고, 전화번호·계좌를 조회해요. 필요하면 이중창 인증을 요청하세요.'],
-    ['check-mark-button', '거래', '합의가 끝나면 글을 예약중·거래완료로 바꿔 주세요.'],
+    ['문의', '채팅하기로 문의. 판매 글은 제시도 가능.'],
+    ['인증 확인', '닉네임 옆 인증 표시 확인. 필요하면 계좌·이중창 인증 요청.'],
+    ['더치트 조회', '입금 전 더치트(thecheat.co.kr)로 상대 전번·계좌 조회.'],
+    ['입금', '입금 후 채팅에 입금자명, 시간 남기기.'],
+    ['계정 넘김', '입금 확인 후 계정 전달. 받은 쪽은 바로 비번·전번·보안 메일 변경.'],
+    ['거래완료', '글을 거래완료로 변경.'],
 ] as const;
+
+// Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
+// price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
+// A cell may hold two lines (영구 and 6개월 prices), each its own line.
+const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
+const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
+const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
+    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`) : '무료'],
+    ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
+    ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
+    ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
+    ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
+    ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
+    ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+];
+// What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
+const FREE_ITEMS = [
+    `사진 글당 ${SITE_RULES.photosPerPost}장`,
+    `거래중 글 ${SITE_RULES.openPosts}개`,
+    `하루 새 글 ${SITE_RULES.postsPerDay}개`,
+    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    '채팅·제시',
+    '찜',
+    `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
+    '거래 기록·후기',
+    '신고·차단',
+];
 
 export default function Guide() {
     const { openApply, config } = useApp();
     const [notices, setNotices] = useState<Notice[] | null>(null);
     const [open, setOpen] = useState<number | null>(() => Number(location.hash.replace('#notice-', '')) || null);
     useEffect(() => { api<{ notices: Notice[] }>('notices').then(d => setNotices(d.notices)).catch(() => setNotices([])); }, []);
-    useEffect(() => { if (notices && location.hash.startsWith('#notice-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' }); }, [notices]);
+    // The notices above change the page height when they load, so a #notice-… or #grade link
+    // scrolls once they are in.
+    useEffect(() => {
+        if (!notices) return;
+        if (location.hash.startsWith('#notice-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' });
+        else if (location.hash === '#grade') document.getElementById('grade')?.scrollIntoView({ block: 'start' });
+    }, [notices]);
 
     return <div className="container page guide">
-        <h1 className="page-title">공지·이용 안내</h1>
+        <h1 className="page-title">공지</h1>
 
         <section className="section">
             <h2 className="section-title">공지사항</h2>
@@ -34,34 +70,46 @@ export default function Guide() {
 
         <section className="section">
             <h2 className="section-title">거래 순서</h2>
-            <ol className="steps">{STEPS.map(([icon, title, text], i) => <li key={title}><CIcon name={icon} size={36} /><b>{i + 1}. {title}</b><p>{text}</p></li>)}</ol>
+            <ol className="steps">{STEPS.map(([title, text], i) => <li key={title}><span className="step-num">{i + 1}</span><b>{title}</b><p>{text}</p></li>)}</ol>
         </section>
 
         <section className="section">
             <div className="section-head"><h2 className="section-title">인증</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'identity' })}>인증 신청하기</button></div>
-            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">필요한 것 · {b.requirements.join(', ')}</p></div>)}</div>
+            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">제출: {b.requirements.join(', ')}</p></div>)}</div>
         </section>
 
-        <section className="section">
+        <section className="section" id="grade">
             <div className="section-head"><h2 className="section-title">등급</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>등급 신청하기</button></div>
-            <table className="grade-price">
-                <thead><tr><th>등급</th><th>영구</th><th>6개월</th></tr></thead>
-                <tbody>{GRADES.map(g => <tr key={g.id}>
-                    <td><span className="row"><CIcon name={g.icon} size={22} />{g.name}</span></td>
-                    {g.plans.length ? <><td>{g.plans.find(p => p.id === 'permanent')?.price.toLocaleString('ko-KR') + '원'}</td><td>{g.plans.find(p => p.id === '6m') ? g.plans.find(p => p.id === '6m')!.price.toLocaleString('ko-KR') + '원' : '—'}</td></>
-                        : <td colSpan={2} className="grade-note">{g.note}</td>}
-                </tr>)}</tbody>
-            </table>
-            <p className="muted small mt-12">{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 매니저와의 채팅에서 안내해요.'} 입금이 확인되면 매니저가 등급을 지급합니다. 등급 혜택은 준비 중이에요.</p>
+            <div className="table-scroll">
+                <table className="grade-benefits">
+                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
+                    <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
+                        <th scope="row">{label}</th>
+                        {TABLE_GRADES.map(g => { const v = cell(g); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
+                    </tr>)}</tbody>
+                </table>
+            </div>
+            <div className="grade-free">
+                <h3>일반 (무료)</h3>
+                <ul>{FREE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
+            </div>
+            <ul className="grade-notes">
+                <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
+                <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
+                <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
+            </ul>
         </section>
 
         <section className="section">
-            <h2 className="section-title">꼭 알아 두세요</h2>
+            <h2 className="section-title">주의사항</h2>
             <ul className="rules">
-                <li>좀비고 거래소는 회원끼리 직접 거래하는 게시판이에요. 결제 대행, 에스크로, 거래 보증을 하지 않아요.</li>
-                <li>계정 거래, 계정 공유, 대리 플레이는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>에 따라 제재될 수 있어요.</li>
-                <li>비밀번호, 인증번호, 쿠폰 코드는 글이나 채팅에 쓰지 마세요.</li>
-                <li>의심스러운 글은 글 하단의 ‘신고’로 알려 주세요. 매니저가 확인해 숨기거나 삭제해요.</li>
+                <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
+                <li>계정 거래와 대리는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
+                <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
+                <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
+                <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
+                <li>중개 거래는 신용인에게만 맡깁니다.</li>
+                <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>
     </div>;

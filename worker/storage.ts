@@ -9,6 +9,8 @@ export const D1_PHOTO_LIMIT = 1_400_000;
 // D1 space for photos without R2: per member and for the whole site (the Free plan database holds 500 MB).
 export const D1_USER_BYTES = 30 * 1024 * 1024;
 export const D1_SITE_BYTES = 300 * 1024 * 1024;
+// R2 space per member (tier table: 1GB). The R2 free tier is 10GB for the whole site.
+export const R2_USER_BYTES = 1024 * 1024 * 1024;
 export type Storage = 'r2' | 'd1';
 
 function bucket() { return (env as Partial<Env>).BUCKET; }

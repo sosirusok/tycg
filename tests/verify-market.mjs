@@ -124,7 +124,7 @@ try {
     const sale = {
         ...common, title: `[로컬 QA] ${run}-sale`,
         details: {
-            ownerCount: '47', recordStatus: '무전적', currentOffer: '450000',
+            ownerCount: '47', recordStatus: '무전적', currentOffer: '150000',
             nicknameChars: '2', nicknameRank: 'R', gas: '250', minerals: '80000',
             skinTags: JSON.stringify(['유루미']),
             maxOwners: '3', nicknameCharsMin: '4', nicknameRanks: JSON.stringify(['A']),
@@ -134,7 +134,7 @@ try {
     const saleId = await create(seller, sale, 'sale with numeric ownership and current offer');
     const firstSale = await read(saleId);
     equal(firstSale.details.ownerCount, '47', '47 previous owners is preserved as a number string');
-    equal(firstSale.details.currentOffer, '450000', 'current offer has its own field');
+    equal(firstSale.details.currentOffer, '150000', 'current offer has its own field');
     for (const field of ['maxOwners', 'nicknameCharsMin', 'nicknameRanks']) {
         check(!Object.hasOwn(firstSale.details, field), 'sale discards purchase-only field: ' + field);
     }
@@ -177,10 +177,11 @@ try {
     equal(concurrent.map(response => response.status), [200, 200], 'concurrent price edits both complete');
     const afterRace = await read(saleId);
     const oldPrices = history(afterRace);
-    equal(oldPrices.slice(0, 3), [600000, 500000, 400000], 'concurrent edits preserve the existing chain');
-    equal([...oldPrices, afterRace.price].sort((a, b) => a - b),
-        [200000, 300000, 400000, 500000, 600000], 'concurrent edits lose neither changed price');
     check([200000, 300000].includes(afterRace.price), 'the final concurrent update is the current price');
+    equal(oldPrices.slice(0, 3), [600000, 500000, 400000], 'concurrent edits preserve the existing chain');
+    // A rise records no history, so when 300000 lands second, 200000 is legitimately absent.
+    check(oldPrices.every((price, i) => i === 0 || price < oldPrices[i - 1]), 'history after concurrent edits falls strictly');
+    check(oldPrices.every(price => price > afterRace.price), 'every history entry is above the final price');
 
     const buy = {
         ...common, kind: 'buy', title: `[로컬 QA] ${run}-buy`, price: 800000,

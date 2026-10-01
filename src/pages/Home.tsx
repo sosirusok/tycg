@@ -1,28 +1,17 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ChevronRight, PenLine, Search } from 'lucide-react';
-import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, relativeTime, tagName, type Post, type TradeKind } from '../../shared/market';
+import { ChevronRight, Search, X } from 'lucide-react';
+import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
+import { gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon, NameLine } from '../components/ui';
-import { PriceLine, postSummary, tradeLabel } from '../components/PostCard';
+import { CIcon } from '../components/ui';
+import { MiniCard } from '../components/PostCard';
 
 
 type Notice = { id: number; title: string; body: string; created_at: number };
 
-function MiniCard({ post }: { post: Post }) {
-    const summary = postSummary(post);
-    const tags = post.tags.slice(0, 2).map(tagName);
-    return <Link to={'/posts/' + post.id} className="mini-card">
-        <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span></div>
-        <h3>{post.title}</h3>
-        {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec">{summary.slice(0, 2).join(' · ')}</span>}</div>}
-        <PriceLine post={post} />
-        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="muted small nowrap">{relativeTime(post.created_at)}</span></div>
-    </Link>;
-}
-
-function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebrow: string; title: string; kind: TradeKind; withCategories?: boolean; empty: string }) {
+function Shelf({ title, kind, withCategories = false, empty }: { title: string; kind: TradeKind; withCategories?: boolean; empty: string }) {
     const { requireLogin, openApply } = useApp();
     const [category, setCategory] = useState(withCategories ? categoriesForKind(kind)[0].id : '');
     const [posts, setPosts] = useState<Post[] | null>(null);
@@ -35,7 +24,7 @@ function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebro
     }, [kind, category]);
     return <section className="section">
         <div className="section-head">
-            <div><span className="section-eyebrow">{eyebrow}</span><h2 className="section-title">{title}</h2></div>
+            <h2 className="section-title">{title}</h2>
             <Link to={withParams('/trade', { kind, category })} className="more-link">더보기<ChevronRight size={16} /></Link>
         </div>
         {withCategories && <div className="chip-scroll shelf-chips">{categoriesForKind(kind).map(c => <button key={c.id} type="button" className="chip chip-sm" aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{c.name}</button>)}</div>}
@@ -44,48 +33,89 @@ function Shelf({ eyebrow, title, kind, withCategories = false, empty }: { eyebro
             : <div className="shelf-empty"><p>{empty}</p><button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(u => {
                 if (kind === 'proxy_offer' && u.role !== 'manager' && !u.badges.includes('proxy')) openApply({ kind: 'badge', target: 'proxy' });
                 else void navigate(withParams('/write', { kind, category }));
-            })}>첫 글 올리기</button></div>}
+            })}>글쓰기</button></div>}
+    </section>;
+}
+
+// '추천 매물': posts that 엘리트 members (and the manager) put on the home page, across every board.
+// The row is left out while there are none.
+function FeaturedShelf() {
+    const [posts, setPosts] = useState<Post[]>([]);
+    useEffect(() => {
+        let alive = true;
+        api<{ posts: Post[] }>('posts?featured=home&size=6').then(d => { if (alive) setPosts(d.posts); }).catch(() => {});
+        return () => { alive = false; };
+    }, []);
+    if (!posts.length) return null;
+    return <section className="section">
+        <div className="section-head"><h2 className="section-title">추천 매물</h2></div>
+        <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} />)}</div>
+    </section>;
+}
+
+// The home band once a 플러스 무료 체험 has ended (shown once: closing it stamps the trial row).
+function TrialEndBand() {
+    const { trial, setTrial, openApply } = useApp();
+    const close = () => {
+        if (trial) setTrial({ ...trial, ended: false });
+        api('me/trial-ended-seen', 'POST', {}).catch(() => {});
+    };
+    return <section className="home-band" aria-label="플러스 무료 체험">
+        <span className="home-band-text">
+            <strong>플러스 무료 체험이 끝났습니다.</strong>
+            <span>플러스는 입금 확인 후 매니저가 지급합니다.</span>
+        </span>
+        <button type="button" className="btn btn-primary btn-sm home-band-cta" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>플러스 신청</button>
+        <button type="button" className="home-band-x" aria-label="닫기" onClick={close}><X size={20} /></button>
     </section>;
 }
 
 export function Home() {
-    const { openApply, requireLogin, me } = useApp();
+    const { me, ready, config, trial, openAuth } = useApp();
     const [q, setQ] = useState('');
     const [notices, setNotices] = useState<Notice[]>([]);
     useEffect(() => { api<{ notices: Notice[] }>('notices').then(d => setNotices(d.notices.slice(0, 4))).catch(() => {}); }, []);
     const search = (e: FormEvent) => { e.preventDefault(); void navigate(withParams('/trade', { q: q.trim() })); };
-    const proxyReady = me?.role === 'manager' || me?.badges.includes('proxy');
+    // The grade promo is for guests and members below 프리미엄; it waits for the session check so a
+    // 프리미엄 member never sees it flash.
+    const promo = ready && me?.role !== 'manager' && gradeInfo(me?.grade).rank < 2;
 
     return <div className="home">
         <section className="container hero">
             <h1>어떤 거래를 찾으세요?</h1>
             <form className="hero-search" onSubmit={search} role="search">
-                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="제목, 스킨, 닉네임으로 검색" aria-label="거래 검색" /></label>
-                <button type="button" className="btn btn-soft hero-write" onClick={() => requireLogin(() => void navigate('/write'))}><PenLine size={18} />거래 등록</button>
+                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임 (예: 악주, 뱀동)" aria-label="거래 검색" /></label>
             </form>
             <nav className="quick-row" aria-label="거래 종류">
-                {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={44} /><span>{KIND_NAMES[kind]}</span></Link>)}
-                <Link to="/guide" className="quick-item"><CIcon name="megaphone" size={44} /><span>공지</span></Link>
-                <button type="button" className="quick-item" onClick={() => openApply()}><CIcon name="check-mark-button" size={44} /><span>인증·등급</span></button>
+                {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={40} /><span>{KIND_NAMES[kind]}</span></Link>)}
             </nav>
         </section>
 
         <div className="container">
-            <button type="button" className="promo" onClick={() => proxyReady ? void navigate('/write?kind=proxy_offer&category=ladder') : openApply({ kind: 'badge', target: 'proxy' })}>
+            {me && trial?.ended ? <TrialEndBand />
+                // Guests while the sign-up event runs: the band in the promo's place opens 회원가입.
+                : ready && !me && config.trial?.open ? <button type="button" className="promo" onClick={() => openAuth('register')}>
+                    <span className="promo-text">
+                        <span className="promo-eyebrow">신규 가입 이벤트</span>
+                        <strong>가입하면 플러스 7일 무료</strong>
+                    </span>
+                    <span className="promo-cta">회원가입<ChevronRight size={18} /></span>
+                </button>
+                : promo && <Link to="/guide#grade" className="promo">
                 <span className="promo-text">
-                    <span className="promo-eyebrow">대리(진행) 게시판</span>
-                    <strong>{proxyReady ? '대리 인증 회원이에요. 진행 글을 올려 보세요' : '대리 진행 글은 대리 인증 회원만 올릴 수 있어요'}</strong>
+                    <span className="promo-eyebrow">등급 혜택</span>
+                    <strong>프리미엄부터 게시판 상단 노출</strong>
                 </span>
-                <span className="promo-cta">{proxyReady ? '진행 글 쓰기' : '대리 인증 신청'}<ChevronRight size={18} /></span>
-                <CIcon name={proxyReady ? 'check-mark-button' : 'locked'} size={84} />
-            </button>
+                <span className="promo-cta">혜택 보기<ChevronRight size={18} /></span>
+            </Link>}
 
-            <Shelf eyebrow="판매" title="방금 올라온 매물" kind="sell" withCategories empty="아직 등록된 판매 글이 없어요." />
-            <Shelf eyebrow="구매" title="이런 계정을 찾고 있어요" kind="buy" empty="아직 등록된 구매 글이 없어요." />
-            <Shelf eyebrow={KIND_NAMES.proxy_offer} title="대리 인증 회원의 진행 글" kind="proxy_offer" empty="아직 등록된 대리 진행 글이 없어요." />
+            <FeaturedShelf />
+            <Shelf title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." />
+            <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." />
+            <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." />
 
             <section className="section">
-                <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">전체 보기<ChevronRight size={16} /></Link></div>
+                <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">더보기<ChevronRight size={16} /></Link></div>
                 {notices.length ? <ol className="notice-list">{notices.map((n, i) => <li key={n.id}><Link to={'/guide#notice-' + n.id}><b>{i + 1}</b><span className="grow">{n.title}</span><span className="muted small nowrap">{dateText(n.created_at)}</span></Link></li>)}</ol>
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>

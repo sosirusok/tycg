@@ -96,7 +96,7 @@ equal(managerList.data.chats.find(c => c.id === apply.data.chatId)?.last_message
 const pending = await manager('manage/applications?status=pending');
 check(pending.data.applications.some(a => a.id === apply.data.id && a.nickname === users.applicant.nickname), 'manager sees the pending application');
 equal((await other('manage/applications')).status, 403, 'members cannot open manager tools');
-equal((await other(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 404, 'other members cannot see the application');
+equal((await other(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 403, 'other members cannot approve (403 before any lookup)');
 equal((await applicant(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 403, 'applicant cannot approve');
 equal((await manager(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 200, 'manager approves');
 equal((await manager(`applications/${apply.data.id}`, 'PATCH', { action: 'approve' })).status, 409, 'approval is one-time');
@@ -121,7 +121,7 @@ const proxyCreated = await applicant('posts', 'POST', proxyPost);
 equal(proxyCreated.status, 201, '대리(진행) allowed after 대리 인증');
 const listed = await guest('posts?kind=proxy_offer&category=ladder');
 const listedPost = listed.data.posts.find(p => p.id === proxyCreated.data.id);
-equal(listedPost?.author_badges, ['proxy', 'identity'], 'listing shows author badges in display order');
+equal(listedPost?.author_badges, ['identity', 'proxy'], 'listing shows author badges in display order');
 equal(listedPost?.author_grade, 'normal', 'listing shows author grade');
 check((await guest('posts?kind=proxy_offer&badge=proxy')).data.posts.some(p => p.id === proxyCreated.data.id), 'filter by author badge');
 

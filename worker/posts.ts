@@ -1,11 +1,32 @@
-import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting } from './http';
+import { env } from 'cloudflare:workers';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeColumns, withMember, setting, WITHDRAWN_NAME } from './http';
 import {
-    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, SKIN_TAGS,
-    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
+    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
+    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
+import { SITE_RULES, perksOf, rulesOf, kstDayStart, titleKey, gapText, walletOf, type Perks } from '../shared/membership';
 
-export const postSelect = `SELECT p.*,u.nickname,u.role,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
+const HOUR = 3600000;
+
+// "15:40" on the Korean clock, rounded up to the minute so the time shown is never early.
+export function clock(t: number) {
+    const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * HOUR);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+
+// The same-title key. A title with no letters or digits ('!!') keeps its symbols, so it never
+// shares the empty key of rows that the daily cleanup has not filled in yet.
+export const postTitleKey = (title: string) => titleKey(title) || '#' + title.normalize('NFKC').replace(/\s+/g, '');
+
+// Test only: POST_LIMITS=relaxed lifts the open-post, daily-post and same-title caps, and only for
+// requests to 127.0.0.1 or localhost, so the API suites can create many posts. Bump caps still apply.
+function relaxedLimits(req: Request) {
+    const host = new URL(req.url).hostname;
+    return (env as Partial<Env>).POST_LIMITS === 'relaxed' && (host === '127.0.0.1' || host === 'localhost');
+}
+
+export const postSelect = `SELECT p.*,u.nickname,u.role,u.deleted_at AS author_deleted_at,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
 
 export const parse = (s: string, fallback: any) => { try { return JSON.parse(s); } catch { return fallback; } };
 
@@ -14,27 +35,58 @@ export async function latestSeason() {
     return Number.isInteger(v) && v >= LATEST_SEASON && v <= 200 ? v : LATEST_SEASON;
 }
 
-async function rawPost(id: string | number) { return db().prepare(postSelect + ' WHERE p.id=?').bind(id).first<any>(); }
+// One post also carries the author's '최근 접속' and '거래 3회 · 후기 좋아요 2' (WP23) for the detail
+// page's author box (lists leave them out).
+const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,${tradeColumns('u', 'author_')} FROM posts p `);
+async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
-export async function visiblePost(id: string | number, u: User | null) {
+// Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
+// no longer holds 대리 인증 (the board list uses the same rule). The author and the manager still see both.
+export async function visiblePost(id: unknown, u: User | null) {
+    if (typeof id !== 'string' && typeof id !== 'number') fail(404, '게시글을 찾을 수 없습니다.');
     const p = await rawPost(id);
-    if (!p || p.hidden && p.author_id !== u?.id && u?.role !== 'manager') fail(404, '게시글을 찾을 수 없습니다.');
+    const privileged = !!p && (p.author_id === u?.id || u?.role === 'manager');
+    const lostProxy = !!p && p.kind === 'proxy_offer' && p.role !== 'manager' && !parse(p.author_badges_json, []).includes('proxy');
+    if (!p || !privileged && (p.hidden || lostProxy)) fail(404, '게시글을 찾을 수 없습니다.');
     return p;
 }
 
-export async function decorate(rows: any[], uid?: string) {
+type Viewer = Pick<User, 'id' | 'role'> | null | undefined;
+
+// The struck prices shown: only strictly falling prices above the current one (60, 50, 40 shows
+// ~~60~~ ~~50~~ 40). The Worker stores history that way already; this read-time filter also covers
+// rows the previous Worker recorded (it kept rises too), without deleting anything in a migration.
+export function shownPriceHistory(history: { price: number; changed_at: number }[], price: number | null) {
+    const kept: typeof history = [];
+    let floor = price ?? -Infinity;
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].price > floor) { kept.unshift(history[i]); floor = history[i].price; }
+    }
+    return kept;
+}
+
+export async function decorate(rows: any[], viewer?: Viewer) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
     const [tags, wantedTags, favs, histories] = await db().batch([
         db().prepare('SELECT post_id,tier,season FROM post_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
         db().prepare('SELECT post_id,tier,season FROM post_wanted_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
-        db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(uid || '', ids),
+        db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(viewer?.id || '', ids),
         db().prepare('SELECT post_id,price,changed_at FROM post_price_history WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id').bind(ids),
     ]);
     return rows.map(row => {
         const p = withMember(row, 'author_');
         // When a 6-month grade ends is private to the member and the manager.
         delete p.author_grade_expires_at;
+        // Why the manager hid a post is shown to its author and the manager only.
+        if (p.author_id !== viewer?.id && viewer?.role !== 'manager') delete p.hidden_reason;
+        const featured = p.featured_at !== null && p.featured_at !== undefined;
+        delete p.featured_at;
+        delete p.title_key;
+        // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
+        const authorDeleted = !!p.author_deleted_at;
+        delete p.author_deleted_at;
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_good_count; }
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -42,9 +94,42 @@ export async function decorate(rows: any[], uid?: string) {
             tags: tags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
-            price_history: p.kind === 'sell' ? histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })) : [],
+            price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
+            featured,
+            author_deleted: authorDeleted,
         };
     });
+}
+
+// Price history holds only strictly falling prices above the current one: edits 60, 50, 40 show
+// ~~60~~ ~~50~~ 40, and a rise drops the entries at or below the new price. Both statements go
+// before the posts UPDATE in the same batch (D1 batches are transactional), so the INSERT reads the
+// actual previous price and concurrent edits never record a stale client value.
+export function priceHistoryStatements(postId: number, newKind: string, newPrice: number | null, now: number) {
+    return [
+        // Also runs when the old price was 가격 제시 (null), so no struck entry equals the new price.
+        ...newKind === 'sell' && newPrice !== null ? [db().prepare('DELETE FROM post_price_history WHERE post_id=? AND price<=?').bind(postId, newPrice)] : [],
+        db().prepare("INSERT INTO post_price_history(post_id,price,changed_at) SELECT id,price,? FROM posts WHERE id=? AND kind='sell' AND ?='sell' AND price IS NOT NULL AND ? IS NOT NULL AND price>?")
+            .bind(now, postId, newKind, newPrice, newPrice),
+    ];
+}
+
+// Offers a status change ends: 거래완료 ends the pending offers and keeps the accepted one (the deal
+// happened); back to 거래중 ends the accepted one (the deal fell through) and keeps the pending ones.
+// 예약중 ends none. Bind the new status twice.
+export const STATUS_ENDS_OFFERS = "((status='pending' AND ?='closed') OR (status='accepted' AND ?='open'))";
+export const OFFERS_ENDED_TEXT = '글 상태가 바뀌어 제시가 마감되었습니다.';
+
+// Cancels the post's offers that match `condition` and leaves a notice in each of their chats.
+// The notice and the chat bump come first, because they select the offers the UPDATE then cancels.
+// The post author sends the notice: they are a member of every such chat, also when the manager hides the post.
+export function endOffersStatements(postId: number, authorId: string, condition: string, args: unknown[], now: number) {
+    return [
+        db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT DISTINCT conversation_id,?,?,'system',NULL,'[]',? FROM offers WHERE post_id=? AND ${condition}`)
+            .bind(authorId, OFFERS_ENDED_TEXT, now, postId, ...args),
+        db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE post_id=? AND ${condition})`).bind(now, postId, ...args),
+        db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND ${condition}`).bind(now, postId, ...args),
+    ];
 }
 
 export function amount(v: any, optional = true) {
@@ -60,29 +145,35 @@ export function amount(v: any, optional = true) {
 
 function numericDetail(details: Record<string, string>, key: string, label: string, min: number, max: number) {
     if (!details[key]) return;
-    if (!/^\d+$/.test(details[key]) || Number(details[key]) < min || Number(details[key]) > max) fail(400, `${label}은 ${min}~${max} 사이의 정수로 입력해 주세요.`);
+    if (!/^\d+$/.test(details[key]) || Number(details[key]) < min || Number(details[key]) > max) fail(400, `${label}: ${min}~${max} 사이 숫자로 입력해 주세요.`);
     details[key] = String(Number(details[key]));
 }
 
 function selectedDetails(details: Record<string, string>, key: string, allowed: readonly string[], label: string, includeLegacySet = false) {
     if (!details[key]) return;
     const chosen = parse(details[key], null);
-    if (!Array.isArray(chosen) || chosen.length > allowed.length || chosen.some(v => typeof v !== 'string' || !allowed.includes(v))) fail(400, `${label}을 확인해 주세요.`);
+    if (!Array.isArray(chosen) || chosen.length > allowed.length || chosen.some(v => typeof v !== 'string' || !allowed.includes(v))) fail(400, `${label}: 확인해 주세요.`);
     if (includeLegacySet && chosen.includes(FULL_SET) && !chosen.includes(LEGACY_SKELETON)) chosen.push(LEGACY_SKELETON);
     details[key] = JSON.stringify([...new Set(chosen)]);
 }
 
+// Error labels come from the same field lists the editor shows, so they cannot drift apart.
+const fieldLabel = (fields: DetailField[], id: string) => fields.find(f => f.id === id)?.label || id;
+
 function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
-    numericDetail(details, key('maxOwners'), '허용 대주 수', 1, 9999);
-    numericDetail(details, key('nicknameCharsMin'), '닉네임 최소 글자 수', 1, 20);
-    numericDetail(details, key('nicknameCharsMax'), '닉네임 최대 글자 수', 1, 20);
+    const label = (name: string) => fieldLabel(BUYER_DETAIL_FIELDS, name);
+    numericDetail(details, key('maxOwners'), label('maxOwners'), 1, 9999);
+    numericDetail(details, key('nicknameCharsMin'), label('nicknameCharsMin'), 1, 20);
+    numericDetail(details, key('nicknameCharsMax'), label('nicknameCharsMax'), 1, 20);
     if (details[key('nicknameCharsMin')] && details[key('nicknameCharsMax')] && Number(details[key('nicknameCharsMin')]) > Number(details[key('nicknameCharsMax')]))
         fail(400, '닉네임 최소 글자 수가 최대 글자 수보다 클 수 없습니다.');
     if (details[key('recordPreference')] && !RECORD_PREFERENCES.includes(details[key('recordPreference')] as typeof RECORD_PREFERENCES[number]))
-        fail(400, '전적 조건을 확인해 주세요.');
-    selectedDetails(details, key('nicknameRanks'), NICK_RANKS, '닉 등급 선택');
-    selectedDetails(details, key('skinTags'), SKIN_TAGS, '스킨 선택', true);
+        fail(400, `${label('recordPreference')}: 확인해 주세요.`);
+    selectedDetails(details, key('nicknameRanks'), NICK_RANKS, label('nicknameRanks'));
+    // One key on 구매 and on the wanted side of 교환, so no prefix.
+    selectedDetails(details, WANTED_NICK_TYPES_FIELD.id, NICK_TYPES, WANTED_NICK_TYPES_FIELD.label);
+    selectedDetails(details, key('skinTags'), SKIN_TAGS, label('skinTags'), true);
 }
 
 export const canOfferProxy = (u: User) => u.role === 'manager' || u.badges.includes('proxy');
@@ -93,13 +184,37 @@ function seasonFilter(table: string, tags: SeasonTag[], all: boolean) {
     return (all ? '(SELECT COUNT(*)' : 'EXISTS (SELECT 1') + ` FROM ${table} s JOIN json_each(?) j ON s.tier=json_extract(j.value,'$.tier') AND s.season=json_extract(j.value,'$.season') WHERE s.post_id=p.id)` + (all ? '=' + tags.length : '');
 }
 
+// Tier words as cafe titles write them ('28챌', '30ㄷㅇ', '현플', '28시즌 다이아몬드').
+const TIER_WORDS: Record<string, string> = {
+    다이아몬드: 'diamond', 다이아: 'diamond', 다야: 'diamond', ㄷㅇ: 'diamond',
+    플래티넘: 'platinum', 플래: 'platinum', 플레: 'platinum', 플: 'platinum',
+    챌린저: 'challenger', 챌: 'challenger', 챔피언: 'champion', 챔: 'champion', 마스터: 'master', 마: 'master',
+    골드: 'gold', 골: 'gold', 실버: 'silver', 실: 'silver', 브론즈: 'bronze', 브: 'bronze', 아이언: 'iron',
+};
+const TIER_SHORTHAND = new RegExp(`^(현|\\d{1,2})\\s*(?:시즌\\s*)?(${Object.keys(TIER_WORDS).join('|')})$`);
+// A bare tier word as the whole search finds every season of that tier; one syllable ('마', '골')
+// or jamo ('ㄷㅇ') alone stays a plain text search.
+const BARE_TIER_WORDS = ['다이아몬드', '다이아', '다야', '플래티넘', '플래', '챌린저', '챔피언', '마스터', '골드', '실버', '브론즈', '아이언'];
+
+// The ladder a whole search names: '28챌' is 28시즌 챌린저, '현플' the latest season's 플래티넘,
+// '다야' any season of 다이아몬드. A season outside the tier's range names nothing. The latest
+// season is read only for a search that has the shorthand's shape.
+async function tierSearch(q: string): Promise<{ tier: string; season: number | null } | null> {
+    if (BARE_TIER_WORDS.includes(q)) return { tier: TIER_WORDS[q], season: null };
+    const m = TIER_SHORTHAND.exec(q);
+    if (!m) return null;
+    const latest = await latestSeason();
+    const tier = TIERS.find(t => t.id === TIER_WORDS[m[2]])!, season = m[1] === '현' ? latest : Number(m[1]);
+    return season >= tier.min && season <= latest ? { tier: tier.id, season } : null;
+}
+
 async function validatePost(b: any, u: User, existing?: any) {
-    const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '설명');
+    const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '내용');
     if (!TRADE_KINDS.includes(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
     const category = b.category || categoriesForKind(b.kind)[0].id;
-    if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '거래 구분에 맞는 종류를 선택해 주세요.');
+    if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '세부 분류를 선택해 주세요.');
     // 대리(진행) is limited to members with 대리 인증, for new posts and for edits.
-    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증을 받은 회원만 올리거나 고칠 수 있습니다.');
+    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 쓸 수 있습니다.');
     const latest = await latestSeason();
     if (!validTags(b.tags, latest)) fail(400, '티어와 시즌을 확인해 주세요.');
     const tags = category === 'account' || category === 'ladder' ? uniqueTags(b.tags) : [];
@@ -108,60 +223,104 @@ async function validatePost(b: any, u: User, existing?: any) {
     const wantedTags = b.kind === 'exchange' && b.details?.wantedCategory === 'account' ? uniqueTags(wantedRaw) : [];
     // Price meaning is determined by the trade kind, never by a stale form's mode.
     const price = b.kind === 'exchange' ? null : amount(b.price);
+    if (b.kind === 'sell' && price !== null && price < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
     const mode = price !== null ? 'fixed' : b.kind === 'sell' ? 'offer' : 'negotiate';
     const details: Record<string, string> = {};
-    let fields: DetailField[] = category === 'account' && b.kind === 'buy' ? BUYER_DETAIL_FIELDS : DETAIL_FIELDS[category];
+    let fields: DetailField[] = category === 'account' && b.kind === 'buy' ? [...BUYER_DETAIL_FIELDS, WANTED_NICK_TYPES_FIELD] : DETAIL_FIELDS[category];
     if (b.kind === 'exchange') {
         if (!['account', 'clan'].includes(b.details?.wantedCategory)) fail(400, '구하는 교환 대상을 선택해 주세요.');
         fields = [...fields, { id: 'wantedCategory', label: '구하는 대상' }];
-        if (b.details.wantedCategory === 'account') fields = [...fields, ...BUYER_DETAIL_FIELDS.map(f => ({ ...f, id: 'wanted' + f.id[0].toUpperCase() + f.id.slice(1) }))];
+        if (b.details.wantedCategory === 'account') fields = [...fields, ...BUYER_DETAIL_FIELDS.map(f => ({ ...f, id: 'wanted' + f.id[0].toUpperCase() + f.id.slice(1) })), WANTED_NICK_TYPES_FIELD];
     }
     if (b.kind === 'sell') fields = [...fields, { id: 'currentOffer', label: '현젯', type: 'number' }];
     for (const f of fields) {
         const raw = b.details?.[f.id];
         if (raw === undefined || raw === '') continue;
-        if (typeof raw !== 'string' || raw.length > 500) fail(400, `${f.label}은 500자 이내로 입력해 주세요.`);
+        if (typeof raw !== 'string' || raw.length > 500) fail(400, `${f.label}: 500자 이내로 입력해 주세요.`);
         const v = raw.trim();
         if (!v) continue;
-        if (f.type === 'number' && (!/^\d+$/.test(v) || Number(v) > 1000000000)) fail(400, `${f.label}에 올바른 숫자를 입력해 주세요.`);
         details[f.id] = v;
     }
     if (category === 'account' && b.kind !== 'buy') {
         for (const [key, f] of Object.entries(ACCOUNT_CHOICES)) {
-            if (details[key] && !choiceAllowed(key, details[key])) fail(400, `${f.label}을 확인해 주세요.`);
+            if (details[key] && !choiceAllowed(key, details[key])) fail(400, `${f.label}: 확인해 주세요.`);
         }
-        numericDetail(details, 'ownerCount', '대주 수', 1, 9999);
-        numericDetail(details, 'nicknameChars', '닉 글자 수', 1, 20);
-        numericDetail(details, 'phantom', '팬텀 %', 0, 5000);
-        selectedDetails(details, 'skinTags', SKIN_TAGS, '스킨 선택', true);
+        const label = (id: string) => fieldLabel(DETAIL_FIELDS.account, id);
+        numericDetail(details, 'ownerCount', label('ownerCount'), 1, 9999);
+        numericDetail(details, 'nicknameChars', label('nicknameChars'), 1, 20);
+        numericDetail(details, 'phantom', label('phantom'), 0, 5000);
+        selectedDetails(details, 'nicknameTypes', NICK_TYPES, label('nicknameTypes'));
+        selectedDetails(details, 'skinTags', SKIN_TAGS, label('skinTags'), true);
     }
     if (category === 'account' && b.kind === 'buy') validateBuyerDetails(details);
     if (b.kind === 'exchange' && details.wantedCategory === 'account') validateBuyerDetails(details, 'wanted');
+    // Runs after the range checks above so a bounded field reports its own range.
+    for (const f of fields) {
+        if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}: 숫자로 입력해 주세요.`);
+    }
     if (details.currentOffer) details.currentOffer = String(amount(details.currentOffer, false));
+    if (details.currentOffer && Number(details.currentOffer) < 1000) fail(400, '현젯은 1,000원 이상입니다.');
+    if (b.kind === 'sell' && price !== null && details.currentOffer && Number(details.currentOffer) >= price) fail(400, '현젯은 즉거가보다 낮게 입력해 주세요.');
     // This retired free-text field has no input anymore. Keep the seller's original data on edits.
     if (category === 'account' && b.kind !== 'buy' && existing?.category === 'account') {
         const legacySkins = parse(existing.details, {}).rareSkins;
         if (typeof legacySkins === 'string' && legacySkins) details.rareSkins = legacySkins;
     }
     const images = b.images || [];
-    if (!Array.isArray(images) || images.length > 6 || images.some(x => typeof x !== 'string') || new Set(images).size !== images.length)
-        fail(400, '사진은 최대 6장까지 첨부할 수 있습니다.');
+    if (!Array.isArray(images) || images.some(x => typeof x !== 'string') || new Set(images).size !== images.length) fail(400, '사진을 확인해 주세요.');
+    // The same cap for every member; an edit may keep the photos a post already has.
+    const maxPhotos = Math.max(SITE_RULES.photosPerPost, existing ? parse(existing.images, []).length : 0);
+    if (images.length > maxPhotos) fail(400, `사진은 한 글에 ${maxPhotos}장까지입니다.`);
     if (images.length) {
         const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
-        if (r.results.length !== images.length) fail(403, '본인이 업로드한 사진만 사용할 수 있습니다.');
+        if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 쓸 수 있습니다.');
     }
     const status = b.status || 'open';
     if (!['open', 'reserved', 'closed'].includes(status)) fail(400, '거래 상태를 확인해 주세요.');
-    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'exchange' ? 0 : b.accepts_offers || mode === 'offer' ? 1 : 0 };
+    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0 };
+}
+
+// Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
+// slots for their grade when the list is read (프리미엄 1, 엘리트 and above 3, the manager 3), newest
+// featured first. A grade that ended loses its slots at once; nothing is deleted.
+function featuredCte(now: number) {
+    return {
+        sql: `WITH f AS (SELECT p.id,ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.featured_at DESC) AS n,
+            CASE WHEN u.role='manager' THEN 3 ELSE (SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=p.author_id AND (g.expires_at IS NULL OR g.expires_at>?)) END AS r
+            FROM posts p JOIN users u ON u.id=p.author_id WHERE p.featured_at IS NOT NULL AND p.status='open' AND p.hidden=0 AND p.bumped_at>?),
+            shown AS (SELECT id,r FROM f WHERE n<=CASE WHEN r>=3 THEN 3 WHEN r=2 THEN 1 ELSE 0 END) `,
+        args: [now, now - 72 * HOUR],
+    };
+}
+
+// Posts the previous Worker wrote during a deploy have bumped_at=0 and would sort last. For the
+// first hour of each isolate, every list copies created_at into them first, in the same batch as the
+// list (an indexed UPDATE that usually changes nothing), so rows the previous Worker writes while
+// both versions still serve are covered too. The daily cleanup does the same.
+let isolateStart = 0;
+function bumpBackfill(now: number) {
+    isolateStart ||= now;
+    return now - isolateStart < HOUR ? [db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0')] : [];
 }
 
 async function listPosts(req: Request, url: URL) {
-    const u = await currentUser(req), s = url.searchParams, where = ['p.hidden=0'], values: any[] = [];
+    const backfill = bumpBackfill(Date.now());
+    const u = await currentUser(req), s = url.searchParams, where: string[] = [], values: any[] = [];
+    const author = s.get('author');
+    // Authors see their own hidden posts in their own list; nobody else sees hidden posts in a list.
+    // A member under 이용 정지 is left out the same way (boards, search, 찜, profile lists and both
+    // promotion boxes, which share this clause) until the suspension ends.
+    if (!u || author !== u.id) {
+        where.push('p.hidden=0', '(u.suspended_until IS NULL OR u.suspended_until<=?)');
+        values.push(Date.now());
+    }
     for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'reserved', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
     }
-    if (s.get('author')) { where.push('p.author_id=?'); values.push(s.get('author')); }
+    if (author) { where.push('p.author_id=?'); values.push(author); }
+    // Boards skip the authors the viewer blocked; a blocked member's profile still lists their posts.
+    else if (u) { where.push('p.author_id NOT IN (SELECT target_id FROM blocks WHERE user_id=?)'); values.push(u.id); }
     // 대리(진행) posts are listed only while the author holds 대리 인증 (authors still see their own).
     where.push("(p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))");
     values.push(u?.id || '');
@@ -174,26 +333,31 @@ async function listPosts(req: Request, url: URL) {
     if (q) {
         // A skin's short name or in-game name (악주, 뱀동, 악몽의 주인 …) also finds posts that list that skin.
         const skins = skinsForWord(q);
+        // A whole search that names a ladder ('28챌', '현플', '다야') also finds posts with that ladder record.
+        const ladder = await tierSearch(q);
         where.push("(instr(lower(p.title),lower(?))>0 OR instr(lower(p.body),lower(?))>0 OR instr(lower(replace(p.details,' ','')),lower(replace(?,' ','')))>0 OR instr(lower(u.nickname),lower(?))>0"
-            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '') + ')');
+            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '')
+            + (ladder ? ` OR p.id IN (SELECT post_id FROM post_seasons WHERE tier=?${ladder.season === null ? '' : ' AND season=?'})` : '') + ')');
         values.push(q, q, q, q);
         if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
+        if (ladder) values.push(ladder.tier, ...ladder.season === null ? [] : [ladder.season]);
     }
     for (const [key, op] of [['min', '>='], ['max', '<=']]) {
         const n = s.get(key);
         if (n !== null && n !== '') { where.push('p.price' + op + '?'); values.push(amount(n, false)); }
     }
-    for (const [key, path] of [['level', 'level'], ['skins', 'humanSkins'], ['gas', 'gas'], ['minerals', 'minerals'], ['phantom', 'phantom']]) {
-        const v = s.get(key);
-        if (v) { where.push(`CAST(json_extract(p.details,'$.${path}') AS INTEGER)>=?`); values.push(amount(v, false)); }
-    }
-    const buying = s.get('kind') === 'buy';
     const queryInteger = (key: string, min: number, max: number) => {
         const value = s.get(key);
         if (value === null || value === '') return null;
         if (!/^\d+$/.test(value) || Number(value) < min || Number(value) > max) fail(400, '숫자 검색 조건을 확인해 주세요.');
         return Number(value);
     };
+    // Minimums for account numbers. A bad value is a search error, never the price message.
+    for (const [key, path, max] of [['level', 'level', 999], ['skins', 'humanSkins', 9999], ['gas', 'gas', 1000000000], ['minerals', 'minerals', 1000000000], ['phantom', 'phantom', 5000]] as [string, string, number][]) {
+        const n = queryInteger(key, 0, max);
+        if (n !== null) { where.push(`CAST(json_extract(p.details,'$.${path}') AS INTEGER)>=?`); values.push(n); }
+    }
+    const buying = s.get('kind') === 'buy';
     const nicknameChars = queryInteger('nicknameChars', 1, 20);
     if (nicknameChars !== null) {
         if (buying) {
@@ -211,8 +375,10 @@ async function listPosts(req: Request, url: URL) {
     for (const [key, f] of Object.entries(ACCOUNT_CHOICES)) {
         const v = s.get(key);
         if (!v) continue;
-        if (!choiceAllowed(key, v)) fail(400, `${f.label} 검색 조건을 확인해 주세요.`);
+        if (!choiceAllowed(key, v)) fail(400, `${f.label}: 확인해 주세요.`);
         if (buying && key === 'nicknameRank') where.push("(json_array_length(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]')) WHERE value=?))");
+        // 전변 가능 also finds 영전 accounts: the number goes with the account, so it can be changed.
+        else if (key === 'phoneChange' && v === '가능') where.push(`json_extract(p.details,'$.phoneChange') IN (?,'영전')`);
         else where.push(`json_extract(p.details,'$.${key}')=?`);
         values.push(v);
     }
@@ -222,6 +388,17 @@ async function listPosts(req: Request, url: URL) {
         if (!RECORD_PREFERENCES.includes(v as typeof RECORD_PREFERENCES[number])) fail(400, '전적 검색 조건을 확인해 주세요.');
         where.push(`json_extract(p.details,'$.${key}')=?`);
         values.push(v);
+    }
+    // "My account" record: 전적 있음 fits buyers who chose 전적 있어도 괜찮음 or left the record empty;
+    // 무전적 fits every buyer, so it adds no condition. myRecord is for 구매, wantedMyRecord for 교환.
+    for (const [param, key] of [['myRecord', 'recordPreference'], ['wantedMyRecord', 'wantedRecordPreference']]) {
+        const v = s.get(param);
+        if (!v) continue;
+        if (v !== '무전적' && v !== '전적 있음') fail(400, '전적 검색 조건을 확인해 주세요.');
+        if (v === '전적 있음') {
+            where.push(`(json_extract(p.details,'$.${key}') IS NULL OR json_extract(p.details,'$.${key}')='' OR json_extract(p.details,'$.${key}')=?)`);
+            values.push(RECORD_PREFERENCES[1]);
+        }
     }
     const wantedCategory = s.get('wantedCategory');
     if (wantedCategory) {
@@ -242,6 +419,26 @@ async function listPosts(req: Request, url: URL) {
         if (!NICK_RANKS.includes(wantedRank as typeof NICK_RANKS[number])) fail(400, '닉 등급 검색 조건을 확인해 주세요.');
         where.push("(json_array_length(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]')) WHERE value=?))");
         values.push(wantedRank);
+    }
+    // 닉 종류 on 판매 and the offered side of 교환: posts with any chosen type. Takes a JSON list or
+    // comma-separated words (nicknameTypes=여사,귀욤).
+    const typesParam = s.get('nicknameTypes');
+    if (typesParam) {
+        const chosen = typesParam.trim().startsWith('[') ? parse(typesParam, null) : typesParam.split(',').map(v => v.trim()).filter(Boolean);
+        if (!Array.isArray(chosen) || chosen.length > NICK_TYPES.length || chosen.some(v => typeof v !== 'string' || !(NICK_TYPES as readonly string[]).includes(v))) fail(400, '닉 종류 검색 조건을 확인해 주세요.');
+        if (chosen.length) {
+            where.push("EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.nicknameTypes'),'[]')) own JOIN json_each(?) w ON own.value=w.value)");
+            values.push(JSON.stringify([...new Set(chosen)]));
+        }
+    }
+    // "My account" 닉 종류: buyers who chose no type or chose mine. myNicknameType is for 구매,
+    // wantedMyNicknameType for the wanted side of 교환; both read wantedNicknameTypes.
+    for (const param of ['myNicknameType', 'wantedMyNicknameType']) {
+        const v = s.get(param);
+        if (!v) continue;
+        if (!(NICK_TYPES as readonly string[]).includes(v)) fail(400, '닉 종류 검색 조건을 확인해 주세요.');
+        where.push("(json_array_length(COALESCE(json_extract(p.details,'$.wantedNicknameTypes'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedNicknameTypes'),'[]')) WHERE value=?))");
+        values.push(v);
     }
     for (const key of ['skinTags', 'wantedSkinTags', 'nicknameRanks', 'wantedNicknameRanks']) {
         if (!s.get(key)) continue;
@@ -274,15 +471,178 @@ async function listPosts(req: Request, url: URL) {
         where.push(`p.id IN(SELECT post_id FROM ${scope === 'favorites' ? 'favorites' : 'history'} WHERE user_id=?)`);
         values.push(u.id);
     }
-    let order = s.get('sort') === 'price-low' ? 'p.price IS NULL,p.price ASC' : s.get('sort') === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.created_at DESC';
+    // 최신순 follows 끌올; created_at stays the time the post was written.
+    const sort = s.get('sort');
+    let order = sort === 'price-low' ? 'p.price IS NULL,p.price ASC' : sort === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.bumped_at DESC';
     if (scope === 'recent') order = '(SELECT created_at FROM history WHERE post_id=p.id AND user_id=?) DESC';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
-    const r = await db().batch([
+    const cte = featuredCte(Date.now());
+    // Home '추천 매물': featured posts of 엘리트 and above across every tab, with the same hidden,
+    // block and 대리 인증 rules as the boards.
+    if (s.get('featured') === 'home') {
+        const r = (await db().batch([...backfill, db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown WHERE r>=3) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6))])).at(-1)!;
+        return json({ posts: await decorate(r.results, u), total: r.results.length, page: 1, size });
+    }
+    // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
+    // posts stay in the list, so counts and paging do not change.
+    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope;
+    // A search across every tab also returns how many results each tab has.
+    const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
+    const r = (await db().batch([
+        ...backfill,
         db().prepare('SELECT COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause).bind(...values),
         db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
+        ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
+        ...withFeatured ? [db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown) ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
+    ])).slice(backfill.length);
+    const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
+    const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
+    const posts = await decorate(r[1].results, u);
+    if (scope === 'favorites') await addPriceDrops(posts, u!.id);
+    // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
+    // post and started a chat from it. The profile lists do not ask, so they skip these reads.
+    if (u && author === u.id && !scope && s.get('counts') === '1') await addOwnCounts(posts);
+    return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+}
+
+// 찜한 글: a sale whose 즉거가 is below the price the member saw when saving it carries price_drop
+// {from, to}. The favorite keeps that price (saved_price). Favorites saved before it existed (or by
+// the previous Worker during a deploy) fall back to the history: each row holds the price before one
+// change, so the first row written after the favorite is the price then, unless it rose in between
+// (a rise records nothing). A rise deletes the rows at or below the new price, so a price back at or
+// above `from` shows no drop either way.
+async function addPriceDrops(posts: any[], userId: string) {
+    const sells = posts.filter(p => p.kind === 'sell' && p.price !== null && p.status !== 'closed');
+    if (!sells.length) return;
+    const ids = JSON.stringify(sells.map(p => p.id));
+    const [saved, history] = await db().batch([
+        db().prepare('SELECT post_id,saved_price FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(userId, ids),
+        db().prepare('SELECT h.post_id,h.price FROM post_price_history h JOIN favorites f ON f.post_id=h.post_id AND f.user_id=? WHERE h.post_id IN (SELECT value FROM json_each(?)) AND h.changed_at>f.created_at AND f.saved_price IS NULL ORDER BY h.id').bind(userId, ids),
     ]);
-    return json({ posts: await decorate(r[1].results, u?.id), total: (r[0].results[0] as any).count, page, size });
+    for (const p of sells) {
+        const from = (saved.results as { post_id: number; saved_price: number | null }[]).find(f => f.post_id === p.id)?.saved_price
+            ?? (history.results as { post_id: number; price: number }[]).find(h => h.post_id === p.id)?.price;
+        if (typeof from === 'number' && from > p.price) p.price_drop = { from, to: p.price };
+    }
+}
+
+// fav_count: favorites of the post. chat_count: chats opened from the post (a 'listing' message
+// carries the post id in reference_id). One grouped read each for the whole page, on the
+// favorites_post and messages_listing indexes (migration 0010_trade_count_indexes).
+async function addOwnCounts(posts: any[]) {
+    if (!posts.length) return;
+    const ids = JSON.stringify(posts.map(p => p.id));
+    const [favs, chats] = await db().batch([
+        db().prepare('SELECT post_id AS id,COUNT(*) AS n FROM favorites WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id').bind(ids),
+        db().prepare("SELECT CAST(reference_id AS INTEGER) AS id,COUNT(DISTINCT conversation_id) AS n FROM messages WHERE type='listing' AND reference_id IN (SELECT CAST(value AS TEXT) FROM json_each(?)) GROUP BY reference_id").bind(ids),
+    ]);
+    const count = (rows: any[], id: number) => Number(rows.find(row => Number(row.id) === id)?.n) || 0;
+    for (const p of posts) {
+        p.fav_count = count(favs.results, p.id);
+        p.chat_count = count(chats.results, p.id);
+    }
+}
+
+// 끌올: moves an open post to the top of 최신순 and spends 1 from the member's 끌올 지갑 (users
+// bump_tokens and bump_at; see walletOf). One batch: the post moves only while the wallet holds 1,
+// the same-post gap has passed and the post is not ahead of now (새 글 우선); the wallet and the
+// event are written only when the post moved at exactly this time. Parallel taps therefore spend at
+// most what the wallet holds. The manager has no wallet and no gap.
+const WALLET_NOW = 'MIN(?, bump_tokens+CAST((?-bump_at)/? AS INTEGER))';
+async function bumpPost(u: User, post: any) {
+    if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 끌올할 수 있습니다.');
+    const perks = perksOf(u), now = Date.now(), gapMs = perks.bumpGapMinutes * 60000;
+    const capped = Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
+    const moved = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND bumped_at=?)';
+    const r = await db().batch([
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1 WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?
+            AND (CASE WHEN bump_count=0 THEN created_at ELSE bumped_at END)<=?${capped ? ` AND (SELECT ${WALLET_NOW} FROM users WHERE id=?)>=1` : ''}`)
+            .bind(now, post.id, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+        ...capped ? [db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-1,
+            bump_at=CASE WHEN bump_tokens+CAST((?-bump_at)/? AS INTEGER)>=? THEN ? ELSE bump_at+CAST((?-bump_at)/? AS INTEGER)*? END
+            WHERE id=? AND ${moved}`).bind(M, now, R, now, R, M, now, now, R, R, u.id, post.id, now)] : [],
+        db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,?,'bump',? WHERE ${moved}`).bind(u.id, post.id, now, post.id, now),
+        db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
+    ]);
+    const stored = r[r.length - 1].results[0] as { bump_tokens: number; bump_at: number };
+    if (!r[0].meta.changes) {
+        const row = await db().prepare('SELECT status,hidden,bumped_at,created_at,bump_count FROM posts WHERE id=?').bind(post.id).first<any>();
+        if (!row || row.status !== 'open' || row.hidden) fail(409, '거래중인 글만 끌올할 수 있습니다.');
+        // Several blockers can hold at once; the message names the one that ends last, the same time
+        // the 끌올 button shows ('15:40부터 가능'), so retrying at that time works.
+        const w = walletOf(stored.bump_tokens, stored.bump_at, perks, now);
+        const priorityEnd = row.bumped_at > now ? row.bumped_at : 0;
+        const gapEnd = (row.bump_count ? row.bumped_at : row.created_at) + gapMs;
+        const refillAt = w.tokens < 1 && w.nextRefillAt ? w.nextRefillAt : 0;
+        const latest = Math.max(priorityEnd, gapEnd, refillAt);
+        if (refillAt && refillAt === latest) fail(429, `끌올이 없습니다. ${clock(refillAt)}에 1개 충전됩니다.`);
+        if (priorityEnd && priorityEnd === latest) fail(429, `새 글 우선 중인 글은 ${clock(priorityEnd)}부터 끌올할 수 있습니다.`);
+        if (gapEnd > now) fail(429, `같은 글은 ${gapText(perks.bumpGapMinutes)}마다 끌올할 수 있습니다. (${clock(gapEnd)}부터 가능)`);
+        fail(429, '잠시 후 다시 시도해 주세요.');
+    }
+    return json({ bumpedAt: now, nextBumpAt: now + gapMs, ...walletJson(stored, perks, now) });
+}
+
+// The wallet fields of GET me/usage and the 끌올 response (null for the manager: no wallet).
+export function walletJson(stored: { bump_tokens: number; bump_at: number } | undefined, perks: Perks, now: number) {
+    if (!Number.isFinite(perks.bumpMax)) return { bumpTokens: null, bumpMax: null, bumpRefillMin: null, nextRefillAt: null };
+    const w = walletOf(stored?.bump_tokens ?? 0, stored?.bump_at ?? 0, perks, now);
+    return { bumpTokens: w.tokens, bumpMax: perks.bumpMax, bumpRefillMin: perks.bumpRefillMinutes, nextRefillAt: w.nextRefillAt };
+}
+
+// 게시판 상단 노출 on or off. Turning one on while every slot is used drops the author's oldest
+// featured posts in the same batch. Only open, non-hidden posts use a slot: a 예약중 or hidden post
+// keeps its featured_at and returns to the box when it is 거래중 again (if a slot is free then).
+// Which featured posts are shown is decided when lists are read (featuredCte), against the
+// author's grade at that time.
+export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND status='open' AND hidden=0";
+async function featurePost(req: Request, u: User, post: any) {
+    const b = await body(req), perks = perksOf(u), now = Date.now(), active = !!b.active;
+    const mine = FEATURED_MINE;
+    if (active) {
+        if (!perks.boardSlots) fail(403, '게시판 상단 노출은 프리미엄부터 가능합니다.');
+        if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 상단에 노출할 수 있습니다.');
+        if (post.status !== 'open' || post.hidden) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+    }
+    const dropped = active
+        ? (await db().prepare(`SELECT id,title FROM posts WHERE ${mine} AND id!=? ORDER BY featured_at DESC LIMIT -1 OFFSET ?`).bind(u.id, post.id, perks.boardSlots - 1).all<{ id: number; title: string }>()).results
+        : [];
+    const openNow = "EXISTS(SELECT 1 FROM posts WHERE id=? AND status='open' AND hidden=0)";
+    const r = await db().batch([
+        ...dropped.length ? [db().prepare(`UPDATE posts SET featured_at=NULL WHERE id IN (SELECT value FROM json_each(?)) AND ${openNow}`).bind(JSON.stringify(dropped.map(d => d.id)), post.id)] : [],
+        active ? db().prepare(`UPDATE posts SET featured_at=? WHERE id=? AND ${openNow}`).bind(now, post.id, post.id) : db().prepare('UPDATE posts SET featured_at=NULL WHERE id=?').bind(post.id),
+        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${mine}`).bind(u.id),
+    ]);
+    if (active && !r[r.length - 2].meta.changes) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+    return json({
+        featured: active, slots: perks.boardSlots, used: Number((r[r.length - 1].results[0] as any)?.n) || 0,
+        replaced: dropped.length ? { id: dropped[0].id, title: dropped[0].title } : null,
+    });
+}
+
+// Quick 즉거가 and 현젯 change for a 판매 post, without the editor. It never bumps the post.
+// currentOffer '' or null removes 현젯.
+async function patchPrice(req: Request, u: User, post: any) {
+    if (post.kind !== 'sell') fail(400, '판매 글만 가격을 수정할 수 있습니다.');
+    const b = await body(req), now = Date.now();
+    const hasPrice = b.price !== undefined, hasOffer = b.currentOffer !== undefined;
+    if (!hasPrice && !hasOffer) fail(400, '가격을 입력해 주세요.');
+    const price: number | null = hasPrice ? amount(b.price, false) : post.price;
+    if (hasPrice && price! < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
+    const stored = parse(post.details, {}).currentOffer;
+    const offer: number | null = hasOffer ? (b.currentOffer === '' || b.currentOffer === null ? null : amount(b.currentOffer, false)) : stored ? Number(stored) : null;
+    if (hasOffer && offer !== null && offer < 1000) fail(400, '현젯은 1,000원 이상입니다.');
+    if (price !== null && offer !== null && offer >= price) fail(400, '현젯은 즉거가보다 낮게 입력해 주세요.');
+    const sets: string[] = [], args: unknown[] = [];
+    if (hasPrice) { sets.push("price=?,price_mode='fixed'"); args.push(price); }
+    if (hasOffer && offer === null) sets.push("details=json_remove(details,'$.currentOffer')");
+    if (hasOffer && offer !== null) { sets.push("details=json_set(details,'$.currentOffer',?)"); args.push(String(offer)); }
+    await db().batch([
+        ...hasPrice ? priceHistoryStatements(post.id, 'sell', price, now) : [],
+        db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=? WHERE id=? AND kind='sell'`).bind(...args, now, post.id),
+    ]);
+    return json({ post: (await decorate([await rawPost(post.id)], u))[0] });
 }
 
 export async function postsHandler(req: Request, p: string[], url: URL): Promise<Response> {
@@ -290,14 +650,15 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (method === 'GET' && !p[1]) return listPosts(req, url);
     if (p[1] && method === 'GET' && !p[2]) {
         const u = await currentUser(req), post = await visiblePost(p[1], u);
-        return json({ post: (await decorate([post], u?.id))[0] });
+        return json({ post: (await decorate([post], u))[0] });
     }
     const u = await requireUser(req);
     await limit('post:' + u.id, 50, 60000);
     const existing = p[1] ? await visiblePost(p[1], u) : null;
     if (p[2] === 'favorite' && method === 'POST') {
         const b = await body(req);
-        if (b.active) await db().prepare('INSERT OR IGNORE INTO favorites(user_id,post_id,created_at) VALUES(?,?,?)').bind(u.id, existing.id, Date.now()).run();
+        // The price the member saw is kept with the favorite, for 찜한 글's '가격 내림'.
+        if (b.active) await db().prepare('INSERT OR IGNORE INTO favorites(user_id,post_id,created_at,saved_price) SELECT ?,id,?,price FROM posts WHERE id=?').bind(u.id, Date.now(), existing.id).run();
         else await db().prepare('DELETE FROM favorites WHERE user_id=? AND post_id=?').bind(u.id, existing.id).run();
         return json({ ok: true });
     }
@@ -308,47 +669,116 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         ]);
         return json({ ok: true });
     }
-    if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '수정 또는 삭제 권한이 없습니다.');
+    if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '권한이 없습니다.');
     if (method === 'DELETE' && existing) {
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
     }
+    // 이용 정지 stops writing, 끌올, 상단 노출 and price changes; closing (거래완료) or deleting a post still works.
+    if ((p[2] === 'bump' && method === 'POST') || (p[2] === 'feature' && method === 'PUT') || (p[2] === 'price' && method === 'PATCH') || (!p[2] && (method === 'POST' || method === 'PUT'))) requireActive(u);
+    if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
+    if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
+    if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);
     if (p[2] === 'status' && method === 'PATCH') {
         const b = await body(req);
         if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
+        // Under 이용 정지 a post can only be closed (거래중 or 예약중 again reopens it to other members).
+        if (b.status !== 'closed') requireActive(u);
         if (existing.kind === 'proxy_offer' && b.status !== 'closed' && !canOfferProxy(u)) fail(403, '대리 인증이 없으면 대리(진행) 글은 거래완료로만 바꿀 수 있습니다.');
+        const now = Date.now();
         await db().batch([
-            db().prepare('UPDATE posts SET status=?,updated_at=? WHERE id=?').bind(b.status, Date.now(), existing.id),
-            db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND status IN('pending','accepted') AND ?!='reserved'").bind(Date.now(), existing.id, b.status),
+            // 거래완료 also ends 게시판 상단 노출.
+            db().prepare("UPDATE posts SET status=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?").bind(b.status, now, b.status, existing.id),
+            ...endOffersStatements(existing.id, existing.author_id, STATUS_ENDS_OFFERS, [b.status, b.status], now),
         ]);
         return json({ ok: true });
     }
     if (!['POST', 'PUT'].includes(method) || p[2]) fail(405, '지원하지 않는 요청입니다.');
     if (method === 'POST' && p[1] || method === 'PUT' && !existing) fail(400, '게시글 번호를 확인해 주세요.');
-    const v = await validatePost(await body(req), u, existing), now = Date.now();
+    const v = await validatePost(await body(req), u, existing), now = Date.now(), key = postTitleKey(v.title);
     if (!existing) {
+        // Anti-flood ceilings, the same for every member (SITE_RULES): 거래중·예약중 posts (hidden
+        // included) and new posts today (deleting one does not give it back). The round-2 same-title
+        // rules stay: the same title as an open post of the same kind, and the same title as a post
+        // deleted within the bump gap. A title that only matches 거래완료 posts is allowed.
+        const rules = rulesOf(u), strict = u.role !== 'manager' && !relaxedLimits(req), dayStart = kstDayStart(now);
+        if (strict) {
+            const gapMs = perksOf(u).bumpGapMinutes * 60000;
+            // The author's open posts from before title_key existed get their key now, so the
+            // same-title rule sees them before the daily cleanup has run.
+            const missing = await db().prepare("SELECT id,title FROM posts WHERE author_id=? AND status!='closed' AND title_key='' LIMIT 100").bind(u.id).all<{ id: number; title: string }>();
+            if (missing.results.length) await db().batch(missing.results.map(p => db().prepare("UPDATE posts SET title_key=? WHERE id=? AND title=? AND title_key=''").bind(postTitleKey(p.title), p.id, p.title)));
+            const c = await db().prepare(`SELECT (SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed') AS openCount,
+                (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?) AS postsToday,
+                EXISTS(SELECT 1 FROM posts WHERE author_id=? AND kind=? AND status!='closed' AND title_key=?) AS openDup,
+                (SELECT MAX(e.created_at) FROM post_events e WHERE e.user_id=? AND e.kind='post' AND e.title_key=? AND e.created_at>? AND NOT EXISTS(SELECT 1 FROM posts WHERE id=e.post_id)) AS deletedAt`)
+                .bind(u.id, u.id, dayStart, u.id, v.kind, key, u.id, key, now - gapMs).first<any>();
+            if (c.openCount >= rules.openPosts) fail(429, `도배 방지: 거래중 글은 ${rules.openPosts}개까지입니다. 거래완료로 바꾸거나 삭제해 주세요.`);
+            if (c.postsToday >= rules.postsPerDay) fail(429, `도배 방지: 오늘 새 글은 ${rules.postsPerDay}개까지입니다.`);
+            if (c.openDup) fail(409, '같은 제목의 거래중 글이 있습니다. 그 글을 끌올해 주세요.');
+            if (c.deletedAt) fail(429, `삭제한 글과 같은 제목은 ${clock(c.deletedAt + gapMs)}부터 다시 올릴 수 있습니다.`);
+        }
+        // The insert repeats both counts so parallel requests cannot pass them. The follow-up rows
+        // select the new post's id and insert nothing when the insert was refused.
+        const guard = strict ? "(SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed')<? AND (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?)<?" : '1';
+        const newPost = '(SELECT id FROM posts WHERE author_id=? AND created_at=? AND title_key=? ORDER BY id DESC LIMIT 1)', newArgs = [u.id, now, key];
+        // 새 글 allowance (decisions item 1b, the backstop that needs no identity): only the first
+        // SITE_RULES.freshPerDay new posts of the KST day go to the top for free ('fresh' event). From
+        // the next one on, a new post spends 1 끌올 from the wallet ('bump' event), or, with the wallet
+        // empty, goes below the member's latest top time T of the last 2 days: T minus one refill
+        // interval for each such post since T (the k-th sits at T - k x refill), so a burst of new
+        // posts never stacks at or above a recent top placement. Deleting one gives nothing back
+        // (the 'post' events stay). So changing the title never buys more top placements than the
+        // allowance plus the wallet. Everything is decided inside this batch (one transaction), so
+        // parallel creates cannot overspend.
+        const perks = perksOf(u), capped = strict && Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
+        const freshCount = "(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='fresh' AND created_at>=?)", freshArgs = [u.id, dayStart];
+        const walletNow = `(SELECT ${WALLET_NOW} FROM users WHERE id=?)`, walletArgs = [M, now, R, u.id];
+        const placeSql = capped
+            ? `CASE WHEN ${freshCount}<? OR ${walletNow}>=1 THEN ? ELSE (SELECT top.t-?*(1+(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>top.t))
+                FROM (SELECT COALESCE((SELECT MAX(created_at) FROM post_events WHERE user_id=? AND kind IN ('fresh','bump') AND created_at>?),?) AS t) top) END`
+            : '?';
+        const placeArgs = capped ? [...freshArgs, rules.freshPerDay, ...walletArgs, now, R, u.id, u.id, now - 48 * HOUR, now] : [now];
+        const spent = `EXISTS(SELECT 1 FROM post_events WHERE post_id=${newPost} AND kind='bump')`;
         const r = await db().batch([
-            db().prepare('INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now),
-            ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
-            ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES((SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),?,?)').bind(u.id, now, t.tier, t.season)),
-            db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT (SELECT id FROM posts WHERE author_id=? AND created_at=? ORDER BY id DESC LIMIT 1),value FROM json_each(?)').bind(u.id, now, v.images),
+            db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},? WHERE ${guard}`)
+                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now, ...placeArgs, key, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+            ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
+            ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
+            db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
+            ...capped ? [
+                db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,id,'fresh',? FROM ${newPost} WHERE id IS NOT NULL AND ${freshCount}<?`)
+                    .bind(u.id, now, ...newArgs, ...freshArgs, rules.freshPerDay),
+                db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,id,'bump',? FROM ${newPost} n WHERE n.id IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM posts WHERE id=n.id AND bumped_at=?) AND NOT EXISTS(SELECT 1 FROM post_events WHERE post_id=n.id AND kind='fresh') AND ${walletNow}>=1`)
+                    .bind(u.id, now, ...newArgs, now, ...walletArgs),
+                db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-1,
+                    bump_at=CASE WHEN bump_tokens+CAST((?-bump_at)/? AS INTEGER)>=? THEN ? ELSE bump_at+CAST((?-bump_at)/? AS INTEGER)*? END
+                    WHERE id=? AND ${spent}`).bind(M, now, R, now, R, M, now, now, R, R, u.id, ...newArgs),
+            ] : [],
+            db().prepare(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT ?,id,'post',?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(u.id, key, now, ...newArgs),
+            db().prepare(`SELECT ${spent} AS bump,(SELECT bumped_at FROM posts WHERE id=${newPost}) AS bumped_at,(SELECT bump_tokens FROM users WHERE id=?) AS bump_tokens,(SELECT bump_at FROM users WHERE id=?) AS bump_at`)
+                .bind(...newArgs, ...newArgs, u.id, u.id),
         ]);
-        return json({ id: r[0].meta.last_row_id }, 201);
+        if (!r[0].meta.changes) fail(429, '잠시 후 다시 시도해 주세요.');
+        const out = r[r.length - 1].results[0] as { bump: number; bumped_at: number; bump_tokens: number; bump_at: number };
+        // placed: 'fresh' (one of today's free new posts), 'bump' (spent 1 끌올) or 'last' (wallet empty:
+        // placed below the latest top time). The manager and POST_LIMITS=relaxed always get 'fresh'.
+        const placed = !capped ? 'fresh' : out.bump ? 'bump' : out.bumped_at < now ? 'last' : 'fresh';
+        return json({ id: r[0].meta.last_row_id, placed, bumpedAt: out.bumped_at, ...capped ? walletJson(out, perks, now) : {} }, 201);
     }
     await db().batch([
-        // D1 batches are transactional. Read the previous price inside the batch so
-        // concurrent edits append the actual preceding price, never a stale client value.
-        db().prepare("INSERT INTO post_price_history(post_id,price,changed_at) SELECT id,price,? FROM posts WHERE id=? AND kind='sell' AND ?='sell' AND price IS NOT NULL AND price IS NOT ?").bind(now, existing.id, v.kind, v.price),
-        db().prepare('UPDATE posts SET kind=?,title=?,body=?,price=?,status=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=? WHERE id=?')
-            .bind(v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, existing.id),
+        ...priceHistoryStatements(existing.id, v.kind, v.price, now),
+        // Editing never bumps. 거래완료 ends 게시판 상단 노출.
+        db().prepare("UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,status=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?")
+            .bind(v.kind, v.title, key, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, v.status, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
         ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_images WHERE post_id=?').bind(existing.id),
         db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT ?,value FROM json_each(?)').bind(existing.id, v.images),
-        db().prepare("UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND status IN('pending','accepted') AND (?='closed' OR (?='reserved' AND ?!='reserved'))").bind(now, existing.id, v.status, existing.status, v.status),
+        ...endOffersStatements(existing.id, existing.author_id, STATUS_ENDS_OFFERS, [v.status, v.status], now),
     ]);
     return json({ id: existing.id });
 }

@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
-import type { User } from '../shared/market';
-import { BADGES, type BadgeId } from '../shared/membership';
+import { suspendUntilText, type User } from '../shared/market';
+import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -74,11 +74,31 @@ export async function initManager() {
 }
 
 // SQL columns that describe a member's effective grade and verification badges.
-// `alias` is the users table alias in the surrounding query.
+// `alias` is the users table alias in the surrounding query. 회원 탈퇴 keeps the grade and badge
+// rows (the manager's record of each grant), so a withdrawn member simply shows none of them.
 export function memberColumns(alias: string, prefix = '') {
-    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at) FROM user_grades g WHERE g.user_id=${alias}.id AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
-        + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id) AS ${prefix}badges_json`;
+    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at,'trial',g.source='trial') FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
+        + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
+
+// A trade counts once the other member confirmed it (their 후기) and while the manager has not
+// removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
+export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
+// A 후기 shows while neither it nor its trade was removed by the manager.
+export const liveReview = (r: string) => `${r}.removed_at IS NULL AND EXISTS(SELECT 1 FROM trades lt WHERE lt.id=${r}.trade_id AND lt.removed_at IS NULL)`;
+
+// '거래 3회 · 후기 좋아요 2' (WP23): the confirmed trades the member took part in as seller or buyer,
+// and the 좋아요 후기 they received. `alias` is the users table alias in the surrounding query.
+export function tradeColumns(alias: string, prefix = '') {
+    return `(SELECT COUNT(*) FROM trades tr WHERE (tr.seller_id=${alias}.id OR tr.buyer_id=${alias}.id) AND ${countedTrade('tr')}) AS ${prefix}trade_count,`
+        + `(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=${alias}.id AND rv.good=1 AND ${liveReview('rv')}) AS ${prefix}good_count`;
+}
+
+// The one message for anything aimed at a member who left (chat, grants, temporary password).
+export const WITHDRAWN = '탈퇴한 회원입니다.';
+// What a withdrawn member is called on screen. The stored nickname keeps a random suffix only
+// because nicknames are unique.
+export const WITHDRAWN_NAME = '탈퇴회원';
 
 const parseJson = (raw: unknown, fallback: any) => { try { return typeof raw === 'string' ? JSON.parse(raw) : fallback; } catch { return fallback; } };
 
@@ -87,7 +107,8 @@ export function sortBadges(list: unknown): BadgeId[] {
     return BADGES.map(b => b.id).filter(id => values.includes(id));
 }
 
-// Replaces the raw member columns with `grade`, `grade_expires_at` and `badges`.
+// Replaces the raw member columns with `grade`, `grade_expires_at`, `grade_trial` and `badges`.
+// grade_trial marks a 플러스 무료 체험: every 플러스 benefit applies, and the chip is not shown.
 export function withMember<T extends Record<string, any>>(row: T, prefix = ''): T {
     const info = parseJson(row[prefix + 'grade_info'], null);
     const out: Record<string, any> = { ...row };
@@ -95,6 +116,7 @@ export function withMember<T extends Record<string, any>>(row: T, prefix = ''): 
     delete out[prefix + 'badges_json'];
     out[prefix + 'grade'] = info?.grade || 'normal';
     out[prefix + 'grade_expires_at'] = info?.expires_at ?? null;
+    out[prefix + 'grade_trial'] = !!info?.trial;
     out[prefix + 'badges'] = sortBadges(parseJson(row[prefix + 'badges_json'], []));
     return out as T;
 }
@@ -106,20 +128,79 @@ export function tokenOf(r: Request) {
 export const SESSION_DAYS = 30;
 const DAY = 86400000;
 
+// '최근 접속' is written at most once per 10 minutes per member.
+export const LAST_SEEN_STEP = 10 * 60000;
+
 // Sessions last 30 days from the last visit. The expiry is pushed forward at most
 // once a week so an active member stays signed in without extra writes.
+// The same session read gives '최근 접속' (users.last_seen_at); it is written only when it is empty
+// or 10 minutes old, and the WHERE repeats that test so parallel requests write it once.
 export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
-    const { session_expires_at, ...user } = row;
-    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) {
-        await db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token).run();
+    const { session_expires_at, last_seen_at, trial_at, ...user } = row;
+    const writes: D1PreparedStatement[] = [];
+    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
+    if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
+        writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
+    }
+    if (writes.length) await db().batch(writes);
+    // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
+    // Worker still served has no trial yet. Only members with no grade row at all, once per isolate.
+    // A failed catch-up never fails the request; the member is tried again in the next isolate.
+    if (trial_at === null && user.grade_info === null && user.role !== 'manager' && !catchUpTried.has(user.id)) {
+        try {
+            const w = await trialWindow();
+            if (user.created_at >= w.start && user.created_at <= w.end && user.created_at + TRIAL_MS > now) {
+                if (catchUpTried.size > 5000) catchUpTried.clear();
+                catchUpTried.add(user.id);
+                if (await grantTrial(user.id, now, true)) {
+                    const g = await db().prepare(`SELECT ${memberColumns('u')} FROM users u WHERE u.id=?`).bind(user.id).first<any>();
+                    if (g) Object.assign(user, g);
+                }
+            }
+        } catch (e) { console.warn('Trial catch-up failed', e instanceof Error ? e.message : 'unknown'); }
     }
     return withMember(user) as User;
+}
+
+// 플러스 무료 체험 window (settings 'sys:trial_start' and 'sys:trial_end', written by 0016_plus_trial
+// and the manager's card). A missing value means closed. Cached for 60 s per isolate; the manager's
+// change clears it. Grants never trust the cache: their SQL reads the settings again.
+type TrialWindow = { start: number; end: number; at: number };
+let trialCache: TrialWindow | null = null;
+const catchUpTried = new Set<string>();
+export function clearTrialCache() { trialCache = null; catchUpTried.clear(); }
+export async function trialWindow(fresh = false): Promise<TrialWindow> {
+    const now = Date.now();
+    if (!fresh && trialCache && now - trialCache.at < 60000) return trialCache;
+    const r = await db().prepare("SELECT key,CAST(value AS INTEGER) AS value FROM settings WHERE key IN ('sys:trial_start','sys:trial_end')").all<{ key: string; value: number }>();
+    const get = (k: string) => r.results.find(x => x.key === k)?.value;
+    trialCache = { start: get('sys:trial_start') ?? Infinity, end: get('sys:trial_end') ?? -Infinity, at: now };
+    return trialCache;
+}
+export const trialOpen = (w: TrialWindow, now = Date.now()) => now >= w.start && now <= w.end;
+
+// The account's creation time lies inside the window, read from settings in the same statement
+// (the user_grades_trial_rule trigger checks exactly this).
+const IN_TRIAL_WINDOW = "u.created_at>=COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='sys:trial_start'),9e18) AND u.created_at<=COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='sys:trial_end'),-1)";
+
+// Grants the trial: one batch whose WHERE mirrors the trigger, so it inserts nothing instead of
+// aborting, then stamps users.trial_at only when the trial row exists. The catch-up path also
+// requires that the member has no grade row at all. Returns whether a trial row was written.
+export async function grantTrial(userId: string, now = Date.now(), catchUp = false) {
+    const r = await db().batch([
+        db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,source) SELECT u.id,'plus',1,u.created_at+${TRIAL_MS},'${MANAGER_ID}',?,'trial' FROM users u
+            WHERE u.id=? AND u.trial_at IS NULL AND u.deleted_at IS NULL AND u.role!='manager' AND ${IN_TRIAL_WINDOW} AND NOT EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND ${catchUp ? '1' : "g.source='trial'"})`).bind(now, userId),
+        db().prepare("UPDATE users SET trial_at=? WHERE id=? AND trial_at IS NULL AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND source='trial')").bind(now, userId, userId),
+        // The trial fills the 끌올 지갑 to the 플러스 cap (no chat line).
+        db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND trial_at=?').bind(PERKS.plus.bumpMax, now, userId, now),
+    ]);
+    return r[0].meta.changes > 0;
 }
 
 export async function requireUser(r: Request) {
@@ -128,8 +209,19 @@ export async function requireUser(r: Request) {
     return u;
 }
 
+// The only permission check for manager powers. A member's grade (관리자 included) never grants any.
+export const isManager = (u: User | null | undefined) => u?.role === 'manager';
+
 export function requireManager(u: User) {
-    if (u.role !== 'manager') fail(403, '매니저만 사용할 수 있습니다.');
+    if (!isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
+}
+
+// 이용 정지 (WP22): a suspended member can still sign in, read, close or delete their posts, and write
+// to the manager's chat to appeal, but cannot write posts, 끌올, 상단 노출, change prices, reopen or
+// reserve a post, send or accept 제시, apply or write to other members until suspended_until passes.
+export const isSuspended = (until: number | null | undefined, now = Date.now()) => typeof until === 'number' && until > now;
+export function requireActive(u: User) {
+    if (isSuspended(u.suspended_until)) fail(403, `이용 정지 중입니다. (${suspendUntilText(u.suspended_until!)})`);
 }
 
 export function json(d: unknown, status = 200, h: Record<string, string> = {}) {
@@ -174,14 +266,14 @@ export async function limit(key: string, max: number, ms: number) {
 }
 
 export function textField(v: unknown, min: number, max: number, label: string) {
-    if (typeof v !== 'string' || v.trim().length < min || v.trim().length > max) fail(400, `${label}은 ${min}~${max}자로 입력해 주세요.`);
+    if (typeof v !== 'string' || v.trim().length < min || v.trim().length > max) fail(400, `${label}: ${min}~${max}자로 입력해 주세요.`);
     return v.trim();
 }
 
 // Nicknames are stored in NFKC form without invisible characters, so a look-alike
 // of the manager nickname (e.g. with a zero-width space or Hangul filler) is refused.
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/u;
-const RESERVED_WORDS = ['매니저', '운영자', '관리자', '운영진', '운영팀', 'admin', 'manager'];
+const RESERVED_WORDS = ['매니저', '운영자', '관리자', '운영진', '운영팀', '탈퇴회원', 'admin', 'manager'];
 export function nicknameField(v: unknown, isManager = false) {
     if (typeof v !== 'string') fail(400, '닉네임은 2~16자로 입력해 주세요.');
     const normalized = v.normalize('NFKC');
@@ -191,9 +283,41 @@ export function nicknameField(v: unknown, isManager = false) {
         if (nickname !== MANAGER_NICKNAME) fail(400, '매니저 닉네임은 우와오로 고정됩니다.');
         return nickname;
     }
-    const compact = nickname.replace(/[\s._\-·]/g, '').toLowerCase();
-    if (compact.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => compact.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
+    // Checked on the look-alike key, so '탈퇴!회원' or '매!니저' is refused like the plain word.
+    const key = nicknameKey(nickname);
+    if (key.includes(MANAGER_NICKNAME) || RESERVED_WORDS.some(w => key.includes(w))) fail(409, '사용할 수 없는 닉네임입니다.');
     return nickname;
+}
+
+// Look-alike key: 'ab12', 'a b12', 'AB12_' and 'ab12!' share one key, so only the first of them
+// can be registered. U+119E is where NFKC puts 'ㆍ' (U+318D), so both forms are removed.
+const NICKNAME_NOISE = /[\s._\-·ㆍ\u119E~!@#$%^&*()[\]{}'`|/\\:;,?<>+="]/gu;
+export function nicknameKey(nickname: string) {
+    return nickname.normalize('NFKC').toLowerCase().replace(NICKNAME_NOISE, '');
+}
+
+// Members written before nickname_key existed (or by the previous Worker while a deploy is in
+// progress, or by SQL in tests) get their key here, 200 rows per round. The probe is an indexed
+// lookup that returns nothing once every row has a key, so it runs before every look-alike check
+// instead of being skipped by a per-isolate flag that would miss rows written after it was set.
+// Withdrawn members hold a '#deleted:' key (never NULL), so the probe does not grow with them, and a
+// nickname the previous Worker changes without touching the key gets NULL from a trigger
+// (0010_nickname_key_reset) and is keyed again here.
+// At most 10 rounds (2,000 members) per request keep the D1 calls bounded; the next request continues.
+export async function ensureNicknameKeys() {
+    for (let round = 0; round < 10; round++) {
+        const r = await db().prepare('SELECT id,nickname FROM users WHERE nickname_key IS NULL AND deleted_at IS NULL LIMIT 200').all<{ id: string; nickname: string }>();
+        if (r.results.length) await db().batch(r.results.map(u => db().prepare('UPDATE users SET nickname_key=? WHERE id=? AND nickname=?').bind(nicknameKey(u.nickname), u.id, u.nickname)));
+        if (r.results.length < 200) return;
+    }
+}
+
+// Refuses a nickname that another member already uses, exactly or as a look-alike.
+export async function assertNicknameFree(nickname: string, exceptId: string) {
+    await ensureNicknameKeys();
+    const r = await db().prepare('SELECT nickname FROM users WHERE nickname_key=? AND id!=? LIMIT 5').bind(nicknameKey(nickname), exceptId).all<{ nickname: string }>();
+    if (r.results.some(x => x.nickname === nickname)) fail(409, '이미 사용 중인 닉네임입니다.');
+    if (r.results.length) fail(409, '비슷한 닉네임이 이미 있습니다.');
 }
 
 // The cookie outlives the server session; the session row decides whether it is valid.

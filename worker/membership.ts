@@ -1,28 +1,138 @@
-import { db, fail, requireUser, json, body, limit, initManager, memberColumns, withMember, setting, MANAGER_ID } from './http';
+import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
+import { memberTrades, memberTradesStatement } from './reviews';
 import {
-    PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
-    type ApplicationKind, type BadgeId, type GradeId, type PlanId,
+    GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
+    type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
-import type { User } from '../shared/market';
+import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
 
 export async function siteConfig() {
     await initManager();
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null };
+    // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
+    const w = await trialWindow(), open = trialOpen(w);
+    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null } };
 }
 
-// A 6-month grant extends an unexpired grant of the same grade instead of overlapping it.
-// With a guard, the grant is written only if that SQL condition holds when the batch runs.
-export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
-    const info = gradeInfo(grade);
-    let expires: number | null = null;
-    if (plan === '6m') {
-        const current = await db().prepare('SELECT MAX(expires_at) AS until FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?').bind(userId, grade, now).first<any>();
-        expires = addMonths(Math.max(now, current?.until || 0), 6);
+const DAY = 86400000;
+
+// The member's own 플러스 무료 체험 state: when it ends, whether the sign-up popup is still due
+// (trial running and never closed), whether the one-time end band is due (the trial ended, no grade
+// replaced it and the band was not closed yet: reminded_at=-1 on the trial row), and whether the
+// per-address cap kept the trial from this account (trial_at=-1, shown for a day after sign-up; a
+// closed-window sign-up is -2 and never reads as capped).
+export async function trialState(u: User, capped = false): Promise<TrialState> {
+    const now = Date.now();
+    const r = await db().prepare(`SELECT u.trial_at,u.trial_popup_at,u.created_at,t.expires_at,t.reminded_at FROM users u
+        LEFT JOIN user_grades t ON t.user_id=u.id AND t.source='trial' WHERE u.id=? ORDER BY t.id DESC LIMIT 1`).bind(u.id).first<any>();
+    if (!r) return { endsAt: null, popup: false, ended: false, capped };
+    const has = r.expires_at !== null && r.expires_at !== undefined;
+    return {
+        endsAt: has ? r.expires_at : null,
+        popup: has && r.trial_popup_at === null && r.expires_at > now,
+        ended: has && r.expires_at <= now && r.reminded_at !== -1 && gradeInfo(u.grade).rank === 0,
+        capped: capped || (r.trial_at === -1 && r.created_at > now - DAY),
+    };
+}
+
+// POST me/trial-popup (the popup was closed or '첫 글 쓰기' was tapped) and POST me/trial-ended-seen
+// (the end band was closed). Both only stamp the member's own rows.
+export async function trialMeHandler(req: Request, p: string[]): Promise<Response | null> {
+    if (req.method !== 'POST' || (p[1] !== 'trial-popup' && p[1] !== 'trial-ended-seen') || p[2]) return null;
+    const u = await requireUser(req), now = Date.now();
+    if (p[1] === 'trial-popup') await db().prepare('UPDATE users SET trial_popup_at=? WHERE id=? AND trial_popup_at IS NULL').bind(now, u.id).run();
+    else await db().prepare("UPDATE user_grades SET reminded_at=-1 WHERE user_id=? AND source='trial' AND expires_at<=?").bind(u.id, now).run();
+    return json({ ok: true });
+}
+
+// The manager's '플러스 무료 체험' card: the window, how many members got a trial, how many are in
+// one now and how many applied for a grade after it. PUT {end} moves the end (KST time between now
+// and 90 days ahead); PUT {close: true, endRunning} closes the window now and, with endRunning, ends
+// every running trial too. The start never moves.
+async function manageTrial(req: Request) {
+    const now = Date.now();
+    if (req.method === 'PUT') {
+        const b = await body(req);
+        const end = b.close === true ? now - 1 : Number(b.end);
+        if (b.close !== true && (!Number.isInteger(end) || end < now || end > now + 90 * DAY)) fail(400, '종료일은 지금부터 90일 안으로 정해 주세요.');
+        await db().batch([
+            // 지금 마감 on a window that already ended keeps the earlier end (it only ends running trials).
+            db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_end',?,?) ON CONFLICT(key) DO UPDATE SET
+                value=CASE WHEN ? AND CAST(settings.value AS INTEGER)<CAST(excluded.value AS INTEGER) THEN settings.value ELSE excluded.value END,updated_at=excluded.updated_at`).bind(String(end), now, b.close === true ? 1 : 0),
+            ...b.close === true && b.endRunning === true ? [db().prepare("UPDATE user_grades SET expires_at=? WHERE source='trial' AND expires_at>?").bind(now, now)] : [],
+        ]);
+        clearTrialCache();
     }
-    return { expires, statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${guard}`).bind(userId, grade, info.rank, expires, by, now, applicationId, ...guardArgs) };
+    const w = await trialWindow(true);
+    const r = await db().prepare(`SELECT (SELECT COUNT(*) FROM users WHERE trial_at>0) AS granted,
+        (SELECT COUNT(*) FROM user_grades t WHERE t.source='trial' AND t.expires_at>?
+            AND NOT EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=t.user_id AND g.source='manager' AND g.rank>=1 AND (g.expires_at IS NULL OR g.expires_at>?))) AS active,
+        (SELECT COUNT(DISTINCT a.user_id) FROM applications a JOIN users u ON u.id=a.user_id WHERE u.trial_at>0 AND a.kind='grade' AND a.created_at>=u.trial_at) AS applied`).bind(now, now).first<any>();
+    return json({
+        start: Number.isFinite(w.start) ? w.start : null, end: Number.isFinite(w.end) ? w.end : null, open: trialOpen(w, now),
+        granted: r?.granted ?? 0, active: r?.active ?? 0, applied: r?.applied ?? 0,
+    });
+}
+
+// Only the manager grants grades (the DB triggers in 0009_manager_only refuse any other granted_by).
+// A grant fills the 끌올 지갑 to the cap the member has once it is written (the granted grade's, or a
+// higher grade the member already holds). It runs only when the grant row was written at this time,
+// so a refused grant fills nothing. Expiry and 회수 write nothing: the next read clamps the wallet.
+async function walletFill(userId: string, grade: GradeId, by: string, now: number) {
+    const r = await db().prepare('SELECT MAX(rank) AS rank FROM user_grades WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)').bind(userId, now).first<{ rank: number | null }>();
+    const held = GRADES.find(g => g.rank === Number(r?.rank || 0))?.id || 'normal';
+    const bumpMax = Math.max(PERKS[grade].bumpMax, PERKS[held].bumpMax);
+    return {
+        bumpMax,
+        wallet: db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)')
+            .bind(bumpMax, now, userId, userId, grade, by, now),
+    };
+}
+
+// A 6-month grant extends the member's unexpired 6-month row of the same grade by 6 months instead
+// of adding a second row, so one 회수 removes the whole period. A grade already held permanently
+// is not granted again. The new end date is computed here from the row as read, so the statement
+// runs only while that row still ends at the date read (`precondition`); two grants at once then
+// cannot both write the same date and lose a paid period. With a guard, the grant is written only
+// if that SQL condition holds too when the batch runs.
+export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
+    if (by !== MANAGER_ID) fail(403, '등급은 매니저만 지급할 수 있습니다.');
+    const info = gradeInfo(grade);
+    const wallet = await walletFill(userId, grade, by, now);
+    if (await db().prepare('SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL LIMIT 1').bind(userId, grade).first()) fail(409, '이미 영구 등급입니다.');
+    const noPermanent = 'NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL)';
+    if (plan === '6m') {
+        // Only paid rows: a running 플러스 체험 row is never extended (user_grades_trial_no_extend).
+        const existing = await db().prepare("SELECT id,expires_at FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? AND source='manager' ORDER BY expires_at DESC LIMIT 1").bind(userId, grade, now).first<{ id: number; expires_at: number }>();
+        if (existing) {
+            const expires = addMonths(existing.expires_at, 6);
+            const precondition = `EXISTS(SELECT 1 FROM user_grades WHERE id=? AND expires_at=? AND source='manager') AND ${noPermanent}`, preArgs = [existing.id, existing.expires_at, userId, grade];
+            return {
+                expires, precondition, preArgs, ...wallet,
+                statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND expires_at=? AND ${noPermanent} AND ${guard}`)
+                    .bind(expires, by, now, applicationId, existing.id, existing.expires_at, userId, grade, ...guardArgs),
+            };
+        }
+    }
+    const expires = plan === '6m' ? addMonths(now, 6) : null;
+    // A new row only while the member still has no permanent row of this grade and, for 6 months,
+    // no unexpired 6-month row that should be extended instead.
+    const precondition = noPermanent + (plan === '6m' ? " AND NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? AND source='manager')" : '');
+    const preArgs = [userId, grade, ...plan === '6m' ? [userId, grade, now] : []];
+    return {
+        expires, precondition, preArgs, ...wallet,
+        statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${precondition} AND ${guard}`)
+            .bind(userId, grade, info.rank, expires, by, now, applicationId, ...preArgs, ...guardArgs),
+    };
+}
+
+const GRADE_CHANGED = '등급이 방금 바뀌었습니다. 다시 시도해 주세요.';
+
+// Badges too are granted only by the manager account.
+function assertBadgeGranter(u: User) {
+    if (!(u.id === MANAGER_ID && isManager(u))) fail(403, '인증은 매니저만 지급할 수 있습니다.');
 }
 
 function dateLabel(t: number) {
@@ -36,29 +146,40 @@ async function permanentRank(userId: string) {
 
 const DECIDED = 'EXISTS(SELECT 1 FROM applications WHERE id=? AND decision_id=?)';
 
+// The member's chat line for a grade grant, from an approved application or the member panel.
+const grantLine = (grade: string, expires: number | null, bumpMax: number) =>
+    `${gradeInfo(grade).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}\n끌올이 ${bumpMax}개로 충전되었습니다.`;
+
 // The status change carries a new decision id. The grant and the chat message are
 // guarded by that id, so when two decisions overlap only the first one takes effect.
 async function decide(u: User, app: any, action: 'approve' | 'reject', note: string) {
     const now = Date.now(), decision = crypto.randomUUID(), args = [app.id, decision];
+    // An approved grade is granted in the same batch, so the application changes only while the
+    // grant's precondition holds too; otherwise nothing is written and the manager tries again.
+    const grant = action === 'approve' && app.kind !== 'badge' ? await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args) : null;
     const statements: D1PreparedStatement[] = [
-        db().prepare("UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id),
+        db().prepare(`UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending' AND ${grant ? grant.precondition : '1'}`)
+            .bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id, ...grant ? grant.preArgs : []),
     ];
     let message = '';
     if (action === 'approve') {
         if (app.kind === 'badge') {
+            assertBadgeGranter(u);
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
-            message = `${badgeInfo(app.target)?.name} 지급을 완료했습니다.`;
+            message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
-            const { expires, statement } = await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args);
-            statements.push(statement);
-            message = `${gradeInfo(app.target).name} 등급 지급을 완료했습니다.${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}`;
+            statements.push(grant!.statement, grant!.wallet);
+            message = grantLine(app.target, grant!.expires, grant!.bumpMax);
         }
     } else {
-        message = `${applicationTitle(app)}이 반려되었습니다.${note ? ' 사유: ' + note : ''}`;
+        message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
     }
     if (app.conversation_id) statements.push(...guardedMessageStatements(app.conversation_id, u.id, message, 'system', app.id, DECIDED, args, now));
     const r = await db().batch(statements);
-    if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
+    if (!r[0].meta.changes) {
+        if (grant && (await db().prepare("SELECT status FROM applications WHERE id=?").bind(app.id).first<{ status: string }>())?.status === 'pending') fail(409, GRADE_CHANGED);
+        fail(409, '이미 처리된 신청입니다.');
+    }
 }
 
 export async function membershipHandler(req: Request, p: string[]): Promise<Response | null> {
@@ -71,7 +192,8 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         return json({ applications: r.results });
     }
     if (!p[1] && method === 'POST') {
-        if (u.role === 'manager') fail(400, '매니저는 신청할 필요가 없습니다.');
+        if (isManager(u)) fail(400, '매니저 계정은 신청할 수 없습니다.');
+        requireActive(u);
         await limit('apply:' + u.id, 30, 3600000);
         const b = await body(req);
         const kind: ApplicationKind = b.kind === 'grade' ? 'grade' : 'badge';
@@ -120,20 +242,22 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
     }
     if (p[1] && method === 'PATCH') {
         const b = await body(req);
+        // Approving and rejecting are the manager's alone, whoever owns the application.
+        if ((b.action === 'approve' || b.action === 'reject') && !isManager(u)) fail(403, '매니저만 처리할 수 있습니다.');
         const app = await db().prepare('SELECT * FROM applications WHERE id=?').bind(p[1]).first<any>();
-        if (!app || (app.user_id !== u.id && u.role !== 'manager')) fail(404, '신청을 찾을 수 없습니다.');
+        if (!app || (app.user_id !== u.id && !isManager(u))) fail(404, '신청을 찾을 수 없습니다.');
         if (app.status !== 'pending') fail(409, '이미 처리된 신청입니다.');
         if (b.action === 'cancel') {
             if (app.user_id !== u.id) fail(403, '본인 신청만 취소할 수 있습니다.');
             const now = Date.now(), decision = crypto.randomUUID();
             const r = await db().batch([
                 db().prepare("UPDATE applications SET status='cancelled',updated_at=?,decision_id=? WHERE id=? AND status='pending'").bind(now, decision, app.id),
-                ...(app.conversation_id ? guardedMessageStatements(app.conversation_id, u.id, `${applicationTitle(app)}을 취소했습니다.`, 'system', app.id, DECIDED, [app.id, decision], now) : []),
+                ...(app.conversation_id ? guardedMessageStatements(app.conversation_id, u.id, `신청 취소: ${applicationTitle(app)}`, 'system', app.id, DECIDED, [app.id, decision], now) : []),
             ]);
             if (!r[0].meta.changes) fail(409, '이미 처리된 신청입니다.');
             return json({ ok: true });
         }
-        if (u.role !== 'manager') fail(403, '매니저만 처리할 수 있습니다.');
+        if (!isManager(u)) fail(403, '매니저만 처리할 수 있습니다.');
         if (b.action !== 'approve' && b.action !== 'reject') fail(400, '처리 방식을 확인해 주세요.');
         const note = typeof b.note === 'string' ? b.note.trim().slice(0, 300) : '';
         await decide(u, app, b.action, note);
@@ -142,9 +266,25 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
     fail(405, '지원하지 않는 요청입니다.');
 }
 
-// Manager-only member administration: search, badges, grades and applications.
+// Temporary passwords avoid look-alike characters (i, l, o, 0, 1). 248 is the largest multiple
+// of 31 below 256, so every character is equally likely.
+const TEMP_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789';
+function tempPassword(length = 10) {
+    let out = '';
+    while (out.length < length) {
+        for (const byte of crypto.getRandomValues(new Uint8Array(16))) if (byte < 248 && out.length < length) out += TEMP_CHARS[byte % TEMP_CHARS.length];
+    }
+    return out;
+}
+
+// Manager-only member administration: search, badges, grades, applications and temporary passwords.
+// manageHandler has already called requireManager; the grant paths check again on their own.
 export async function manageMembers(req: Request, u: User, p: string[], url: URL): Promise<Response | null> {
     const method = req.method;
+    if (p[1] === 'trial' && !p[2] && (method === 'GET' || method === 'PUT')) {
+        requireManager(u);
+        return manageTrial(req);
+    }
     if (p[1] === 'applications' && method === 'GET') {
         const status = url.searchParams.get('status');
         const where = status && ['pending', 'approved', 'rejected', 'cancelled'].includes(status) ? 'WHERE a.status=?' : '';
@@ -158,24 +298,53 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         const where: string[] = [], values: any[] = [];
         if (q) { where.push('(instr(lower(u.nickname),lower(?))>0 OR instr(lower(u.username),lower(?))>0)'); values.push(q, q); }
         if (filter === 'badged') where.push('EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id)');
-        if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000))");
-        const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
-        return json({ users: r.results.map(row => withMember(row as any)) });
+        if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)))");
+        const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,u.suspended_until,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
+        return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
-            const [grants, badges, apps] = await db().batch([
+            const [grants, badges, apps, sanctions, trades] = await db().batch([
                 db().prepare('SELECT * FROM user_grades WHERE user_id=? ORDER BY granted_at DESC').bind(p[2]),
                 db().prepare('SELECT * FROM user_badges WHERE user_id=?').bind(p[2]),
                 db().prepare('SELECT * FROM applications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(p[2]),
+                db().prepare('SELECT id,days,reason,created_at FROM sanctions WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 20').bind(p[2]),
+                // The member's trades (WP23), so the manager can remove one that never happened.
+                memberTradesStatement(p[2]),
             ]);
-            return json({ user: withMember(target), grants: grants.results, badges: badges.results, applications: apps.results });
+            // A suspension that has ended reads as none.
+            const user = withMember(target);
+            if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
+            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results) });
+        }
+        // 이용 정지 {days: 3|7|30|0 (영구) | null (해제), reason}. The manager is never suspended. The member
+        // hears about it in their chat with the manager, best-effort: a member who blocked the manager
+        // (ensureChat then throws 403) or left is still suspended or cleared.
+        if (p[3] === 'suspend' && !p[4] && method === 'POST') {
+            requireManager(u);
+            const b = await body(req);
+            const days: number | null = b.days === null ? null : (SUSPEND_DAYS as readonly unknown[]).includes(b.days) ? b.days : fail(400, '정지 기간을 확인해 주세요.');
+            if (target.role === 'manager') fail(400, '매니저 계정은 정지할 수 없습니다.');
+            if (days !== null && target.deleted_at) fail(400, WITHDRAWN);
+            if (days === null && !isSuspended(target.suspended_until)) fail(409, '이용 정지 중인 회원이 아닙니다.');
+            const reason = days === null ? (typeof b.reason === 'string' ? b.reason.trim().slice(0, 100) : '') : textField(b.reason, 2, 100, '정지 사유');
+            const now = Date.now(), until = days === null ? null : days === 0 ? SUSPEND_FOREVER : now + days * 86400000;
+            await db().batch([
+                db().prepare('UPDATE users SET suspended_until=?,suspend_reason=? WHERE id=?').bind(until, days === null ? '' : reason, target.id),
+                db().prepare('INSERT INTO sanctions(user_id,days,reason,by_id,created_at) VALUES(?,?,?,?,?)').bind(target.id, days, reason, u.id, now),
+            ]);
+            const text = days === null ? '이용 정지 해제' : `이용 정지 ${suspendDaysLabel(days)} · 사유: ${reason}`;
+            try { await db().batch(messageStatements(await ensureChat(MANAGER_ID, target.id), MANAGER_ID, text, 'system')); }
+            catch (e) { console.warn('Suspension notice not sent', e instanceof Error ? e.message : 'unknown'); }
+            return json({ ok: true, suspended_until: until });
         }
         if (p[3] === 'badges' && method === 'POST') {
+            assertBadgeGranter(u);
             const b = await body(req);
             if (!isBadge(b.badge)) fail(400, '인증 종류를 확인해 주세요.');
+            if (b.active && target.deleted_at) fail(400, WITHDRAWN);
             if (b.active) await db().prepare('INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES(?,?,?,?)').bind(p[2], b.badge, u.id, Date.now()).run();
             else await db().prepare('DELETE FROM user_badges WHERE user_id=? AND badge=?').bind(p[2], b.badge).run();
             return json({ ok: true });
@@ -186,12 +355,36 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             const plan: PlanId = b.plan === '6m' ? '6m' : 'permanent';
             if (plan === '6m' && !planInfo(b.grade, '6m')) fail(400, '이 등급은 6개월 기간이 없습니다.');
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
-            const { statement } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
-            await statement.run();
+            if (target.deleted_at) fail(400, WITHDRAWN);
+            const now = Date.now();
+            const { statement, wallet, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
+            // The member hears about a direct grant in the manager chat too, written only when the
+            // grant row was written at this time. A member who blocked the manager gets no line.
+            const chatId = await ensureChat(p[2], MANAGER_ID).catch(() => null);
+            const granted = 'EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)';
+            const line = chatId ? guardedMessageStatements(chatId, u.id, grantLine(b.grade, expires, bumpMax), 'system', null, granted, [p[2], b.grade, u.id, now], now) : [];
+            if (!(await db().batch([statement, wallet, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
+        // A member who forgot their password gets a temporary one through the manager's chat.
+        // It replaces the old password and signs the member out everywhere; it is shown only in this response.
+        if (p[3] === 'password' && !p[4] && method === 'POST') {
+            if (target.role === 'manager') fail(400, '매니저 계정에는 임시 비밀번호를 발급하지 않습니다.');
+            if (target.deleted_at) fail(400, WITHDRAWN);
+            const password = tempPassword(), salt = random();
+            await db().batch([
+                db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(password, salt), salt, target.id),
+                db().prepare('DELETE FROM sessions WHERE user_id=?').bind(target.id),
+            ]);
+            return json({ password });
+        }
+        // 회수 of an unexpired 6-month row also removes the member's other unexpired 6-month rows of
+        // that grade. Earlier code added a row per renewal (0010_stacked_grades_merge folds those),
+        // and the previous Worker may still add one while a deploy runs; one 회수 ends the period.
         if (p[3] === 'grades' && p[4] && method === 'DELETE') {
-            const r = await db().prepare('DELETE FROM user_grades WHERE id=? AND user_id=?').bind(p[4], p[2]).run();
+            const now = Date.now();
+            const r = await db().prepare('DELETE FROM user_grades WHERE user_id=? AND (id=? OR (expires_at>? AND grade=(SELECT grade FROM user_grades WHERE id=? AND user_id=? AND expires_at>?)))')
+                .bind(p[2], p[4], now, p[4], p[2], now).run();
             if (!r.meta.changes) fail(404, '지급 내역을 찾을 수 없습니다.');
             return json({ ok: true });
         }
