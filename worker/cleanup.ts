@@ -115,9 +115,11 @@ export async function cleanup(now = Date.now()) {
             AND EXISTS(SELECT 1 FROM users u WHERE u.id=p.author_id AND u.deleted_at IS NULL) LIMIT ?`).bind(MISSING_PRINTS_PER_RUN),
         db().prepare(`UPDATE posts SET thumb=NULL WHERE id IN (SELECT id FROM posts INDEXED BY posts_thumb WHERE thumb IS NOT NULL
             AND ((status='closed' AND COALESCE(closed_at,updated_at)<?) OR (status!='closed' AND bumped_at<?)) LIMIT ?)`).bind(now - RETAIN_DAYS * DAY, now - THUMB_OPEN_DAYS * DAY, THUMBS_PER_RUN),
+        // 링크 미리보기 (WP48): cached previews older than 7 days (the posts keep their own cards).
+        db().prepare('DELETE FROM link_cache WHERE fetched_at<?').bind(now - 7 * DAY),
         ...names.map(n => reads[n]),
     ]);
-    const got = <T>(n: keyof typeof reads) => r[8 + names.indexOf(n)].results as T[];
+    const got = <T>(n: keyof typeof reads) => r[9 + names.indexOf(n)].results as T[];
     const titles = got<{ id: number; title: string }>('titles'), due = got<Due>('due'), photos = got<Photo>('photos');
     const retain = got<{ id: number }>('retain').map(p => p.id);
     await fillTitleKeys(titles);

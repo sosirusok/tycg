@@ -12,6 +12,7 @@ import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { AppraisedLine, PriceLine } from '../components/PostCard';
+import { RichBody } from '../components/RichBody';
 import { ServiceSheet } from '../components/ServiceSheet';
 import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
@@ -273,7 +274,7 @@ export function Detail({ id }: { id: string }) {
                 </section>}
                 {post.body.trim() && <section className="detail-section">
                     <h2>내용</h2>
-                    <p className="body-text">{post.body}</p>
+                    <div className="body-text"><RichBody text={post.body} cards={post.link_cards} /></div>
                 </section>}
                 <div className="row muted small detail-tools">
                     <button type="button" className="btn btn-text small" onClick={() => { void navigator.clipboard?.writeText(location.href).then(() => toast('링크 복사 완료')); }}><Link2 size={15} />링크 복사</button>

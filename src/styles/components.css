@@ -2,12 +2,19 @@
 .post-list { display: grid; gap: 0; border-top: 1px solid var(--line); }
 .post-card { position: relative; display: flex; gap: 16px; padding: 18px 4px; background: var(--white); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; transition: background-color .15s; }
 .post-card:hover { box-shadow: none; background: var(--fill-2); }
-.post-card.is-closed .post-card-title a, .post-card.is-closed .price strong { color: var(--ink-3); }
+.post-card.is-closed .price strong, .mini-card.is-closed .price strong { color: var(--ink-3); }
+.post-card.is-closed .post-card-thumb img, .mini-card.is-closed .mini-card-thumb img { filter: grayscale(1); }
 .post-card-body { flex: 1; min-width: 0; display: grid; gap: 8px; cursor: pointer; }
 .post-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 22px; padding-right: 36px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 500; }
 .post-card-kind { color: var(--ink-2); font-weight: 600; }
 .post-card-time { white-space: nowrap; }
-.post-card-title { font-size: var(--fs-16); font-weight: 700; line-height: 1.4; padding-right: 36px; }
+.post-card-title { font-size: var(--fs-16); line-height: 1.4; padding-right: 36px; }
+/* 제목 강조 (WP48), list surfaces only: the author's current grade sets the weight and color. */
+:is(.post-card-title, .mini-card-title).t0 { font-weight: 400; color: var(--ink-gray); }
+:is(.post-card-title, .mini-card-title).t1 { font-weight: 500; color: var(--ink); }
+:is(.post-card-title, .mini-card-title).t2 { font-weight: 700; color: var(--ink); }
+:is(.post-card-title, .mini-card-title).t3 { font-weight: 700; color: var(--brand); }
+:is(.post-card-title, .mini-card-title).t-closed { font-weight: 400; color: var(--ink-3); }
 .post-card.has-thumb :is(.post-card-meta, .post-card-title) { padding-right: 0; }
 .post-card-title a { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .post-card-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -79,7 +86,7 @@
 /* No hover shadow: the scrolling row would clip it. */
 .mini-card:hover { border-color: var(--line-2); }
 .mini-card .post-card-meta { padding-right: 0; }
-.mini-card h3 { font-size: var(--fs-16); font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mini-card h3 { font-size: var(--fs-16); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mini-card .price { margin-top: auto; }
 .mini-card .post-card-author { padding-top: 12px; border-top: 1px solid var(--line); }
 /* A shelf card with a photo: the text and the 64px 대표 side by side (WP46). */
@@ -193,3 +200,16 @@
 .report-photos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .report-photos img { display: block; width: 48px; height: 48px; border-radius: var(--r-8); object-fit: cover; background: var(--fill); }
 .usage-limit { align-items: flex-end; gap: 8px; }
+
+/* 자동 링크 and 링크 미리보기 (WP48) */
+.autolink { color: var(--brand); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.autolink:visited { color: var(--brand); }
+.bubble-row.mine .bubble .autolink, .bubble-row.mine .bubble .autolink:visited { color: var(--white); }
+.link-card { display: flex; flex-direction: column; width: min(100%, 400px); margin: 10px 0 14px; overflow: hidden; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); white-space: normal; text-decoration: none; transition: border-color .15s; }
+.link-card:hover { border-color: var(--line-2); }
+.link-card-image { display: block; aspect-ratio: 1.91 / 1; background: var(--fill); border-bottom: 1px solid var(--line); }
+.link-card-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.link-card-text { display: grid; gap: 3px; padding: 12px 14px 13px; min-width: 0; }
+.link-card-site { overflow: hidden; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.link-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 700; line-height: 1.4; }
+.link-card-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-3); font-size: var(--fs-13); line-height: 1.5; }

@@ -4,6 +4,8 @@ import { kstDayStart } from '../shared/membership';
 import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
+import { clearBlockedCache } from './unfurl';
+import { BLOCKED_DOMAINS_MAX, parseBlockedDomains } from '../shared/links';
 import { deleteReview, deleteTrade } from './reviews';
 import { manageServices, decideService } from './services';
 import { storageMode, counterValue, DB_LIMIT_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, D1_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, R2_WARN_BYTES } from './storage';
@@ -108,6 +110,21 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         await db().prepare("INSERT INTO settings(key,value,updated_at) VALUES('sys:r2_site_bytes',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
             .bind(String(gb * 1024 ** 3), Date.now()).run();
         return json(await storageReport());
+    }
+    // 링크 차단 (WP48): settings 'sys:blocked_link_domains', one domain per line (at most 200), edited in
+    // 설정. Saving normalizes the lines (no scheme, path, 'www.' or '*.'); invalid lines are dropped.
+    if (p[1] === 'links' && !p[2] && method === 'GET') {
+        return json({ domains: parseBlockedDomains((await db().prepare("SELECT value FROM settings WHERE key='sys:blocked_link_domains'").first<{ value: string }>())?.value), max: BLOCKED_DOMAINS_MAX });
+    }
+    if (p[1] === 'links' && !p[2] && method === 'PUT') {
+        const b = await body(req);
+        if (typeof b.domains !== 'string' || b.domains.length > 20000) fail(400, '차단 주소: 확인해 주세요.');
+        if (b.domains.split(/\r?\n/).filter((l: string) => l.trim()).length > BLOCKED_DOMAINS_MAX) fail(400, `차단 주소는 ${BLOCKED_DOMAINS_MAX}개까지입니다.`);
+        const domains = parseBlockedDomains(b.domains);
+        await db().prepare("INSERT INTO settings(key,value,updated_at) VALUES('sys:blocked_link_domains',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+            .bind(domains.join('\n'), Date.now()).run();
+        clearBlockedCache();
+        return json({ domains, max: BLOCKED_DOMAINS_MAX });
     }
     // 중개·가측 신청 (WP65): the open list by grade priority, and the manager's 완료 / 취소.
     if (p[1] === 'services' && !p[2] && method === 'GET') return manageServices(url);

@@ -17,6 +17,7 @@ import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { ServiceSheet } from '../components/ServiceSheet';
+import { RichBody } from '../components/RichBody';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
@@ -460,7 +461,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
-                                    {m.body && <p className="bubble">{m.body}</p>}
+                                    {m.body && <p className="bubble"><RichBody text={m.body} /></p>}
                                 </div>
                                 <span className="bubble-meta">{mine && m.id === lastMine?.id && readThrough >= m.id && <span className="read">읽음</span>}{timeLabel(m.created_at)}</span>
                             </div>}

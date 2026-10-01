@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
 
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage };
+export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[] };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {

@@ -184,6 +184,18 @@ export function gradePriority(grade: string | null | undefined, trial?: boolean 
     return 4;
 }
 
+// 제목 강조 (WP48), list surfaces only: 0 일반 (회색), 1 플러스 and the 무료 체험 (검정), 2 프리미엄 (굵게),
+// 3 엘리트, 관리자 and the manager (굵게·파랑), from the author's current grade. Order is untouched.
+export type TitleTier = 0 | 1 | 2 | 3;
+export function titleTier(grade: string | null | undefined, role?: string | null): TitleTier {
+    if (role === 'manager') return 3;
+    const rank = gradeInfo(grade).rank;
+    return (rank >= 3 ? 3 : rank) as TitleTier;
+}
+export const TITLE_STYLE_NAMES: Record<TitleTier, string> = { 0: '회색', 1: '검정', 2: '굵게', 3: '굵게·파랑' };
+// 링크 미리보기 (WP48): 플러스 and up (the 무료 체험 too) and the manager, per post (posts.link_preview).
+export const linkPreviewAllowed = (grade: string | null | undefined, role?: string | null) => titleTier(grade, role) >= 1;
+
 // 자동 끌올 (a later package) leaves this many 끌올 in the wallet for manual use.
 export const AUTO_RESERVE = 2;
 

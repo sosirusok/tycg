@@ -6,7 +6,8 @@ import {
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { SITE_RULES } from '../../shared/membership';
+import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
+import { findLinks } from '../../shared/links';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -22,9 +23,10 @@ type Form = {
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
+    link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true };
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
@@ -36,7 +38,7 @@ function normalize(raw: Partial<Form>): Form {
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [] });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -400,7 +402,7 @@ export default function Editor({ id }: { id?: string }) {
             // edit keeps the thumbnail it had while the 대표 is the same.
             const cover = form.images[0], had = post.current;
             const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, ...thumb ? { thumb } : {} };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -537,6 +539,8 @@ export default function Editor({ id }: { id?: string }) {
     const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
     const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
     const photoCount = `${form.images.length}/${photoCap}`;
+    // 링크 미리보기 (WP48): the switch shows for 플러스 and up (the 무료 체험 too) once the body holds a link.
+    const previewAllowed = !!me && linkPreviewAllowed(me.grade, me.role), hasLink = previewAllowed && findLinks(form.body).length > 0;
 
     return <div className="container page editor">
         <div className="ed-top">
@@ -613,6 +617,7 @@ export default function Editor({ id }: { id?: string }) {
                         <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patch({ body: e.target.value })}
                             placeholder={bodyPlaceholder(kind, category)} />
                         <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span></div>
+                        {previewAllowed && hasLink && <label className="switch mt-8"><input type="checkbox" checked={form.link_preview} onChange={e => patch({ link_preview: e.target.checked })} />링크 미리보기</label>}
                     </div>
                 </section>
 

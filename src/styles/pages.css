@@ -623,3 +623,5 @@
 /* '‘제목’ 글에 있는 사진입니다. 끌올' under the photo grid (WP44). */
 .ed-used-bump { padding: 0 2px; border: 0; background: none; color: var(--brand); font: inherit; font-weight: 600; cursor: pointer; }
 .ed-fresh + .ed-bar { margin-top: 8px; }
+/* 링크 차단 (WP48): its own form above the site settings. */
+.settings-form.link-block { margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }

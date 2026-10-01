@@ -9,6 +9,7 @@ import { Link, navigate } from '../lib/router';
 import { api, errorText, imageUrl } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon, DataItems, NameLine } from './ui';
+import { titleTier } from '../../shared/membership';
 
 export function postSummary(post: Post) {
     const d = post.details;
@@ -28,6 +29,12 @@ export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags'>): [str
     for (const [k, v] of Object.entries(d)) if (k.startsWith('wanted') && k !== 'wantedCategory') unprefixed[k[6].toLowerCase() + k.slice(7)] = v;
     const tags = post.wanted_tags || [];
     return [[...tags.slice(0, 2).map(tagName), ...(tags.length > 2 ? [`외 ${tags.length - 2}개 시즌`] : [])], accountSummary(unprefixed)];
+}
+
+// 제목 강조 (WP48) on list surfaces: t0 일반 회색, t1 플러스 and the 무료 체험 검정, t2 프리미엄 굵게,
+// t3 엘리트·관리자·매니저 굵게·파랑, from the author's current grade; any completed post is t-closed.
+export function titleClass(post: Pick<Post, 'status' | 'author_grade' | 'role'>) {
+    return post.status === 'closed' ? 't-closed' : 't' + titleTier(post.author_grade, post.role);
 }
 
 // Cards show the first few data items of a spec line; the post itself lists everything.
@@ -121,7 +128,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
                 {post.appraised && <span className="appraised-tag">가측 {priceText(post.appraised.price)}</span>}
                 {flag}
             </div>
-            <h3 className="post-card-title"><Link to={href}>{post.title}</Link></h3>
+            <h3 className={'post-card-title ' + titleClass(post)}><Link to={href}>{post.title}</Link></h3>
             {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">
                 {tags.slice(0, 3).map(t => <span className="tag" key={t.tier + t.season}>{tagName(t)}</span>)}
                 {tags.length > 3 && <span className="tag">+{tags.length - 3}</span>}
@@ -155,11 +162,11 @@ export function MiniCard({ post }: { post: Post }) {
     const { thumb, thumbSrc, count } = listPhoto(post);
     const head = <>
         <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
-        <h3>{post.title}</h3>
+        <h3 className={'mini-card-title ' + titleClass(post)}>{post.title}</h3>
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
     </>;
     // With a photo the text and the 64px 대표 sit side by side (grid 1fr 64px); without one it stays text only.
-    return <Link to={'/posts/' + post.id} className="mini-card">
+    return <Link to={'/posts/' + post.id} className={'mini-card' + (post.status === 'closed' ? ' is-closed' : '')}>
         {thumb ? <div className="mini-card-top"><div className="mini-card-text">{head}</div>
             <span className="mini-card-thumb"><img src={thumbSrc} alt="" loading="lazy" />{count >= 2 && <span className="photo-count">{count}</span>}</span></div> : head}
         <PriceLine post={post} />

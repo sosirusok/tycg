@@ -8,6 +8,8 @@
   --ink-2: #293341;
   --ink-3: #6a7685;
   --ink-4: #9aa4b0;
+  /* 일반 list titles (WP48, 제목 강조 t0): a neutral gray, 7.1:1 on white. */
+  --ink-gray: #4e5968;
   --line: #e1e5eb;
   --line-2: #c7ced6;
   --fill: #f2f4f7;

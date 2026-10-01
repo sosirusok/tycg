@@ -8,6 +8,7 @@ import {
 import { SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
+import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -97,6 +98,11 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         const featured = p.featured_at !== null && p.featured_at !== undefined;
         delete p.featured_at;
         delete p.title_key;
+        // 링크 미리보기 (WP48): lists carry neither field; GET /posts/:id adds the cards it may show
+        // (shownCards) and the author's switch.
+        delete p.link_cards;
+        if (full) p.link_preview = p.link_preview !== 0;
+        else delete p.link_preview;
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
@@ -314,7 +320,9 @@ async function validatePost(b: any, u: User, existing?: any) {
     if (!images.length) thumb = null;
     // The status is never taken from the form (WP43): a new post starts 진행중, an edit keeps it, and only
     // PATCH /posts/:id/status completes a post.
-    return { thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
+    // 링크 미리보기 (WP48): on by default; an edit that leaves it out keeps the post's switch.
+    const linkPreview = b.link_preview === undefined ? (existing ? existing.link_preview !== 0 : true) : !!b.link_preview;
+    return { linkPreview: linkPreview ? 1 : 0, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
 }
 
 // Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
@@ -793,7 +801,9 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
             const stats = await tradeStats(post.author_id);
             Object.assign(post, { author_trade_count: stats.trade_count, author_deal_sum: stats.deal_sum, author_good_count: stats.good_count });
         }
-        return json({ post: (await decorate([post], u, true))[0] });
+        const out = (await decorate([post], u, true))[0];
+        out.link_cards = await shownCards(req, post, out.author_grade, out.role);
+        return json({ post: out });
     }
     const u = await requireUser(req);
     await limit('post:' + u.id, 50, 60000);
@@ -827,10 +837,18 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     // A completed post is read-only (WP43): delete, 다시 올리기 and 복사해서 새 글 stay.
     if (existing && existing.status === 'closed') fail(409, '완료된 글은 수정할 수 없습니다.');
     const v = await validatePost(await body(req), u, existing), now = Date.now();
+    // A link to a host the manager blocked refuses the save (WP48); titles are never linked.
+    await assertNoBlockedLinks(req, v.content);
     // The manager and POST_LIMITS=relaxed (local tests) skip every rule: caps, 같은 매물, the allowance.
     const strict = u.role !== 'manager' && !relaxedLimits(req);
     const print = await buildPrint(v, v.uploads);
-    return existing ? editPost(u, existing, v, print, now, strict) : createPost(u, v, print, now, strict);
+    const res = existing ? await editPost(u, existing, v, print, now, strict) : await createPost(u, v, print, now, strict);
+    // 링크 미리보기 (WP48): built only here, after a successful save, for 플러스 and up.
+    if (res.status === 200 || res.status === 201) {
+        const id = existing ? existing.id : (await res.clone().json() as { id: number }).id;
+        await unfurlOnSave(req, id, v.content, u, !!v.linkPreview);
+    }
+    return res;
 }
 
 type Valid = Awaited<ReturnType<typeof validatePost>>;
@@ -923,10 +941,10 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const spent = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='bump' AND created_at=? AND post_id=${newPost})`;
     const fresh = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='fresh' AND created_at=? AND post_id=${newPost})`, eventArgs = [u.id, now, ...newArgs];
     const r = await db().batch([
-        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,? WHERE ${guard}`)
+        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,? WHERE ${guard}`)
             .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, ...placeArgs, key,
-                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
@@ -983,10 +1001,10 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
     const key = print.title_key, self = "(SELECT id FROM posts WHERE id=? AND status!='closed')";
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
-        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,updated_at=?,
+        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,updated_at=?,
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)
-            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
+            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),

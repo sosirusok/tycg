@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, SITE_RULES, gapText, gradePriority, type GradeInfo } from '../../shared/membership';
+import { BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -30,6 +30,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
     ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+    // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
+    ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
+    ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
     // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
     // 운영진 가측가 on the post for every grade (paid requests too).
     // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
@@ -44,6 +47,7 @@ const FREE_ITEMS = [
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '채팅·제시',
+    '링크 자동 연결',
     '찜',
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     '거래 기록·후기',

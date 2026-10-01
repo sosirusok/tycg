@@ -81,6 +81,8 @@ const old = Date.now() - 2 * DAY;
 sql(`UPDATE uploads SET created_at=${old} WHERE id IN ('${inPost}','${inChat}','${inDraft}','${unused}')`);
 sql(`INSERT INTO sessions (token,user_id,expires_at) VALUES ('expired-${run}','${users[0].id}',${old})`);
 sql(`INSERT INTO rate_limits (key,count,reset_at) VALUES ('old-${run}',1,${old})`);
+// 링크 미리보기 cache (WP48): rows older than 7 days go, a fresh one stays.
+sql(`INSERT INTO link_cache (url,card,ok,fetched_at) VALUES ('https://old-${run}.example/',  '{}',1,${Date.now() - 8 * DAY}),('https://new-${run}.example/','{}',1,${Date.now() - DAY})`);
 // A 6-month grade of cb ends in 3 days, and cb blocked the manager: no reminder, but the grant is marked.
 equal((await b('blocks', 'POST', { userId: 'manager', active: true })).status, 200, 'cb blocks the manager');
 sql(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,source) VALUES('${users[1].id}','premium',2,${Date.now() + 3 * DAY},'manager',${old},'manager')`);
@@ -93,6 +95,7 @@ equal((await a('images/' + unused)).status, 404, 'removed photo is gone');
 equal((await a('images/' + fresh)).status, 200, 'a photo uploaded today is kept');
 equal(sql(`SELECT COUNT(*) AS n FROM sessions WHERE token='expired-${run}'`)[0].n, 0, 'expired sessions are removed');
 equal(sql(`SELECT COUNT(*) AS n FROM rate_limits WHERE key='old-${run}'`)[0].n, 0, 'finished rate-limit windows are removed');
+equal(sql(`SELECT url FROM link_cache WHERE url IN ('https://old-${run}.example/','https://new-${run}.example/')`).map(r => r.url), [`https://new-${run}.example/`], 'link previews cached over 7 days ago are removed');
 equal(sql(`SELECT COUNT(*) AS n FROM conversations WHERE (user_a='manager' AND user_b='${users[1].id}') OR (user_b='manager' AND user_a='${users[1].id}')`)[0].n, 0, 'a member who blocked the manager gets no reminder chat');
 check(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${users[1].id}'`)[0].reminded_at !== null, "that member's grant is still marked reminded");
 

@@ -2,6 +2,7 @@ import type { User } from '../shared/market';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
+import { assertNoBlockedLinks } from './unfurl';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -207,6 +208,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             const text = typeof b.body === 'string' ? b.body.trim() : '';
             if (text.length > 2000) fail(400, '메시지는 2000자 이내로 입력해 주세요.');
             if (!text && !images.length) fail(400, '메시지를 입력해 주세요.');
+            // A link to a host the manager blocked (WP48).
+            await assertNoBlockedLinks(req, text);
             if (images.length) {
                 const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
                 if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 보낼 수 있습니다.');
