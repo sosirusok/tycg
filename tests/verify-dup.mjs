@@ -394,6 +394,10 @@ equal((await S(`posts/${SP.id}/status`, 'PATCH', { status: 'closed', partnerId: 
 const SR = await created(S, sale({ images: sp.map(p => p.id) }), 'S posts the sold listing again');
 equal(SR.relist, true, 'a relist');
 equal(reportsOf(S).map(r => r.details), [`거래완료 글 #${SP.id} (구매자 지정) · 같은 매물`], 'flagged: 거래완료 글 (구매자 지정) · 같은 매물');
+// 알림함 (WP50): the buyer named on the sale hears about it once.
+const soldAlerts = sql(`SELECT type,post_id,actor_id,text FROM notifications WHERE user_id='${Bu.user.id}' AND type='same_listing'`);
+equal(soldAlerts.map(r => [r.post_id, r.actor_id]), [[SR.id, S.user.id]], 'the buyer gets one same_listing 알림 about the relist');
+check(soldAlerts[0].text.endsWith('글과 같은 매물이 다시 올라왔습니다.') && soldAlerts[0].text.startsWith('‘[QA] 같은 매물'), `its text: ${soldAlerts[0].text}`);
 
 // ---- 10. Daily cleanup of prints ----
 const cl = await register('clean');

@@ -17,6 +17,9 @@ type AppState = {
     setTrial: (t: TrialState | null) => void;
     config: SiteConfig;
     unread: number;
+    // Unread 알림 (WP50), from the same poll as the chat count.
+    alerts: number;
+    setAlerts: (n: number | ((n: number) => number)) => void;
     setMe: (u: User | null) => void;
     refreshMe: () => Promise<void>;
     refreshUnread: () => void;
@@ -38,7 +41,7 @@ const Ctx = createContext<AppState>(null!);
 const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.grade_trial, u.badges, u.suspended_until]);
 export const useApp = () => useContext(Ctx);
 
-// The tab title: '(2) 판매 · 좀비고 거래소' while two chats are unread.
+// The tab title: '(2) 판매 · 좀비고 거래소' while two chats and 알림 together are unread.
 const SITE_NAME = '좀비고 거래소';
 let pageTitle = SITE_NAME, unreadCount = 0;
 const applyTitle = () => { document.title = (unreadCount > 0 ? `(${unreadCount}) ` : '') + pageTitle; };
@@ -100,6 +103,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // The photo store decides how far photos are shrunk before upload (lib/api compress).
     const setConfig = useCallback((c: SiteConfig) => { setPhotoStorage(c.storage); setSiteConfig(c); }, []);
     const [unread, setUnread] = useState(0);
+    const [alerts, setAlerts] = useState(0);
     const [authMode, setAuthMode] = useState<'' | 'login' | 'register'>('');
     const [apply, setApply] = useState<ApplyPreset | 'open' | null>(null);
     const pending = useRef<((u: User) => void) | null>(null);
@@ -123,18 +127,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // The unread count also brings the member's current badges and grade, so a grant
     // from the manager appears without reloading the page.
     const refreshUnread = useCallback(() => {
-        if (!signedIn) { setUnread(0); return; }
-        api<{ unread: number; user: User }>('chats/unread').then(d => { setUnread(d.unread); updateMe(d.user); }).catch(() => {});
+        if (!signedIn) { setUnread(0); setAlerts(0); return; }
+        api<{ unread: number; alerts?: number; user: User }>('chats/unread').then(d => { setUnread(d.unread); setAlerts(d.alerts || 0); updateMe(d.user); }).catch(() => {});
     }, [signedIn, updateMe]);
 
     // At sign-in, then on the adaptive schedule above (keeps Worker requests low).
     useEffect(() => {
-        if (!signedIn) { setUnread(0); return; }
+        if (!signedIn) { setUnread(0); setAlerts(0); return; }
         refreshUnread();
     }, [signedIn, refreshUnread]);
     useAdaptivePoll(refreshUnread, signedIn);
 
-    useEffect(() => { unreadCount = unread; applyTitle(); }, [unread]);
+    useEffect(() => { unreadCount = unread + alerts; applyTitle(); }, [unread, alerts]);
 
     // api() reports a 401 (the session ended or was signed out elsewhere): sign out on the page too.
     const meRef = useRef(me);
@@ -146,6 +150,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setMe(null);
             setTrial(null);
             setUnread(0);
+            setAlerts(0);
             setAuthMode('login');
             // The failed action usually shows the same message already; one toast is enough.
             setTimeout(() => {
@@ -178,10 +183,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const value = useMemo<AppState>(() => ({
-        me, ready, trial, setTrial, config, unread, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
+        me, ready, trial, setTrial, config, unread, alerts, setAlerts, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
         authMode, openAuth: setAuthMode, closeAuth: () => { pending.current = null; setAuthMode(''); }, finishAuth,
         apply, openApply: preset => setApply(preset || 'open'), closeApply: () => setApply(null), logout,
-    }), [me, ready, trial, config, unread, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout]);
+    }), [me, ready, trial, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout]);
 
     return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

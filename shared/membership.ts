@@ -237,6 +237,12 @@ export const TRIAL_ROWS: TrialRow[] = [
     { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
 ];
 
+// 알림함 rows for the trial (WP50), written by the daily cleanup: one in the last 24 hours ('10월 9일
+// 14:32'), one after the end. Until WP52 keeps settings across grades, the reminder ends like the home
+// end band ('플러스는 입금 확인 후 매니저가 지급합니다.').
+export const trialAlertSoon = (when: string) => `플러스 무료 체험이 ${when}에 끝납니다. 플러스는 입금 확인 후 매니저가 지급합니다.`;
+export const TRIAL_ALERT_ENDED = '플러스 무료 체험이 끝났습니다.';
+
 const kstParts = (t: number) => {
     const d = new Date(t + KST);
     return { month: d.getUTCMonth() + 1, day: d.getUTCDate(), time: `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}` };

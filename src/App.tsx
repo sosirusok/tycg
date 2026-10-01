@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
-import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound, X } from 'lucide-react';
+import { Bell, House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound, X } from 'lucide-react';
 import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
 import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
 import { AppProvider, setPageTitle, useApp } from './app/state';
@@ -20,6 +20,7 @@ const Profile = lazy(() => import('./pages/Profile'));
 const Mine = lazy(() => import('./pages/Mine'));
 const Manage = lazy(() => import('./pages/Manage'));
 const Guide = lazy(() => import('./pages/Guide'));
+const Alerts = lazy(() => import('./pages/Alerts'));
 
 export default function App() {
     return <AppProvider><Shell /></AppProvider>;
@@ -72,7 +73,7 @@ function CappedNotice({ home }: { home: boolean }) {
 }
 
 function Shell() {
-    const { me, unread, requireLogin, openAuth, openApply, logout } = useApp();
+    const { me, unread, alerts, requireLogin, openAuth, openApply, logout } = useApp();
     const { path, params, parts } = useLocation();
     const page = parts[0] || '';
     const write = writeHref(params, path);
@@ -94,9 +95,9 @@ function Shell() {
         const kind = params.get('kind');
         setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : params.get('q') ? '검색 결과' : '전체')
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
-            : page === 'me' ? '내 거래'
+            : page === 'me' ? (parts[1] === 'alerts' ? '알림' : '내 거래')
             : page === 'manage' ? '매니저 메뉴' : '');
-    }, [page, params]);
+    }, [page, params, parts]);
     // Back/Forward returns to the stored scroll position; the board and a post do it themselves
     // once their data is on screen.
     useLayoutEffect(() => {
@@ -140,6 +141,12 @@ function Shell() {
                         <MessageCircle size={20} /><span className="header-link-text">채팅</span>
                         {unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}
                     </button>
+                    {/* 알림함 (WP50): the bell with the unread count, styled like the chat count. On phones it
+                        stays in the header (the bottom nav has no 알림), and the menu also lists '알림'. */}
+                    {me && <button type="button" className="header-link header-alerts" aria-label={`알림${alerts ? `, 읽지 않은 알림 ${alerts}개` : ''}`} aria-current={page === 'me' && parts[1] === 'alerts' ? 'page' : undefined} onClick={() => void navigate('/me/alerts')}>
+                        <Bell size={20} />
+                        {alerts > 0 && <b className="badge-count">{alerts > 99 ? '99+' : alerts}</b>}
+                    </button>}
                     {me ? <DropdownMenu.Root>
                         <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
@@ -147,6 +154,7 @@ function Shell() {
                                 <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} trial={me.grade_trial} role={me.role} badges={me.badges} compact />
                                     {me.grade_trial && me.grade_expires_at && <span className="menu-sub">{trialStatus(me.grade_expires_at)}</span>}</div>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/profile/' + me.id)}>내 프로필</DropdownMenu.Item>
+                                <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/alerts')}>알림{alerts > 0 && <b className="menu-count">{alerts > 99 ? '99+' : alerts}</b>}</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/posts')}>내 거래</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/favorites')}>찜한 글</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/applications')}>신청 내역</DropdownMenu.Item>
@@ -170,7 +178,7 @@ function Shell() {
                     : page === 'edit' ? <Editor key={'edit' + parts[1] + (me?.id || '')} id={parts[1]} />
                     : page === 'chat' ? <Chat id={parts[1]} />
                     : page === 'profile' ? <Profile key={parts[1]} id={parts[1]} />
-                    : page === 'me' ? <Mine tab={parts[1] || 'posts'} />
+                    : page === 'me' ? (parts[1] === 'alerts' ? <Alerts /> : <Mine tab={parts[1] || 'posts'} />)
                     // Manage renders its tools only for role 'manager' (never for the 관리자 grade).
                     : page === 'manage' ? <Manage tab={parts[1] || 'applications'} />
                     : page === 'guide' ? <Guide />

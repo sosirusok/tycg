@@ -3,6 +3,7 @@ import { REPORT_REASONS } from '../shared/market';
 import { kstDayStart } from '../shared/membership';
 import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
+import { notifyOne } from './notifications';
 import { manageMembers } from './membership';
 import { clearBlockedCache } from './unfurl';
 import { BLOCKED_DOMAINS_MAX, parseBlockedDomains } from '../shared/links';
@@ -91,6 +92,8 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         await db().batch([
             db().prepare('UPDATE posts SET hidden=?,hidden_reason=? WHERE id=?').bind(hidden, reason, post.id),
             ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now, OFFERS_HIDDEN_TEXT) : [],
+            // 알림함 (WP50): the author's row, only when this request hides a visible post.
+            ...hidden && !post.hidden ? [notifyOne('hidden', post.author_id, String(post.id), post.id, u.id, `‘${post.title}’ 글이 숨김 처리되었습니다.${reason ? ' 사유: ' + reason : ''}`, now)] : [],
         ]);
         // The author hears about it in their chat with the manager. Best-effort: the author may have
         // blocked the manager (ensureChat then throws 403), and a failed notice never undoes the change.

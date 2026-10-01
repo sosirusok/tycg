@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, digest, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
-    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
+    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
@@ -10,6 +10,7 @@ import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
+import { favoritesNotify, notifyStatement } from './notifications';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -147,6 +148,14 @@ export function priceHistoryStatements(postId: number, newKind: string, newPrice
         db().prepare("INSERT INTO post_price_history(post_id,price,changed_at) SELECT id,price,? FROM posts WHERE id=? AND kind='sell' AND ?='sell' AND price IS NOT NULL AND ? IS NOT NULL AND price>?")
             .bind(now, postId, newKind, newPrice, newPrice),
     ];
+}
+
+// 찜 가격 내림 (WP50): one 알림 per member who saved the post, written only while the post is an open,
+// visible 판매 post whose 즉거가 is above the new one. It goes before the posts UPDATE in the same batch,
+// so it reads the price the change replaces.
+export function priceDropNotify(postId: number, authorId: string, title: string, newPrice: number, now: number) {
+    return favoritesNotify('fav_price', postId, authorId, `가격 내림 · ${title} ${priceText(newPrice)}`, now,
+        "EXISTS(SELECT 1 FROM posts WHERE id=? AND kind='sell' AND status!='closed' AND hidden=0 AND price IS NOT NULL AND price>?)", [postId, newPrice]);
 }
 
 // 완료 (WP43) ends the pending offers; an accepted one survives only when its sender is the member the
@@ -739,6 +748,7 @@ async function patchPrice(req: Request, u: User, post: any) {
     if (hasOffer && offer !== null) { sets.push("details=json_set(details,'$.currentOffer',?)"); args.push(String(offer)); }
     await db().batch([
         ...hasPrice ? priceHistoryStatements(post.id, 'sell', price, now) : [],
+        ...hasPrice && price !== null ? [priceDropNotify(post.id, post.author_id, post.title, price, now)] : [],
         db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=? WHERE id=? AND kind='sell'`).bind(...args, now, post.id),
     ]);
     return json({ post: (await decorate([await rawPost(post.id)], u, true))[0] });
@@ -771,6 +781,8 @@ async function completePost(req: Request, u: User, post: any) {
         db().prepare("UPDATE posts SET status='closed',closed_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, post.id),
         ...endOffersStatements(post.id, post.author_id, `${COMPLETE_ENDS_OFFERS} AND ${guard}`, [keep, ...guardArgs], now),
         ...plan ? plan.statements : [],
+        // '판매완료 · 제목' (WP50) to every member who saved the post, guarded on this very completion.
+        favoritesNotify('fav_closed', post.id, post.author_id, `${statusName(post.kind, 'closed')} · ${post.title}`, now, 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0)', guardArgs),
     ]);
     if (!r[0].meta.changes) fail(409, '이미 완료된 글입니다.');
     // r[0] is the post, then the three statements that end the 제시, then the plan's DELETE and INSERT.
@@ -980,6 +992,9 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
         printUpsert(newPost, newArgs, u.id, print),
         ...sold ? [reportStatement(newPost, newArgs, u.id, sold, now, `거래완료 글 #${relist!.post_id} %`)] : [],
         ...report ? [reportStatement(newPost, newArgs, u.id, report, now)] : [],
+        // The buyer named on the sale hears that the same listing is up again (WP50), when it is visible.
+        ...sold ? [notifyStatement('same_listing', `SELECT ? AS user_id,? AS ref,n.id AS post_id,? AS actor_id,? AS text FROM ${newPost} n
+            WHERE n.id IS NOT NULL AND EXISTS(SELECT 1 FROM posts WHERE id=n.id AND hidden=0)`, [soldTo(relist!, u.id), String(relist!.post_id), u.id, `‘${relist!.title || v.title}’ 글과 같은 매물이 다시 올라왔습니다.`, ...newArgs], now)] : [],
         db().prepare(`SELECT ${spent} AS bump,${fresh} AS fresh,(SELECT bumped_at FROM posts WHERE id=${newPost}) AS bumped_at,(SELECT bump_tokens FROM users WHERE id=?) AS bump_tokens,(SELECT bump_at FROM users WHERE id=?) AS bump_at`)
             .bind(...eventArgs, ...eventArgs, ...newArgs, u.id, u.id),
     ]);
@@ -1017,6 +1032,7 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
     const key = print.title_key, self = "(SELECT id FROM posts WHERE id=? AND status!='closed')";
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
+        ...v.kind === 'sell' && v.price !== null ? [priceDropNotify(existing.id, existing.author_id, v.title, v.price, now)] : [],
         db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,body_style=?,updated_at=?,
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)

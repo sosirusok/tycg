@@ -3,6 +3,7 @@ import { db, fail, requireUser, requireActive, json, body, limit, memberColumns,
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
 import { assertNoBlockedLinks } from './unfurl';
+import { ALERTS_COUNT_SQL } from './notifications';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -115,9 +116,10 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     // The sum of the member's side of the unread counters, read from the partial indexes that hold
     // only chats with something unread.
     if (p[1] === 'unread' && method === 'GET') {
-        const r = await db().prepare('SELECT (SELECT COALESCE(SUM(a_unread),0) FROM conversations WHERE user_a=? AND a_unread>0)+(SELECT COALESCE(SUM(b_unread),0) FROM conversations WHERE user_b=? AND b_unread>0) AS n')
-            .bind(u.id, u.id).first<{ n: number }>();
-        return json({ unread: r?.n || 0, user: u });
+        // alerts: unread 알림 (WP50) for the header bell, in the same statement (at most 99 rows read).
+        const r = await db().prepare(`SELECT (SELECT COALESCE(SUM(a_unread),0) FROM conversations WHERE user_a=? AND a_unread>0)+(SELECT COALESCE(SUM(b_unread),0) FROM conversations WHERE user_b=? AND b_unread>0) AS n,${ALERTS_COUNT_SQL} AS alerts`)
+            .bind(u.id, u.id, u.id).first<{ n: number; alerts: number }>();
+        return json({ unread: r?.n || 0, alerts: r?.alerts || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
         // ?filter=applications (manager only): the chats with an application still waiting.

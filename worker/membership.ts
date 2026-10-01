@@ -1,6 +1,7 @@
 import { blockedDomains } from './unfurl';
 import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
 import { storageMode } from './storage';
+import { notifyOne } from './notifications';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
@@ -179,6 +180,8 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
         message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
     }
     if (app.conversation_id) statements.push(...guardedMessageStatements(app.conversation_id, u.id, message, 'system', app.id, DECIDED, args, now));
+    // 알림함 (WP50): '신청 결과 · 프리미엄 등급 신청 지급 완료' (or '… 반려'), guarded by the same decision.
+    statements.push(notifyOne('application', app.user_id, String(app.id), null, u.id, `신청 결과 · ${applicationTitle(app)} ${action === 'approve' ? '지급 완료' : '반려'}`, now, DECIDED, args));
     const r = await db().batch(statements);
     if (!r[0].meta.changes) {
         if (grant && (await db().prepare("SELECT status FROM applications WHERE id=?").bind(app.id).first<{ status: string }>())?.status === 'pending') fail(409, GRADE_CHANGED);

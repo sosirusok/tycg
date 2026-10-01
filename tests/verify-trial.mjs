@@ -179,7 +179,9 @@ sql(`UPDATE user_grades SET expires_at=${Date.now() + 20 * HOUR} WHERE user_id='
 equal(await fireCron(), 200, 'the daily cron runs');
 equal((await e('chats')).data.chats?.length ?? 0, 0, 'the trial member has no conversation with the manager');
 equal(managerChats(), before, "the manager's chat list count is unchanged");
-equal(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${e.user.id}' AND source='trial'`)[0].reminded_at, null, 'the trial row is not marked as reminded');
+// WP50: the reminder goes to the 알림함 instead (reminded_at marks it, so it is written once).
+check(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${e.user.id}' AND source='trial'`)[0].reminded_at > 0, 'the trial row is marked by the 알림함 reminder');
+equal(sql(`SELECT COUNT(*) AS n FROM notifications WHERE user_id='${e.user.id}' AND type='grade_end'`)[0].n, 1, 'one 알림함 row instead of a chat');
 
 // 8. The end band: shown once after the trial ended, until closed.
 sql(`UPDATE user_grades SET expires_at=${Date.now() - 1000} WHERE user_id='${e.user.id}' AND source='trial'`);
