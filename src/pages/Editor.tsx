@@ -82,6 +82,14 @@ function bodyPlaceholder(kind: TradeKind, category: string) {
     return ({ account: '스킨, 악세, 라이드, 거래 방법 등', clan: '순위, 기여, 거래 방법 등', goods_coupon: '구성, 특이 사항 등' } as Record<string, string>)[category] || '상태, 거래 방법 등';
 }
 
+// The 판매 board filtered like the post being written: same category and ladder seasons, completed posts.
+function similarHref(category: string, tags: SeasonTag[]) {
+    const q = new URLSearchParams({ kind: 'sell', category });
+    if (category === 'account' && tags.length) q.set('tags', JSON.stringify(tags.map(t => ({ tier: t.tier, season: t.season }))));
+    q.set('closed', '1');
+    return '/trade?' + q.toString();
+}
+
 function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
     return <section className="ed-section"><div className="ed-head"><h2>{title}</h2>{desc && <p>{desc}</p>}</div>{children}</section>;
 }
@@ -603,6 +611,8 @@ export default function Editor({ id }: { id?: string }) {
                             <Num decimal id="ed-offer" label="현젯 (현재 제시가)" value={form.offer} onChange={v => patch({ offer: v })} unit="만원" placeholder="없음"
                                 error={offerTooHigh ? '현젯은 즉거가보다 낮게 입력해 주세요.' : ''} />
                         </div>
+                        {/* 비슷한 거래완료 글 (WP51): the 판매 board in a new tab, same category and 래더 기록, completed posts only. */}
+                        <a className="ed-similar" href={similarHref(category, form.tags)} target="_blank" rel="noreferrer">비슷한 거래완료 글</a>
                         {id && <p className="field-hint">이전 즉거가는 취소선으로 남습니다.</p>}
                         <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />제시 받기</label>
                     </div> : <div className="ed-grid">

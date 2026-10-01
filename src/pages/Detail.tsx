@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -21,7 +21,8 @@ import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number };
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
+    author_created_at?: number; author_prev_nickname?: string };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -359,15 +360,18 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
-    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
-    // as on the profile).
+    // The trust lines (WP51): '최근 접속' when it is known (not on one's own post, as on the profile), then
+    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' (also at 0: a new member reads as one), the join date and
+    // '이전 닉네임: {닉}' while the nickname changed within 90 days.
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
-            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>}
-            {seen && <span className="author-stats author-seen">{seen}</span>}</span>
+            {seen && <span className="author-stats author-seen">{seen}</span>}
+            <span className="author-stats author-trust">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>
+            {post.author_created_at && <span className="author-stats">{dateText(post.author_created_at)} 가입</span>}
+            {post.author_prev_nickname && <span className="author-stats">이전 닉네임: {post.author_prev_nickname}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;
 }

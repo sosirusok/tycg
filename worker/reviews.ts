@@ -1,5 +1,5 @@
 import { REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, type User } from '../shared/market';
-import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, liveReview, isSuspended, WITHDRAWN, WITHDRAWN_NAME } from './http';
+import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, liveReview, countedTrade, isSuspended, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { blocked, guardedMessageStatements } from './chat';
 
@@ -253,6 +253,32 @@ async function listReviews(userId: string, url: URL) {
     return json({ reviews, total: (count.results[0] as any)?.n || 0, page });
 }
 
+// GET /users/:id/trades?page=N (거래 기록 tab, WP51): the member's counted trades (confirmed, not removed by
+// the manager), newest first, 20 per page. Each row has the member's side, the title kept with the trade
+// (post_gone when the post was deleted, post_hidden when nobody else may open it), 거래가 and the other
+// member's name line (탈퇴회원 once they left). A member who left shows none.
+async function listTrades(userId: string, url: URL) {
+    const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('page'))) || 1, 1), 500);
+    const mine = `(t.seller_id=? OR t.buyer_id=?) AND ${countedTrade('t')} AND EXISTS(SELECT 1 FROM users me WHERE me.id=? AND me.deleted_at IS NULL)`;
+    const [rows, count] = await db().batch([
+        db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,COALESCE(NULLIF(t.kind,''),p.kind,'') AS kind,COALESCE(t.brokered,0) AS brokered,
+                (t.seller_id=?) AS sold,COALESCE(NULLIF(t.title,''),p.title,'') AS title,(p.id IS NULL) AS post_gone,COALESCE(p.hidden,0) AS post_hidden,
+                o.id AS partner_id,o.nickname,o.role,o.deleted_at,${memberColumns('o')}
+            FROM trades t LEFT JOIN posts p ON p.id=t.post_id LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
+            WHERE ${mine} ORDER BY t.created_at DESC,t.id DESC LIMIT ? OFFSET ?`).bind(userId, userId, userId, userId, userId, PAGE_SIZE, (page - 1) * PAGE_SIZE),
+        db().prepare(`SELECT COUNT(*) AS n FROM trades t WHERE ${mine}`).bind(userId, userId, userId),
+    ]);
+    const trades = rows.results.map((row: any) => {
+        const { deleted_at, ...rest } = row;
+        const m: Record<string, any> = withMember(rest);
+        delete m.grade_expires_at;
+        m.sold = !!m.sold; m.post_gone = !!m.post_gone; m.post_hidden = !!m.post_hidden; m.brokered = !!m.brokered;
+        if (deleted_at || !m.nickname) { m.nickname = WITHDRAWN_NAME; m.partner_deleted = true; m.grade = 'normal'; m.badges = []; delete m.grade_trial; }
+        return m;
+    });
+    return json({ trades, total: (count.results[0] as any)?.n || 0, page });
+}
+
 // The manager's view of a member's trades (latest 20, removed ones left out) with 거래가 and backing
 // (backing_offer: it came from an accepted 제시; brokered: 운영진 중개, WP65),
 // for the member panel; an expired pending request is left out too.
@@ -286,10 +312,11 @@ export async function deleteTrade(id: string) {
     return json({ ok: true });
 }
 
-// posts/:id/partners, posts/:id/trade, trades/:id/answer, trades/:id/review and users/:id/reviews.
+// posts/:id/partners, posts/:id/trade, trades/:id/answer, trades/:id/review, users/:id/reviews and users/:id/trades.
 export async function reviewsHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
     const method = req.method;
     if (p[0] === 'users' && p[1] && p[2] === 'reviews' && !p[3] && method === 'GET') return listReviews(p[1], url);
+    if (p[0] === 'users' && p[1] && p[2] === 'trades' && !p[3] && method === 'GET') return listTrades(p[1], url);
     if (p[0] === 'posts' && p[1] && p[2] === 'partners' && !p[3] && method === 'GET') {
         const u = await requireUser(req), post = await authorPost(p[1], u);
         const [partners, trade, asks] = await Promise.all([partnersOf(post), tradeOf(post.id), askCount(post.id)]);

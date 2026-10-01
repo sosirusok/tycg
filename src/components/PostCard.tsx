@@ -53,13 +53,22 @@ export function tradeLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
 // Sale price with earlier 즉거가 struck through, oldest first: cards show the last two, the
 // detail page (large) shows all of them. The server sends only prices above the current one.
 // Exchange posts have no price, so the slot shows what the author wants in return.
+// A completed post with a confirmed trade shows '거래가 25만원' instead of the listed price (WP51); the
+// author, the two members of the trade and the manager also see '확인 대기' or '확인 완료'.
 export function PriceLine({ post, large = false }: { post: Post; large?: boolean }) {
+    const dealState = post.deal_state && <span className={'tag deal-state' + (post.deal_state === 'confirmed' ? ' tag-line' : '')}>{post.deal_state === 'confirmed' ? '확인 완료' : '확인 대기'}</span>;
+    if (post.status === 'closed' && post.deal_price !== undefined && post.kind !== 'exchange') return <div className={'price price-deal' + (large ? ' price-lg' : '')}>
+        <span className="price-label">거래가</span>
+        <span className="price-values"><strong>{priceText(post.deal_price)}</strong></span>
+        {dealState}
+    </div>;
     if (post.kind === 'exchange') {
         const [ladder, conditions] = wantedSummary(post);
         const lines = large ? [ladder, conditions].filter(l => l.length) : [[...ladder, ...conditions].slice(0, CARD_ITEMS)].filter(l => l.length);
         return <div className={'price price-exchange' + (large ? ' price-lg' : '')}>
             <span className="price-label">원하는 {categoryName(post.details.wantedCategory || 'account')}</span>
             {lines.length ? lines.map((line, i) => <span key={i} className="price-want"><DataItems items={line} /></span>) : <span className="price-want">내용 참고</span>}
+            {dealState}
         </div>;
     }
     const all = post.kind === 'sell' ? (post.price_history || []).filter(h => h.price !== post.price) : [];
@@ -73,6 +82,7 @@ export function PriceLine({ post, large = false }: { post: Post; large?: boolean
             <strong>{listingPrice(post)}</strong>
         </span>
         {offer !== null && <span className="price-offer">현젯 <b>{priceText(offer)}</b></span>}
+        {dealState}
     </div>;
 }
 

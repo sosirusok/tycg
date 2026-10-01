@@ -87,7 +87,7 @@ async function chatListing(conversationId: string, u: User) {
         // the 3 asks a post has), so the room hides the button once it would only fail.
         const canAsk = closedAt !== null && closedAt > Date.now() - 7 * 86400000 && !p.hidden && await askCount(p.id) < ASK_LIMIT;
         return {
-            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: closedAt, author_id: p.author_id, canAsk, hidden: !!p.hidden,
+            id: p.id, title: p.title, kind: p.kind, category: p.category, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: closedAt, author_id: p.author_id, canAsk, hidden: !!p.hidden,
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
             thumb: (parse(p.images, []) as string[])[0] ?? null,
             currentOffer: details.currentOffer ? Number(details.currentOffer) || null : null,

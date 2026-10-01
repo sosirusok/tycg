@@ -288,8 +288,8 @@ async function route(req: Request): Promise<Response> {
         switch (p[0]) {
             case 'auth': return await authHandler(req, p);
             case 'users': {
-                // users/:id/reviews (WP23) is the 후기 tab; users/:id is the profile.
-                if (p[2] === 'reviews') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+                // users/:id/reviews (WP23) is the 후기 tab and users/:id/trades (WP51) the 거래 기록 tab; users/:id is the profile.
+                if (p[2] === 'reviews' || p[2] === 'trades') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
                 if (p[1]) return await usersHandler(req, p);
                 break;
             }

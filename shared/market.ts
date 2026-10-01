@@ -70,6 +70,10 @@ export type Post = {
     view_count?: number;
     // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
     appraised?: { price: number; at: number } | null;
+    // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of
+    // the trade and the manager also get a pending one, with deal_state ('확인 대기' / '확인 완료').
+    deal_price?: number;
+    deal_state?: 'pending' | 'confirmed';
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];

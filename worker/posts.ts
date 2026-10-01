@@ -52,7 +52,9 @@ export async function latestSeason() {
 
 // One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out);
 // GET /posts/:id adds the trade counts (tradeStats).
-const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at FROM posts p `);
+// It also carries the join date and the nickname change (WP51); decorate keeps the earlier nickname
+// only while the change is under 90 days old.
+const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,u.created_at AS author_created_at,u.prev_nickname AS author_prev_nickname,u.nickname_changed_at AS author_nickname_changed_at FROM posts p `);
 async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
@@ -80,17 +82,26 @@ export function shownPriceHistory(history: { price: number; changed_at: number }
     return kept;
 }
 
+const NICKNAME_SHOWN_MS = 90 * 86400000;
+// A pending trade request expires after 7 days (reviews.ts ANSWER_DAYS).
+const DEAL_ANSWER_MS = 7 * 86400000;
+
 // Lists (full false) carry only the 대표 (images[0]) and photo_count (WP46); GET /posts/:id and the
 // price edit that returns the post (full true) carry every photo.
 export async function decorate(rows: any[], viewer?: Viewer, full = false) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
-    const [tags, wantedTags, favs, histories] = await db().batch([
+    // 완료 거래가 (WP51): one read of trades by post_id (unique) for the completed posts on the page only.
+    const closedIds = rows.filter(p => p.status === 'closed').map(p => p.id);
+    const [tags, wantedTags, favs, histories, deals] = await db().batch([
         db().prepare('SELECT post_id,tier,season FROM post_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
         db().prepare('SELECT post_id,tier,season FROM post_wanted_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
         db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(viewer?.id || '', ids),
         db().prepare('SELECT post_id,price,changed_at FROM post_price_history WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id').bind(ids),
+        ...closedIds.length ? [db().prepare('SELECT post_id,price,seller_id,buyer_id,created_at,(confirmed_at IS NOT NULL OR author_id IS NULL) AS confirmed FROM trades WHERE post_id IN (SELECT value FROM json_each(?)) AND removed_at IS NULL')
+            .bind(JSON.stringify(closedIds))] : [],
     ]);
+    const now = Date.now();
     return rows.map(row => {
         const p = withMember(row, 'author_');
         // When a 6-month grade ends is private to the member and the manager.
@@ -113,7 +124,24 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
-        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; }
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; delete p.author_created_at; }
+        // '이전 닉네임: {닉}' (WP51): only while the nickname changed within 90 days, as on the profile.
+        if ('author_nickname_changed_at' in p) {
+            if (authorDeleted || !p.author_prev_nickname || !(p.author_nickname_changed_at > now - NICKNAME_SHOWN_MS)) delete p.author_prev_nickname;
+            delete p.author_nickname_changed_at;
+        }
+        // 완료 거래가 (WP51): everyone sees the 거래가 of a confirmed trade; the author, the two members of the
+        // trade and the manager also see a pending one, with deal_state '확인 대기' or '확인 완료'. A pending
+        // request older than 7 days reads as none (it expired).
+        const deal: any = p.status === 'closed' ? deals?.results.find((t: any) => t.post_id === p.id) : undefined;
+        if (deal && (deal.confirmed || deal.created_at >= now - DEAL_ANSWER_MS)) {
+            const involved = !!viewer && (viewer.id === p.author_id || viewer.id === deal.seller_id || viewer.id === deal.buyer_id || viewer.role === 'manager');
+            if (deal.confirmed && deal.price !== null) p.deal_price = deal.price;
+            if (involved) {
+                if (deal.price !== null) p.deal_price = deal.price;
+                p.deal_state = deal.confirmed ? 'confirmed' : 'pending';
+            }
+        }
         // A legacy 예약중 reads as 진행중 (WP43: two states).
         if (p.status !== 'closed') p.status = 'open';
         // 운영진 가측가 (WP65): shown while the post was not edited after the appraisal (updated_at is the

@@ -138,8 +138,9 @@
 .author-box .name-line .nick { font-size: var(--fs-15); }
 .author-stats { display: block; color: var(--ink-3); font-size: var(--fs-13); margin-top: 4px; }
 .author-box-top { display: none; }
-/* '거래 3회 · 후기 좋아요 2', then '최근 접속' under it. */
+/* '최근 접속', then '거래 3회 · 후기 좋아요 2', the join date and '이전 닉네임' (WP51). */
 .author-stats + .author-stats { margin-top: 2px; }
+.author-stats.author-trust { color: var(--ink-2); }
 /* 완료 sheet (WP43): the post strip, '거래한 회원' radio cards (the last one '사이트 밖 거래 · 기록 없음'),
    '거래가' and the lock line, 16px apart; one primary button in the footer. */
 .complete-sheet { display: grid; gap: 16px; }
@@ -252,6 +253,8 @@
 .ed-section { padding: 32px 0; border-bottom: 1px solid var(--line); }
 .ed-head { margin-bottom: 18px; }
 .ed-head h2 { font-size: var(--fs-18); font-weight: 700; }
+.ed-similar { justify-self: start; width: fit-content; color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.ed-similar:hover { color: var(--ink); }
 .ed-head p { margin-top: 4px; color: var(--ink-3); font-size: var(--fs-14); }
 .ed-sub { font-size: var(--fs-16); font-weight: 700; padding-top: 4px; }
 .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px; align-items: start; }
@@ -393,6 +396,13 @@
 /* '더치트 조회' under a partner's message that holds a phone or account number. */
 .lookup-link { display: block; width: fit-content; margin: -2px 0 8px 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .lookup-link:hover { color: var(--ink); }
+/* 거래 전 확인 (WP51): a static card at the top of a chat about a post; it scrolls with the messages. */
+.pretrade { margin: 0 auto 16px; max-width: 440px; padding: 12px 14px; border-radius: var(--r-12); background: var(--white); border: 1px solid var(--line); }
+.pretrade-title { display: block; color: var(--ink); font-size: var(--fs-13); font-weight: 600; }
+.pretrade ul { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.pretrade li { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--fs-13); }
+.pretrade li svg { flex: none; color: var(--ink-3); }
+.pretrade a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .bubble-photos { display: grid; gap: 4px; width: min(280px, 60vw); }
 .bubble-photos.n2 { grid-template-columns: 1fr 1fr; }
 .bubble-photos.n3 { grid-template-columns: 1fr 1fr 1fr; }
@@ -483,6 +493,10 @@
 .review-date { flex: none; color: var(--ink-3); font-size: var(--fs-13); }
 .review-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .review-line .review-verdict { margin-right: 4px; font-size: var(--fs-14); }
+.trade-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.trade-title-text { min-width: 0; overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.trade-title .tag { flex: none; }
+.trade-price { color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
 .review-text { color: var(--ink-2); font-size: var(--fs-15); overflow-wrap: anywhere; }
 .profile-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .profile-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 32px; }

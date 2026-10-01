@@ -70,6 +70,7 @@
 .price-lg .price-values del { font-size: var(--fs-16); }
 .price-lg .price-values strong { font-size: var(--fs-28); letter-spacing: -0.8px; }
 .price-lg .price-offer { font-size: var(--fs-15); margin-top: 4px; }
+.price .deal-state { justify-self: start; height: 20px; padding: 0 6px; margin-top: 2px; }
 
 /* Home shelves: on desktop a grid of three columns that wraps (a mouse wheel cannot scroll a row
    sideways), so a shelf with one or two posts does not stretch them either. Phones and tablets get

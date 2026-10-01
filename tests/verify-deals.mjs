@@ -393,4 +393,68 @@ const s = await register('s'), b = await register('b');
     equal((await outsider(`posts/${U2}/trade`, 'POST', {})).status, 403, 'a member who never asked about the post cannot ask');
 }
 
+// --- 10. 거래 기록 tab and 완료 거래가 (WP51) ---
+{
+    const st = await register('st'), bt = await register('bt'), third = await register('tt');
+    // A confirmed trade at 250,000: everyone sees 거래가 250000; only the members and the manager see deal_state.
+    const D = await created(st, sale(300000));
+    await asks(bt, st, D);
+    const td = (await complete(st, D, { partnerId: bt.user.id, amount: 250000 })).data.trade;
+    equal((await bt(`trades/${td.id}/answer`, 'POST', { confirm: true })).status, 200, 'bt confirms the 250,000 trade');
+    const seen = async c => { const p = (await c('posts/' + D)).data.post; return [p.deal_price, p.deal_state]; };
+    equal(await seen(guest), [250000, undefined], 'a guest sees deal_price 250000 on the closed post');
+    equal(await seen(third), [250000, undefined], 'a third member sees deal_price without deal_state');
+    equal(await seen(st), [250000, 'confirmed'], 'the author sees 확인 완료');
+    equal(await seen(bt), [250000, 'confirmed'], 'the partner sees 확인 완료');
+    equal(await seen(manager), [250000, 'confirmed'], 'the manager sees 확인 완료');
+    const listed = (await guest(`posts?author=${st.user.id}&status=closed&size=20&page=1`)).data.posts.find(p => p.id === D);
+    equal(listed?.deal_price, 250000, 'the closed list row carries deal_price too');
+    // A pending trade: no deal_price for a third viewer; the members and the manager see it as 확인 대기.
+    const E2 = await created(st, sale(200000));
+    await asks(bt, st, E2);
+    const te = (await complete(st, E2, { partnerId: bt.user.id, amount: 180000 })).data.trade;
+    check(te?.id, 'a pending trade on E2');
+    const pending = async c => { const p = (await c('posts/' + E2)).data.post; return [p.deal_price, p.deal_state]; };
+    equal(await pending(guest), [undefined, undefined], 'a guest sees no deal_price for a pending trade');
+    equal(await pending(third), [undefined, undefined], 'a third member sees no deal_price for a pending trade');
+    equal(await pending(st), [180000, 'pending'], 'the author sees 180000 · 확인 대기');
+    equal(await pending(bt), [180000, 'pending'], 'the partner sees 확인 대기');
+    equal(await pending(manager), [180000, 'pending'], 'the manager sees 확인 대기');
+    const open = await created(st, sale(100000));
+    check(!('deal_price' in (await guest('posts/' + open)).data.post), 'an open post has no deal_price');
+
+    // GET users/:id/trades lists counted trades only.
+    let list = (await guest(`users/${st.user.id}/trades`)).data;
+    equal([list.total, list.trades.map(t => t.id)], [1, [td.id]], 'the 거래 기록 of st holds the confirmed trade only (not the pending one)');
+    const row = list.trades[0];
+    equal([row.post_id, row.price, row.kind, row.sold, row.post_gone, row.partner_id, row.nickname], [D, 250000, 'sell', true, false, bt.user.id, bt.user.nickname], 'the row has the post, 거래가, the side and the partner');
+    check(row.title.includes('[QA] 거래') && Array.isArray(row.badges) && 'grade' in row, 'with the title and the partner name line');
+    equal((await guest(`users/${bt.user.id}/trades`)).data.trades.map(t => [t.id, t.sold, t.partner_id]), [[td.id, false, st.user.id]], 'the partner sees it as 구매 with st');
+    const title = row.title;
+    equal((await st(`posts/${D}`, 'DELETE')).status, 200, 'st deletes the post');
+    list = (await guest(`users/${st.user.id}/trades`)).data;
+    equal(list.trades.map(t => [t.id, t.title, t.post_gone]), [[td.id, title, true]], 'after the delete the trade keeps its title snapshot, marked post_gone');
+    // A removed trade is absent.
+    const F = await created(st, sale(90000)), ct = await register('ct');
+    await asks(ct, st, F);
+    const tf = (await complete(st, F, { partnerId: ct.user.id })).data.trade;
+    equal((await ct(`trades/${tf.id}/answer`, 'POST', { confirm: true })).status, 200, 'ct confirms another trade');
+    equal((await guest(`users/${st.user.id}/trades`)).data.total, 2, 'two trades listed');
+    equal((await manager(`manage/trades/${tf.id}`, 'DELETE')).status, 200, 'the manager removes it');
+    list = (await guest(`users/${st.user.id}/trades`)).data;
+    equal([list.total, list.trades.map(t => t.id)], [1, [td.id]], 'a removed trade is absent from 거래 기록');
+    equal((await guest('posts/' + F)).data.post.deal_price, undefined, 'and its post shows no 거래가');
+    equal((await guest(`users/${st.user.id}/trades?page=2`)).data.trades, [], 'page 2 is empty');
+    // The author box: join date and the earlier nickname within 90 days.
+    const G = await created(bt, sale(50000));
+    const before = (await guest('posts/' + G)).data.post;
+    equal([typeof before.author_created_at, 'author_prev_nickname' in before, 'author_nickname_changed_at' in before], ['number', false, false], 'the detail carries the join date and no earlier nickname yet');
+    const renamed = `새닉${run}`;
+    equal((await bt('users/' + bt.user.id, 'PUT', { nickname: renamed, bio: '' })).status, 200, 'bt changes the nickname');
+    equal((await guest('posts/' + G)).data.post.author_prev_nickname, bt.user.nickname, 'the detail shows 이전 닉네임');
+    sql(`UPDATE users SET nickname_changed_at=${Date.now() - 91 * DAY} WHERE id='${bt.user.id}'`);
+    equal('author_prev_nickname' in (await guest('posts/' + G)).data.post, false, 'not after 90 days');
+    check(!('author_created_at' in ((await guest(`posts?author=${bt.user.id}&size=20&page=1`)).data.posts[0] || {})), 'lists do not carry the join date');
+}
+
 console.log(`verify-deals: ${checks} checks passed`);
