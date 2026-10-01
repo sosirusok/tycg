@@ -6,6 +6,8 @@ export type Usage = Wallet & {
     perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; boardSlots: number | null; homeShelf: boolean | null };
     rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null; freshPerDay?: number | null };
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
+    // The member's photo space in the current store (WP45); limit null for the manager.
+    photos?: { storage: 'r2' | 'kv' | 'd1'; used: number; limit: number | null };
 };
 
 // The wallet now, from the values the server sent: each refill interval that passed since
@@ -20,6 +22,12 @@ export function walletNow(w: Wallet, now: number): { tokens: number; max: number
         next = tokens >= w.bumpMax ? null : next + k * R;
     }
     return { tokens, max: w.bumpMax, nextRefillAt: next };
+}
+
+// '15:40' on the Korean clock, rounded up to the minute like the server's messages.
+export function kstClock(t: number) {
+    const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * 3600000);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
 }
 
 // '1:20' until the next refill (hours:minutes, rounded up to the minute).

@@ -22,7 +22,9 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Optional. Without an R2 bucket, uploaded photos are stored in D1.
+  // Optional. Without an R2 bucket, uploaded photos are stored in KV (binding PHOTOS, namespace
+  // zombiego-market-photos), or in D1 without both. deploy.yml finds or creates the namespace and adds
+  // the kv_namespaces binding to the runner's copy of this file; it is never committed here.
   "r2_buckets": [
     {
       "binding": "BUCKET",

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, KIND_NAMES, STATUS_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, tagName,
+    KIND_ICONS, KIND_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, statusName, tagName,
     type Post, type SeasonTag,
 } from '../../shared/market';
 import { Link, navigate } from '../lib/router';
@@ -74,9 +74,10 @@ function orderedTags(tags: SeasonTag[], highlight: SeasonTag[]) {
     return [...tags].sort((a, b) => Number(hit(b)) - Number(hit(a)) || b.season - a.season);
 }
 
-// Time shown on a row: the last 끌올 when the post was bumped after it was written.
-export function postTime(p: Pick<Post, 'created_at' | 'bumped_at'>) {
-    return (p.bumped_at || 0) - p.created_at > 60000 ? '끌올 ' + relativeTime(p.bumped_at!) : relativeTime(p.created_at);
+// Time shown on a row: the last 끌올 for a bumped post (or a relist at its place), else when it was
+// written. A new post placed ahead of now (새 글 우선) never reads '끌올 방금 전'.
+export function postTime(p: Pick<Post, 'created_at' | 'bumped_at' | 'bump_count'>, now = Date.now()) {
+    return (p.bump_count || 0) > 0 && p.bumped_at && p.bumped_at <= now ? '끌올 ' + relativeTime(p.bumped_at) : relativeTime(p.created_at);
 }
 
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of
@@ -97,7 +98,8 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             onChange?.();
         } catch (e) { toast.error(errorText(e)); }
     }
-    const thumb = post.images[0];
+    // The inline thumbnail the editor made (no image request), else the 대표 photo itself.
+    const thumb = post.images[0], thumbSrc = post.thumb || (thumb ? imageUrl(thumb) : '');
     const fav = me?.id !== post.author_id && <button type="button" className={'post-card-fav' + (post.favorite ? ' on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}>
         <Heart size={thumb ? 18 : 20} fill={post.favorite ? 'currentColor' : 'none'} />
     </button>;
@@ -108,7 +110,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             <div className="post-card-meta">
                 <span className="post-card-kind">{showKind ? `[${KIND_NAMES[post.kind]}] ${subjectLabel(post)}` : subjectLabel(post)}</span>
                 <span className="post-card-time">{postTime(post)}</span>
-                {post.status !== 'open' && <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>}
+                {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {flag}
             </div>
@@ -126,7 +128,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             </div>
         </div>
         {thumb ? <div className="post-card-side">
-            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={imageUrl(thumb)} alt="" loading="lazy" /></Link>
+            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={thumbSrc} alt="" loading="lazy" /></Link>
             {fav}
         </div> : fav}
     </article>;

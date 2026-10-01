@@ -29,11 +29,14 @@ function sql(command) {
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data) => {
-        const response = await fetch(base + '/api/' + path, {
+        const send = () => fetch(base + '/api/' + path, {
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: data === undefined ? undefined : JSON.stringify(data),
         });
+        // The local server closes idle keep-alive connections while the wrangler SQL checks run; a request
+        // that lands on such a closed connection never reached the Worker, so it is sent once more.
+        const response = await send().catch(e => { if (e?.cause?.code === 'UND_ERR_SOCKET') return send(); throw e; });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         const raw = await response.text();
@@ -168,11 +171,17 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal(post.status, 201, 'the member writes a post');
     const offer = await buyer('offers', 'POST', { postId: post.data.id, amount: 250000 });
     equal(offer.status, 201, 'another member offers on it');
-    // The member's own offer on the other member's post is accepted, so that post is 예약중.
+    // The member's own offer on the other member's post is accepted; the post stays open (two states, WP43).
     const theirs = await buyer('posts', 'POST', sale(`[QA] 탈퇴 상대 ${run}`));
     const sent = await w('offers', 'POST', { postId: theirs.data.id, amount: 200000 });
     equal((await buyer('offers/' + sent.data.id, 'PATCH', { action: 'accepted' })).status, 200, 'the other member accepts the member\'s offer');
-    equal((await guest('posts/' + theirs.data.id)).data.post.status, 'reserved', 'that post is 예약중');
+    equal((await guest('posts/' + theirs.data.id)).data.post.status, 'open', 'that post stays open');
+    // A pending trade record the member asked for: it ends with 회원 탈퇴.
+    const traded = await w('posts', 'POST', sale(`[QA] 탈퇴 거래 ${run}`));
+    const tradeChat = (await buyer('chats', 'POST', { userId: w.user.id, postId: traded.data.id })).data.id;
+    equal((await buyer(`chats/${tradeChat}/messages`, 'POST', { body: '구매 원합니다', postId: traded.data.id })).status, 201, 'the other member asks about a third post');
+    const asked = await w(`posts/${traded.data.id}/status`, 'PATCH', { status: 'closed', partnerId: buyer.user.id });
+    check(asked.status === 200 && asked.data.trade?.id, 'the member completes it naming the other member (a pending trade)');
     equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).status, 200, 'the member holds 본인 인증');
     equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the member holds 플러스');
     const wrong = await w('auth/withdraw', 'POST', { password: 'wrong-password' });
@@ -200,10 +209,11 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal([seen.nickname, seen.author_deleted, seen.author_badges, seen.author_grade], ['탈퇴회원', true, [], 'normal'], 'the manager sees the post\'s author as plain 탈퇴회원');
     const late = await manager('offers', 'POST', { postId: post.data.id, amount: 250000 });
     equal([late.status, late.data.error], [409, '탈퇴한 회원의 글입니다.'], 'an offer on a withdrawn member\'s post names the reason');
-    // The chat the two offers share: both end with a line, the 예약중 post is 거래중 again, and nobody can write there.
+    // The chat the two offers share: they end with one line, the other post stays open, and nobody can write there.
     const lines = (await buyer(`chats/${offer.data.chatId}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
-    check(lines.includes('회원 탈퇴로 제시가 마감되었습니다.') && lines.includes('회원 탈퇴로 제시가 마감되었습니다. 글이 거래중으로 바뀌었습니다.'), 'both ended offers leave a line: ' + JSON.stringify(lines));
-    equal([(await guest('posts/' + theirs.data.id)).data.post.status, (await buyer('offers')).data.offers.find(o => o.id === sent.data.id)?.status], ['open', 'cancelled'], 'the 예약중 post is 거래중 again and the accepted offer ended');
+    check(lines.includes('회원 탈퇴로 제시가 마감되었습니다.') && !lines.some(l => l.includes('거래중으로')), 'the ended offers leave the 탈퇴 line: ' + JSON.stringify(lines));
+    equal([(await guest('posts/' + theirs.data.id)).data.post.status, (await buyer('offers')).data.offers.find(o => o.id === sent.data.id)?.status], ['open', 'cancelled'], 'the other post stays open and the accepted offer ended');
+    equal(sql(`SELECT COUNT(*) AS n FROM trades WHERE id='${asked.data.trade.id}'`)[0].n, 0, 'the pending trade record involving the member is deleted');
     const room = (await buyer('chats/' + offer.data.chatId)).data.chat;
     equal([room.partner.nickname, room.partner.deleted], ['탈퇴회원', true], 'the chat shows the partner as 탈퇴회원');
     const reply = await buyer(`chats/${offer.data.chatId}/messages`, 'POST', { body: '네 말씀하세요' });

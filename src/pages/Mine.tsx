@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, STATUS_NAMES, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
+import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
-import { TradeSheet } from '../components/TradeSheet';
+import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 
 const TABS = [
@@ -27,12 +25,15 @@ type Offer = {
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
-type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number };
+// traded: a completed post that holds a trade record. askable: '거래 기록 요청' can still be sent for it
+// (not hidden, no live record, under the post's 3 requests).
+type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean };
 // 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
 const priceDrop = (p: SavedPost) => p.price_drop && <span className="tag tag-drop">가격 내림</span>;
-type ListState = { tab: TabId; items: any[]; total: number; page: number };
+// capped: the count stopped at 301 ('300+'); full: the last page came back full (there may be more).
+type ListState = { tab: TabId; items: any[]; total: number; page: number; capped?: boolean; full?: boolean };
 
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
@@ -44,7 +45,7 @@ const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).valu
 
 // 끌올 in the same states as the detail page: the wallet ('3/4'), or '15:40부터 가능' (the latest of
 // the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
-// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 거래완료 is allowed).
+// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
     if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined };
     const ready = bumpReadyAt(post, usage, now);
@@ -55,38 +56,32 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
     return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined };
 }
 
-// A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and 상태.
-function SellerRow({ post, usage, now, busy, closeOnly, onBump, onStatus }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onStatus: (status: string) => void;
+// A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
+// 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onComplete }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onComplete: () => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
-    // Without 대리 인증 a 대리(진행) post, and under 이용 정지 any post, can only be closed (the server refuses the rest).
-    const statuses = Object.entries(STATUS_NAMES).filter(([k]) => !closeOnly || k === post.status || k === 'closed');
+    const closed = post.status === 'closed';
+    // A post completed as '사이트 밖 거래 · 기록 없음' can still get its record within 7 days (the same sheet).
+    const recordable = closed && post.traded === false && post.askable !== false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
             <Link to={href} className="seller-title">{post.title}</Link>
             <div className="seller-meta">
-                <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>
+                {closed && <span className="status status-closed">{closedLabel(post.kind)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 <b>{price}</b>
             </div>
-            <span className="seller-stats">찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
+            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
         </div>
         <div className="seller-actions">
-            <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>
-            <DropdownMenu.Root modal={false}>
-                <DropdownMenu.Trigger className="btn btn-line btn-sm seller-status" disabled={busy}>상태<ChevronDown size={15} /></DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                    <DropdownMenu.Content className="menu status-menu" align="end" sideOffset={6}>
-                        <DropdownMenu.RadioGroup value={post.status} onValueChange={onStatus}>
-                            {statuses.map(([k, v]) => <DropdownMenu.RadioItem key={k} value={k} className="menu-item">{v}<DropdownMenu.ItemIndicator className="menu-check"><Check size={16} /></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>)}
-                        </DropdownMenu.RadioGroup>
-                    </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            {!closed && <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
+            {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
+            {recordable && <button type="button" className="btn btn-line btn-sm seller-status" onClick={onComplete}>거래 기록 요청</button>}
         </div>
     </li>;
 }
@@ -99,8 +94,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState<number | null>(null), [now, setNow] = useState(Date.now());
     const [clock] = useMinuteClock();
-    // '거래한 회원' after a post is set to 거래완료 here, as on the detail page (WP23).
-    const [tradePost, setTradePost] = useState<number | null>(null);
+    // The 완료 sheet for a row, as on the detail page (WP43).
+    const [tradePost, setTradePost] = useState<SheetPost | null>(null);
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -110,8 +105,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         let alive = true;
         const pages = isPostTab(tab) && loaded.current.tab === tab ? loaded.current.page : 1;
         const load: Promise<Omit<ListState, 'tab'>> = isPostTab(tab)
-            ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number }>(pagePath(tab, i + 1))))
-                .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages }))
+            ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(tab, i + 1))))
+                .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages, capped: !!rs[rs.length - 1].capped, full: rs[rs.length - 1].posts.length === PAGE_SIZE }))
             : api<any>(tab).then(d => ({ items: d.offers || d.applications || d.blocks || [], total: 0, page: 1 }));
         load.then(r => { if (alive) { loaded.current = { tab, page: r.page }; setData({ tab, ...r }); } })
             .catch(e => { if (alive) { toast.error(errorText(e)); loaded.current = { tab, page: 1 }; setData({ tab, items: [], total: 0, page: 1 }); } });
@@ -137,11 +132,11 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         setLoadingMore(true);
         const next = data.page + 1, current = tab;
         try {
-            const d = await api<{ posts: Post[]; total: number }>(pagePath(current, next));
+            const d = await api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(current, next));
             setData(prev => prev && prev.tab === current ? {
                 ...prev, items: uniquePosts([...prev.items, ...d.posts]), page: next,
                 // An empty page means the list shrank meanwhile: stop offering more.
-                total: d.posts.length ? d.total : prev.items.length,
+                total: d.posts.length ? d.total : prev.items.length, capped: !!d.capped && !!d.posts.length, full: d.posts.length === PAGE_SIZE,
             } : prev);
             if (loaded.current.tab === current) loaded.current = { tab: current, page: next };
         } catch (e) { toast.error(errorText(e)); }
@@ -160,18 +155,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
-    async function setStatus(post: OwnPost, status: string) {
-        if (busy !== null || status === post.status) return;
-        setBusy(post.id);
-        try {
-            await api(`posts/${post.id}/status`, 'PATCH', { status });
-            patchPost(post.id, { status });
-            toast(`상태 변경: ${STATUS_NAMES[status]}`);
-            if (status === 'closed' && !suspended) setTradePost(post.id);
-        } catch (e) { toast.error(errorText(e)); }
-        finally { setBusy(null); void loadUsage(); }
-    }
-    const moreButton = data && data.tab === tab && isPostTab(tab) && data.items.length < data.total
+    const moreButton = data && data.tab === tab && isPostTab(tab) && (data.items.length < data.total || (data.capped && data.full))
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
     return <div className="container page">
@@ -182,7 +166,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : tab === 'posts' ? <>
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)}
+                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
@@ -200,6 +185,10 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} trial={b.grade_trial} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
-        <TradeSheet postId={tradePost} onClose={() => setTradePost(null)} />
+        <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={chatId => {
+            if (tradePost?.status === 'closed') { if (chatId) patchPost(tradePost.id, { traded: true }); }
+            else if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now(), traded: !!chatId });
+            void loadUsage();
+        }} />
     </div>;
 }

@@ -99,46 +99,42 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal([tiny.status, tiny.data.error], [400, '현젯은 1,000원 이상입니다.'], 'F24 현젯 below 1,000원 is refused');
 }
 
-// F04 and F09: which offers a status change ends, and the chat lines offers leave.
+// F04 and F09 (two states, WP43): accepting a 제시 leaves the post open, 완료 ends the pending offers
+// (and an accepted one whose sender is not the partner), and the chat lines offers leave.
 {
     const s = members.seller, a = members.buyerA, b = members.buyerB;
     const p1 = await post(s, sale(), 'F04 sell post');
     const offer = await a('offers', 'POST', { postId: p1, amount: 350000 });
     equal(offer.status, 201, 'F04 buyer offers 350000');
     const chat = offer.data.chatId;
-    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'F04 seller sets 예약중');
-    equal((await offerOf(a, offer.data.id)).status, 'pending', 'F04 예약중 keeps the pending offer');
-    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'open' })).status, 200, 'F04 seller sets 거래중');
-    equal((await offerOf(a, offer.data.id)).status, 'pending', 'F04 거래중 keeps the pending offer');
+    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'F04 a legacy 예약중 request is a no-op on an open post');
+    equal([(await read(guest, p1)).status, (await offerOf(a, offer.data.id)).status], ['open', 'pending'], 'F04 the post stays open and keeps the pending offer');
 
     const before = await chatUnread(a, chat);
     equal((await s('offers/' + offer.data.id, 'PATCH', { action: 'accepted' })).status, 200, 'F04 seller accepts');
-    equal((await read(guest, p1)).status, 'reserved', 'F04 accepting sets the post 예약중');
+    equal((await read(guest, p1)).status, 'open', 'F04 accepting leaves the post open');
     check(await chatUnread(a, chat) >= before + 1, 'F09 accepting raises the buyer unread count');
     const accepted = await lastMessage(a, chat);
-    equal([accepted.type, accepted.body, accepted.sender_id], ['system', '제시 수락 · 35만원. 글이 예약중으로 바뀌었습니다.', s.user.id], 'F09 accept line from the seller');
+    equal([accepted.type, accepted.body, accepted.sender_id], ['system', '제시 수락 · 35만원', s.user.id], 'F09 accept line from the seller');
 
-    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'closed' })).status, 200, 'F04 seller sets 거래완료');
-    equal((await offerOf(a, offer.data.id)).status, 'accepted', 'F04 거래완료 keeps the accepted offer');
-    equal((await lastMessage(a, chat)).body, accepted.body, 'F09 거래완료 adds no line for an accepted offer');
-    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'open' })).status, 200, 'F04 back to 거래중');
-    equal((await offerOf(a, offer.data.id)).status, 'cancelled', 'F04 back to 거래중 cancels the accepted offer');
-    const fellThrough = await lastMessage(a, chat);
-    equal([fellThrough.type, fellThrough.body, fellThrough.sender_id], ['system', '글 상태가 바뀌어 제시가 마감되었습니다.', s.user.id], 'F09 the cancelled offer leaves a line from the seller');
+    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'closed', partnerId: a.user.id })).status, 200, 'F04 seller completes with the buyer as the partner');
+    equal((await offerOf(a, offer.data.id)).status, 'accepted', 'F04 완료 keeps the partner\'s accepted offer');
+    equal((await s(`posts/${p1}/status`, 'PATCH', { status: 'open' })).status, 409, 'F04 a completed post cannot be reopened');
+    equal((await offerOf(a, offer.data.id)).status, 'accepted', 'F04 the refused reopen changes nothing');
 
     const p2 = await post(s, sale(), 'F04 second sell post');
     const pending = await b('offers', 'POST', { postId: p2, amount: 300000 });
     equal(pending.status, 201, 'F04 second buyer offers');
-    equal((await s(`posts/${p2}/status`, 'PATCH', { status: 'closed' })).status, 200, 'F04 seller closes with a pending offer');
-    equal((await offerOf(b, pending.data.id)).status, 'cancelled', 'F04 거래완료 cancels the pending offer');
+    equal((await s(`posts/${p2}/status`, 'PATCH', { status: 'closed' })).status, 200, 'F04 seller completes with a pending offer');
+    equal((await offerOf(b, pending.data.id)).status, 'cancelled', 'F04 완료 cancels the pending offer');
     const closed = await lastMessage(b, pending.data.chatId);
-    equal([closed.type, closed.body, closed.sender_id], ['system', '글 상태가 바뀌어 제시가 마감되었습니다.', s.user.id], 'F09 closing leaves the 마감 line from the seller');
+    equal([closed.type, closed.body, closed.sender_id], ['system', '글이 완료되어 제시가 마감되었습니다.', s.user.id], 'F09 completing leaves the 마감 line from the seller');
 
-    // The editor's PUT follows the same rule.
+    // The editor's PUT never changes the status.
     const p3 = await post(s, sale(), 'F04 third sell post');
     const viaPut = await a('offers', 'POST', { postId: p3, amount: 250000 });
-    equal((await s('posts/' + p3, 'PUT', sale({ status: 'closed' }))).status, 200, 'F04 editor saves 거래완료');
-    equal((await offerOf(a, viaPut.data.id)).status, 'cancelled', 'F04 PUT 거래완료 cancels the pending offer');
+    equal((await s('posts/' + p3, 'PUT', sale({ status: 'closed' }))).status, 200, 'F04 editor saves with a stale status');
+    equal([(await read(guest, p3)).status, (await offerOf(a, viaPut.data.id)).status], ['open', 'pending'], 'F04 PUT leaves the post open and the offer pending');
 
     const p4 = await post(s, sale(), 'F09 post for decline and withdraw');
     const declined = await a('offers', 'POST', { postId: p4, amount: 20000 });
@@ -153,14 +149,16 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     const withdrawLine = await lastMessage(s, withdrawn.data.chatId);
     equal([withdrawLine.type, withdrawLine.body, withdrawLine.sender_id], ['system', '제시 취소 · 3만원', a.user.id], 'F09 withdraw line from the buyer');
 
-    // Accepting one offer ends the other pending offers on the post, each with the 마감 line.
+    // Accepting one offer keeps the others pending (WP43); completing with its sender ends them, each with the 마감 line.
     const p5 = await post(s, sale(), 'F09 post with two offers');
     const first = await a('offers', 'POST', { postId: p5, amount: 380000 }), second = await b('offers', 'POST', { postId: p5, amount: 350000 });
     const unreadB = await chatUnread(b, second.data.chatId);
     equal((await s('offers/' + first.data.id, 'PATCH', { action: 'accepted' })).status, 200, 'F09 seller accepts the first offer');
-    equal((await offerOf(b, second.data.id)).status, 'cancelled', 'F09 the other pending offer ends (마감)');
+    equal((await offerOf(b, second.data.id)).status, 'pending', 'F09 the other offer stays pending');
+    equal((await s(`posts/${p5}/status`, 'PATCH', { status: 'closed', partnerId: a.user.id })).status, 200, 'F09 seller completes with the accepted buyer');
+    equal([(await offerOf(b, second.data.id)).status, (await offerOf(a, first.data.id)).status], ['cancelled', 'accepted'], 'F09 the other pending offer ends (마감); the partner\'s stays');
     const endedLine = await lastMessage(b, second.data.chatId);
-    equal([endedLine.type, endedLine.body, endedLine.sender_id], ['system', '글 상태가 바뀌어 제시가 마감되었습니다.', s.user.id], 'F09 the other buyer gets the 마감 line from the seller');
+    equal([endedLine.type, endedLine.body, endedLine.sender_id], ['system', '글이 완료되어 제시가 마감되었습니다.', s.user.id], 'F09 the other buyer gets the 마감 line from the seller');
     check(await chatUnread(b, second.data.chatId) > unreadB, 'F09 the other buyer sees it as unread');
 }
 
@@ -250,7 +248,7 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     check((await notices(au)).some(t => t === `‘[QA] 숨김 ${run}’ 글이 숨김 처리되었습니다. 사유: 도배·중복 글`), 'F10 the author gets the notice with the reason');
     equal((await offerOf(b, offer.data.id)).status, 'cancelled', 'F10 hiding cancels the pending offer');
     const ended = await lastMessage(b, offer.data.chatId);
-    equal([ended.body, ended.sender_id], ['글 상태가 바뀌어 제시가 마감되었습니다.', au.user.id], 'F10 the offer chat gets the 마감 line from the author');
+    equal([ended.body, ended.sender_id], ['글이 숨김 처리되어 제시가 마감되었습니다.', au.user.id], 'F10 the offer chat gets the 마감 line from the author');
 
     equal((await manager('manage/visibility', 'POST', { postId: id, hidden: false })).status, 200, 'F10 manager unhides');
     const shown = await read(au, id);
@@ -316,7 +314,8 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     const young = await account({ phoneChange: '영전', passwordChange: '가능', backupEmail: '없음', integrated: '미통합' }, 1);
     const plain = await account({ phoneChange: '가능', passwordChange: '가능', backupEmail: '있음', integrated: '통합' }, 2);
     const cool = await account({ phoneChange: '쿨타임 남음', passwordChange: '가능' }, 3);
-    const done = await account({ phoneChange: '가능' }, 4, { status: 'closed' });
+    const done = await account({ phoneChange: '가능' }, 4);
+    equal((await s(`posts/${done}/status`, 'PATCH', { status: 'closed' })).status, 200, 'WP14 post 4 is completed');
     const found = async extra => (await guest('posts?' + new URLSearchParams({ kind: 'sell', category: 'account', q: token, ...extra }))).data.posts.map(p => p.id).sort((x, y) => x - y);
     const phone = await found({ phoneChange: '가능' });
     check(phone.includes(young), 'WP14 phoneChange=가능 includes a post whose phoneChange is 영전');

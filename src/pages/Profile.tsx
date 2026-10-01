@@ -17,8 +17,8 @@ import { WalletGauge, useMinuteClock, type Usage } from '../components/Wallet';
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
 // suspended: under 이용 정지 now; suspended_until (until when) reaches only the member and the manager.
-// tradeCount, goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
-type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
+// tradeCount, dealSum (거금), goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
+type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
 type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean };
 type ProfileTab = 'active' | 'closed' | 'reviews';
@@ -29,6 +29,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
     const [tab, setTab] = useState<ProfileTab>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
+    const [capped, setCapped] = useState({ on: false, full: false });
     const [page, setPage] = useState(1), [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
     const [clock] = useMinuteClock();
@@ -44,14 +45,14 @@ export default function ProfilePage({ id }: { id?: string }) {
             .catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     }, [id, me?.grade, me?.badges.length, retry]);
     useEffect(() => { if (user) setPageTitle(user.nickname); }, [user?.nickname]);
-    const postsPage = (n: number) => api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: String(PAGE_SIZE), page: String(n), ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }));
+    const postsPage = (n: number) => api<{ posts: Post[]; total: number; capped?: boolean }>('posts?' + new URLSearchParams({ author: id || '', size: String(PAGE_SIZE), page: String(n), ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }));
     useEffect(() => {
         let alive = true;
         listGen.current++;
         setPosts(null); setPage(1);
         // The 후기 tab loads its own list (ReviewList).
         if (tab === 'reviews') return;
-        postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); } }).catch(() => { if (alive) setPosts([]); });
+        postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); setCapped({ on: !!d.capped, full: d.posts.length === PAGE_SIZE }); } }).catch(() => { if (alive) setPosts([]); });
         return () => { alive = false; };
     }, [id, tab, postsVersion]);
     // The owner's 끌올 gauge: '끌올 3/4 · 1:20 후 충전' (counting down once a minute).
@@ -106,8 +107,10 @@ export default function ProfilePage({ id }: { id?: string }) {
             if (gen !== listGen.current) return;
             const seen = new Set(posts.map(p => p.id));
             setPosts([...posts, ...d.posts.filter(p => !seen.has(p.id))]);
-            // An empty page means the list shrank meanwhile: stop offering more.
+            // An empty page means the list shrank meanwhile: stop offering more. The count stops at 301
+            // ('300+'): past it, a full page means there may be more.
             setTotal(d.posts.length ? d.total : posts.length);
+            setCapped({ on: !!d.capped && !!d.posts.length, full: d.posts.length === PAGE_SIZE });
             setPage(page + 1);
         } catch (e) { if (gen === listGen.current) toast.error(errorText(e)); }
         finally { setLoadingMore(false); }
@@ -128,7 +131,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
                 {/* The one trade count: trades confirmed with another member ('거래 3회 · 후기 좋아요 2'), shown once there is any. */}
-                {(!!user.tradeCount || !!user.goodCount) && <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0)}</p>}
+                {(!!user.tradeCount || !!user.goodCount) && <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0, user.dealSum ?? 0)}</p>}
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount}</p>
                 {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
                 {!mine && user.last_seen_at && <p className="muted small profile-seen">{lastSeenText(user.last_seen_at)}</p>}
@@ -181,8 +184,8 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'reviews', label: '후기' }]} />
             <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} />
-                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
-                {posts.length < total && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
+                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
+                {(posts.length < total || (capped.on && capped.full)) && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 

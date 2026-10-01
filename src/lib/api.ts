@@ -1,5 +1,6 @@
 export class ApiError extends Error {
-    constructor(public status: number, message: string) { super(message); }
+    // data: the whole error body, for refusals that carry more than the message (같은 매물's dup).
+    constructor(public status: number, message: string, public data?: any) { super(message); }
 }
 
 export const UNAUTHORIZED_EVENT = 'zg:unauthorized';
@@ -28,21 +29,27 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
     // Right before the throw, so the caller's own error toast comes first (AppProvider skips a duplicate).
     if (response.status === 401) sessionEnded(path);
     if (!parsed) throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    if (!response.ok) throw new ApiError(response.status, body?.error || '요청을 처리하지 못했습니다.');
+    if (!response.ok) throw new ApiError(response.status, body?.error || '요청을 처리하지 못했습니다.', body);
     return body as T;
 }
 
 export const errorText = (e: unknown) => e instanceof Error ? e.message : '다시 시도해 주세요.';
 
-// Resizes photos in the browser before upload. Most results are 100–400 KB WebP,
-// which fits both R2 and the D1 fallback (1.4 MB per photo).
+// Where the site keeps photos (GET /api/config storage, WP45): R2 takes larger files than KV and D1.
+export type PhotoStorage = 'r2' | 'kv' | 'd1';
+let photoStorage: PhotoStorage = 'r2';
+export function setPhotoStorage(mode: PhotoStorage | undefined) { if (mode === 'r2' || mode === 'kv' || mode === 'd1') photoStorage = mode; }
+
+// Resizes photos in the browser before upload: long side 1600px WebP q0.85 with R2, 1280px q0.8 with KV
+// and D1 (most results are 13-85KB), which fits KV and D1's 1.4 MB per photo.
 async function compress(file: File): Promise<Blob> {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('JPG, PNG, WebP 사진만 올릴 수 있습니다.');
     if (file.size > 20 * 1024 * 1024) throw new Error('20MB 이하의 사진을 선택해 주세요.');
     let bitmap: ImageBitmap;
     try { bitmap = await createImageBitmap(file); }
     catch { throw new Error('사진을 열 수 없습니다. JPG, PNG, WebP 사진인지 확인해 주세요.'); }
-    let edge = 1600, quality = 0.85, blob: Blob | null = null;
+    const r2 = photoStorage === 'r2';
+    let edge = r2 ? 1600 : 1280, quality = r2 ? 0.85 : 0.8, blob: Blob | null = null;
     for (let attempt = 0; attempt < 5; attempt++) {
         const ratio = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
         const canvas = document.createElement('canvas');
@@ -60,18 +67,72 @@ async function compress(file: File): Promise<Blob> {
     return blob;
 }
 
-export async function uploadPhoto(file: File): Promise<string> {
+// The inline list thumbnail (WP45): a 176px square (cover crop) WebP data URI of the 대표 photo, q0.6;
+// over 6,000 characters it tries q0.4, then 144px. Null when the browser cannot make WebP or the photo
+// does not load (the list then shows the photo itself).
+export async function makeThumb(id: string): Promise<string | null> {
+    try {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = imageUrl(id);
+        await img.decode();
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        if (!side) return null;
+        // Busy photos step down further (120px, then 96px) before the list falls back to the full photo.
+        for (const [size, q] of [[176, 0.6], [176, 0.4], [144, 0.4], [120, 0.4], [96, 0.3]] as const) {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = size;
+            canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+            const uri = canvas.toDataURL('image/webp', q);
+            if (!uri.startsWith('data:image/webp;base64,')) return null;
+            if (uri.length <= 6000) return uri;
+        }
+        return null;
+    } catch { return null; }
+}
+
+// The author's open posts a photo is already in (같은 매물, WP44).
+// bumpAt: when that post can be bumped (null: now).
+export type UsedIn = { id: number; title: string; photos: number; bumpAt?: number | null };
+export type Uploaded = { id: string; reused?: boolean; usedIn: UsedIn[] };
+
+// SHA-256 hex of a file, or null where the browser cannot compute it (the hashes are advisory).
+export async function fileHash(file: Blob): Promise<string | null> {
+    try {
+        if (!globalThis.crypto?.subtle) return null;
+        return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('');
+    } catch { return null; }
+}
+
+// The member's own uploads of these originals: {found: {hash: upload id}, usedIn: {upload id: posts}}.
+// A failed lookup finds nothing, and the photos are simply uploaded.
+export async function lookupPhotos(hashes: string[]): Promise<{ found: Record<string, string>; usedIn: Record<string, UsedIn[]> }> {
+    if (!hashes.length) return { found: {}, usedIn: {} };
+    try { return await api('uploads/lookup', 'POST', { hashes: hashes.slice(0, 100) }); }
+    catch { return { found: {}, usedIn: {} }; }
+}
+
+// Compresses and uploads one photo with X-Photo-Hash '<compressed>,<original>'. src: the original's
+// hash when already computed. The server returns the stored photo when the same original was uploaded
+// before (reused) and the author's open posts it is in.
+export async function sendPhoto(file: File, src?: string | null): Promise<Uploaded> {
+    const original = src === undefined ? await fileHash(file) : src;
     const blob = await compress(file);
+    const out = original ? await fileHash(blob) : null;
     let response: Response;
     try {
-        response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type }, body: blob });
+        response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type, ...original && out ? { 'X-Photo-Hash': out + ',' + original } : {} }, body: blob });
     } catch {
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
     const body = await response.json().catch(() => ({}));
     if (response.status === 401) sessionEnded('uploads');
     if (!response.ok) throw new ApiError(response.status, body.error || '사진을 올리지 못했습니다.');
-    return body.id;
+    return { id: body.id, reused: !!body.reused, usedIn: body.usedIn || [] };
+}
+
+export async function uploadPhoto(file: File): Promise<string> {
+    return (await sendPhoto(file)).id;
 }
 
 export const imageUrl = (id: string) => '/api/images/' + id;

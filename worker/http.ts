@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { suspendUntilText, type User } from '../shared/market';
+import { SUSPEND_FOREVER, suspendUntilText, type User } from '../shared/market';
 import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
+import { meteredDb } from './meter';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -9,7 +10,8 @@ export const MANAGER_NICKNAME = '우와오';
 export function db() {
     const d = (env as Partial<Env>).DB;
     if (!d) throw new Error('DB unavailable');
-    return d;
+    // The test meter (READ_BUDGET=on, local only) counts through a wrapper; otherwise the binding itself.
+    return meteredDb(d);
 }
 
 export class ApiError extends Error {
@@ -81,17 +83,35 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
-// A trade counts once the other member confirmed it (their 후기) and while the manager has not
-// removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
+// A trade counts once the other member confirmed it ('확인' or their 후기) and while the manager has
+// not removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
 export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
 // A 후기 shows while neither it nor its trade was removed by the manager.
 export const liveReview = (r: string) => `${r}.removed_at IS NULL AND EXISTS(SELECT 1 FROM trades lt WHERE lt.id=${r}.trade_id AND lt.removed_at IS NULL)`;
 
-// '거래 3회 · 후기 좋아요 2' (WP23): the confirmed trades the member took part in as seller or buyer,
-// and the 좋아요 후기 they received. `alias` is the users table alias in the surrounding query.
-export function tradeColumns(alias: string, prefix = '') {
-    return `(SELECT COUNT(*) FROM trades tr WHERE (tr.seller_id=${alias}.id OR tr.buyer_id=${alias}.id) AND ${countedTrade('tr')}) AS ${prefix}trade_count,`
-        + `(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=${alias}.id AND rv.good=1 AND ${liveReview('rv')}) AS ${prefix}good_count`;
+const TRADE_BUCKET = 30 * 86400000;
+export type TradeStats = { trade_count: number; deal_sum: number; good_count: number };
+// '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43): the member's confirmed, non-removed trades, at most
+// one per counterpart per 30-day bucket (floor(at / 30 days)), leaving out counterparts under 영구 정지.
+// 거금 adds, per bucket, the largest MIN(거래가, backing) (no backing adds 0), and 후기 좋아요 counts the
+// buckets holding a 좋아요 후기 about the member. One read of at most 2000 rows, deduped here.
+export async function tradeStats(userId: string): Promise<TradeStats> {
+    const r = await db().prepare(`SELECT CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END AS other,t.price,t.backing,t.created_at AS at,o.suspended_until,
+            EXISTS(SELECT 1 FROM reviews rv WHERE rv.trade_id=t.id AND rv.target_id=? AND rv.good=1 AND rv.removed_at IS NULL) AS good
+        FROM trades t LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
+        WHERE (t.seller_id=? OR t.buyer_id=?) AND ${countedTrade('t')} ORDER BY t.created_at DESC LIMIT 2000`)
+        .bind(userId, userId, userId, userId, userId).all<{ other: string; price: number | null; backing: number | null; at: number; suspended_until: number | null; good: number }>();
+    const keys = new Map<string, { deal: number; good: boolean }>();
+    for (const t of r.results) {
+        if ((t.suspended_until ?? 0) >= SUSPEND_FOREVER) continue;
+        const key = t.other + ':' + Math.floor(t.at / TRADE_BUCKET), k = keys.get(key) || { deal: 0, good: false };
+        k.deal = Math.max(k.deal, Math.min(t.price ?? 0, t.backing ?? 0));
+        k.good ||= !!t.good;
+        keys.set(key, k);
+    }
+    let deal_sum = 0, good_count = 0;
+    for (const k of keys.values()) { deal_sum += k.deal; if (k.good) good_count++; }
+    return { trade_count: keys.size, deal_sum, good_count };
 }
 
 // The one message for anything aimed at a member who left (chat, grants, temporary password).
@@ -139,10 +159,10 @@ export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
-    const { session_expires_at, last_seen_at, trial_at, ...user } = row;
+    const { session_expires_at, last_seen_at, trial_at, has_blocks, ...user } = row;
     const writes: D1PreparedStatement[] = [];
     if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
     if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
@@ -165,8 +185,16 @@ export async function currentUser(r: Request): Promise<User | null> {
             }
         } catch (e) { console.warn('Trial catch-up failed', e instanceof Error ? e.message : 'unknown'); }
     }
-    return withMember(user) as User;
+    const member = withMember(user) as User;
+    // Whether the member blocked anyone, for the board lists (never sent: not enumerable).
+    Object.defineProperty(member, HAS_BLOCKS, { value: !!has_blocks, enumerable: false });
+    return member;
 }
+
+// Set on the members currentUser returns: false when they blocked nobody, so lists skip the per-post
+// block check. Any other user object (or a missing flag) counts as having blocks.
+const HAS_BLOCKS = Symbol('hasBlocks');
+export const mayHaveBlocks = (u: User) => (u as unknown as Record<symbol, unknown>)[HAS_BLOCKS] !== false;
 
 // 플러스 무료 체험 window (settings 'sys:trial_start' and 'sys:trial_end', written by 0016_plus_trial
 // and the manager's card). A missing value means closed. Cached for 60 s per isolate; the manager's

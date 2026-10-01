@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
-import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, dateText, longDate, reviewName, suspendDaysLabel, suspendUntilText, type Review, type User } from '../../shared/market';
+import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, dateText, priceText, longDate, reviewName, suspendDaysLabel, suspendUntilText, type Review, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
@@ -11,9 +11,10 @@ type Revoke = { name: string; description?: string; task: () => Promise<unknown>
 type Sanction = { id: number; days: number | null; reason: string; created_at: number };
 // A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
 type ReviewRow = Review & { nickname: string };
-// One of the member's trades (WP23); confirmed once the other member left their 후기.
-type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string };
-type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[] };
+// One of the member's trades (WP23, WP43) with 거래가 and backing; confirmed once the other member answered.
+type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number };
+type TradeCounts = { confirmed: number; pending: number; denied: number };
+type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 
@@ -120,11 +121,13 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 {sanctions.slice(0, 5).map(x => <div key={x.id} className="mp-row small"><span className="grow">{x.days === null ? '정지 해제' : `이용 정지 ${suspendDaysLabel(x.days)}`}{x.reason && <span className="muted"> · {x.reason}</span>}</span><span className="muted">{dateText(x.created_at)}</span></div>)}
             </>}
         </div>}
-        {/* A trade counts once the other member confirmed it; the manager removes one that never happened. */}
-        {trades.length > 0 && <div className="mp-block">
+        {/* A trade counts once the other member confirmed it; the manager removes one that never happened.
+            '확인 거래 n · 확인 대기 n · 거래 아님 n' shows alt-account farming at a glance (WP43). */}
+        {(trades.length > 0 || !!data.tradeCounts?.denied) && <div className="mp-block">
             <h4>거래</h4>
+            {data.tradeCounts && <p className="small muted">확인 거래 {data.tradeCounts.confirmed} · 확인 대기 {data.tradeCounts.pending} · 거래 아님 {data.tradeCounts.denied}</p>}
             {trades.map(t => <div key={t.id} className="mp-row mp-review">
-                <span className="grow">{t.title || '삭제된 글'} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
+                <span className="grow">{t.title || '삭제된 글'} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.price !== null ? ` · 거래가 ${priceText(t.price)}` : ''}{` · 기준 ${t.backing !== null ? priceText(t.backing) + (t.backing_offer ? ' (제시)' : '') : '없음'}`}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemovingTrade(t)}>삭제</button>
             </div>)}
         </div>}

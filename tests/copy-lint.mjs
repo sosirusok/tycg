@@ -19,9 +19,9 @@ const BANNED = [
     '→', '—', '인증·등급',
 ];
 
-// Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone, and the
-// anti-flood ceilings no longer name 예약중.
-const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은'];
+// Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone. WP43 retires
+// 예약중 everywhere (two states), with the accept line that named it and the old 마감 line.
+const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은', '예약중', '글 상태가 바뀌어 제시가 마감되었습니다.', '예약 걸어둘게요'];
 // Wallet wording that must stay in the source (copy.md, style guide §6). Each entry is a literal
 // fragment; templated strings are split at their variables.
 const REQUIRED = [
@@ -34,6 +34,10 @@ const REQUIRED = [
     // The 새 글 allowance (decisions item 1b): the 4th new post of the day spends 1 끌올.
     '등록 완료 · 끌올 1개 사용', '끌올이 없어 최근 끌올 글 아래에 등록했습니다.', '개 사용 · ', '이번 글은 끌올 1개', '남은 끌올 없음',
     '개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.',
+    // Two states (WP43): each kind's labels, and 거래중/거래완료 on screens that mix kinds.
+    "'판매중'", "'판매완료'", "'구매중'", "'구매완료'", "'구하는중'", "'구함완료'", "'교환중'", "'교환완료'", "'받는중'", "'마감'", "'거래중'", "'거래완료'",
+    '완료하면 되돌릴 수 없습니다.', '상대가 확인하면 두 회원의 거래 기록에 남습니다.', '사이트 밖 거래 · 기록 없음', '거래 기록 요청은 한 글에 3번까지입니다.',
+    '확인하면 두 회원의 거래 기록에 남습니다. 받을 것을 모두 받은 뒤 확인해 주세요.', '글이 완료되어 제시가 마감되었습니다.', '회원 탈퇴로 제시가 마감되었습니다.',
 ];
 
 async function files(dir, recursive, test) {

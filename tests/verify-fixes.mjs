@@ -122,7 +122,7 @@ const a = await register('fa'), b = await register('fb'), c = await register('fc
     check(await listed(guest), '대리(진행) post is listed');
     equal((await manager(`manage/users/${c.user.id}/badges`, 'POST', { badge: 'proxy', active: false })).status, 200, 'manager removes 대리 인증');
     equal((await c('posts/' + created.data.id, 'PUT', { ...post, title: post.title + ' 수정' })).status, 403, 'editing 대리(진행) needs the badge');
-    equal((await c(`posts/${created.data.id}/status`, 'PATCH', { status: 'reserved' })).status, 403, 'reopening needs the badge');
+    equal((await c(`posts/${created.data.id}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'a legacy 예약중 request on an open post changes nothing (two states)');
     check(!await listed(guest), 'post leaves the 대리(진행) board when the badge is removed');
     check((await c('posts?' + new URLSearchParams({ author: c.user.id }))).data.posts.some(p => p.id === created.data.id), 'the author still sees the post');
     equal((await c(`posts/${created.data.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'closing works without the badge');
@@ -215,7 +215,7 @@ const a = await register('fa'), b = await register('fb'), c = await register('fc
     equal(totals(), { n: 2, b: 2 * png.byteLength }, 'a delete takes it off the totals');
     sql(`UPDATE users SET upload_bytes=${1024 * 1024 * 1024 - 10} WHERE id='${q.user.id}'`);
     const over = await q('uploads', 'POST', undefined, { type: 'image/png', bytes: png });
-    equal([over.status, over.data.error], [409, '사진 용량(1인 1GB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.'], 'R2: an upload over 1GB per member is refused');
+    equal([over.status, over.data.error], [409, '사진 용량(1인 1GB)을 넘었습니다. 안 쓰는 사진은 하루 뒤, 삭제한 글의 사진은 30일 뒤 정리됩니다.'], 'R2: an upload over 1GB per member is refused');
     sql(`UPDATE users SET upload_rows=10000,upload_bytes=0 WHERE id='${q.user.id}'`);
     equal((await q('uploads', 'POST', undefined, { type: 'image/png', bytes: png })).status, 409, 'the row ceiling (10,000) is read from the totals');
     sql(`UPDATE users SET upload_rows=1000000,upload_bytes=${1024 * 1024 * 1024 * 50} WHERE id='manager'`);

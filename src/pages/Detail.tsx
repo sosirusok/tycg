@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } fr
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -12,13 +12,13 @@ import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
-import { TradeSheet } from '../components/TradeSheet';
+import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_good_count?: number };
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -87,13 +87,23 @@ function genericBlocks(post: Post, category: string): ReactNode[] {
     ];
 }
 
-// 거래 상태 as one row of three; a 대리(진행) post whose author lost 대리 인증, or any post of an author
-// under 이용 정지, may only be closed.
-function StatusSeg({ post, name, closeOnly, onChange }: { post: Post; name: string; closeOnly: boolean; onChange: (status: string) => void }) {
-    const options = Object.entries(STATUS_NAMES).filter(([k]) => !closeOnly || k === post.status || k === 'closed');
-    return <div className="seg seg-full" role="radiogroup" aria-label="거래 상태" style={options.length === 3 ? undefined : { gridTemplateColumns: `repeat(${options.length}, 1fr)` }}>
-        {options.map(([k, v]) => <label key={k}><input type="radio" name={name} value={k} checked={post.status === k} onChange={() => onChange(k)} />{v}</label>)}
-    </div>;
+// 완료 as one button with the kind's closed label ('판매완료', '구매완료' …), which opens the 완료 sheet
+// (WP43: two states, 완료 is final). A completed post shows the same label, disabled.
+function StatusSeg({ post, className = '', onComplete }: { post: Post; className?: string; onComplete: () => void }) {
+    const closed = post.status === 'closed';
+    return <button type="button" className={'btn ' + (closed ? 'btn-line' : 'btn-primary') + ' status-btn ' + className} disabled={closed} onClick={onComplete}>{closedLabel(post.kind)}</button>;
+}
+
+// Whether this browser still has to send today's view of a post: localStorage 'v:<id>:<KST date>' is set
+// on the first visit of the KST day. Storage may be unavailable (private mode): then every visit asks
+// and the server's dedupe decides.
+function viewDue(id: string) {
+    const key = `v:${id}:${new Date(Date.now() + 9 * HOUR).toISOString().slice(0, 10)}`;
+    try {
+        if (localStorage.getItem(key)) return false;
+        localStorage.setItem(key, '1');
+    } catch { /* storage unavailable */ }
+    return true;
 }
 
 export function Detail({ id }: { id: string }) {
@@ -102,23 +112,27 @@ export function Detail({ id }: { id: string }) {
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
-    // '거래한 회원' after the author sets 거래완료 (WP23), and later from the owner tools while a 거래완료
-    // post has partners and no trade yet (recordable).
+    // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
+    // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
-    const load = () => api<{ post: DetailPost }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
+    // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
+    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     // Waits for the session check, so a full page load asks for the post once.
     useEffect(() => { if (!ready) return; void load(); }, [id, me?.id, ready]);
     // The author's counters for 끌올 and 게시판 상단 노출.
     useEffect(() => { if (mine) void loadUsage(); else setUsage(null); }, [mine, me?.id]);
-    // Under 이용 정지 the author may only close or delete the post (no 끌올, 상단 노출, 가격 수정, 수정, 거래중/예약중).
+    // Under 이용 정지 the author may only complete or delete the post (no 끌올, 상단 노출, 가격 수정, 수정).
     const suspended = !!me?.suspended_until && me.suspended_until > now;
-    const closedMine = mine && post?.status === 'closed' && !suspended;
+    const closedAt = post?.status === 'closed' ? post.closed_at ?? post.updated_at : null;
+    // Retention (WP45): 90 days after 완료 only the 대표 photo stays.
+    const trimmed = closedAt !== null && closedAt < now - 90 * 24 * HOUR && post?.images.length === 1;
+    const closedMine = mine && closedAt !== null && closedAt > now - 7 * 24 * HOUR && !suspended && !post?.hidden;
     useEffect(() => {
         if (!closedMine) { setRecordable(false); return; }
         let alive = true;
-        api<{ partners: unknown[]; trade: unknown }>(`posts/${id}/partners`).then(d => { if (alive) setRecordable(!d.trade && d.partners.length > 0); }).catch(() => { if (alive) setRecordable(false); });
+        api<{ partners: unknown[]; trade: { expired?: number } | null; canAsk?: boolean }>(`posts/${id}/partners`).then(d => { if (alive) setRecordable(d.canAsk !== false && (!d.trade || !!d.trade.expired) && d.partners.length > 0); }).catch(() => { if (alive) setRecordable(false); });
         return () => { alive = false; };
     }, [closedMine, id, tradeSheet]);
     useEffect(() => { if (post) setPageTitle(post.title); }, [post?.title]);
@@ -128,7 +142,6 @@ export function Detail({ id }: { id: string }) {
         const y = takeScrollRestore();
         if (y !== null) window.scrollTo(0, y);
     }, [!!post]);
-    useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
     // The 끌올 button turns on by itself when it is ready (gap, 새 글 우선 and the next refill).
     const nextBump = post && usage ? bumpReadyAt(post, usage, now) : 0;
     useEffect(() => {
@@ -176,19 +189,6 @@ export function Detail({ id }: { id: string }) {
             try { await api(`posts/${post!.id}/favorite`, 'POST', { active: !post!.favorite }); setPost({ ...post!, favorite: !post!.favorite }); toast(post!.favorite ? '찜 해제' : '찜 완료'); }
             catch (e) { toast.error(errorText(e)); }
         });
-    }
-    // 거래완료 then asks who the trade was with; the status is saved first, so the sheet never holds it up.
-    // A member under 이용 정지 cannot write to other members, so the sheet stays shut for them.
-    async function setStatus(status: string) {
-        if (busy || status === post!.status) return;
-        setBusy(true);
-        try {
-            await api(`posts/${post!.id}/status`, 'PATCH', { status }); toast(`상태 변경: ${STATUS_NAMES[status]}`);
-            if (status === 'closed' && !suspended) setTradeSheet(true);
-            await load(); void loadUsage();
-        }
-        catch (e) { toast.error(errorText(e)); }
-        finally { setBusy(false); }
     }
     async function bumpNow() {
         if (busy || bump.disabled) return;
@@ -251,12 +251,13 @@ export function Detail({ id }: { id: string }) {
                 {/* Phones: the full price line with every struck earlier 즉거가 sits under the title. */}
                 <div className="price-top"><PriceLine post={post} large /></div>
                 <div className="detail-meta">
-                    {post.status !== 'open' && <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>}
+                    {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                     {post.hidden === 1 && <span className="status status-closed">숨김</span>}
-                    <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''}</span>
+                    <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''} · 조회 {(post.view_count || 0).toLocaleString('ko-KR')}</span>
                 </div>
                 {/* On phones the author and their verification checks come right under the title. */}
                 <AuthorBox post={post} own={mine} className="author-box-top" />
+                {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
                 {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
 
                 {info.length > 0 && <section className="detail-section">
@@ -277,11 +278,13 @@ export function Detail({ id }: { id: string }) {
             <aside className="side-card" aria-label="가격과 문의">
                 <PriceLine post={post} large />
                 {mine ? <div className="owner-tools">
-                    <StatusSeg post={post} name="status-side" closeOnly={lostProxy || suspended} onChange={setStatus} />
-                    {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래한 회원</button>}
-                    <div className="owner-bump">{bumpButton('btn-block')}</div>
-                    {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
-                    {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
+                    <StatusSeg post={post} className="btn-block" onComplete={() => setTradeSheet(true)} />
+                    {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>}
+                    {post.status !== 'closed' && <>
+                        <div className="owner-bump">{bumpButton('btn-block')}</div>
+                        {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
+                        {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
+                    </>}
                     <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
@@ -289,8 +292,9 @@ export function Detail({ id }: { id: string }) {
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
-                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing. */}
-                {mine && usage && (slots > 0
+                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing.
+                    A completed post shows it only while still featured, so it can be turned off. */}
+                {mine && usage && (post.status !== 'closed' || (!!post.featured && slots > 0)) && (slots > 0
                     ? <div className="promo-row">
                         <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || suspended || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
                         <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
@@ -303,15 +307,15 @@ export function Detail({ id }: { id: string }) {
         </div>
 
         {mine ? <div className="owner-bar">
-            <StatusSeg post={post} name="status-bar" closeOnly={lostProxy || suspended} onChange={setStatus} />
-            {bumpButton('owner-bar-bump')}
+            {recordable ? <button type="button" className="btn btn-primary status-btn" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>
+                : <StatusSeg post={post} onComplete={() => setTradeSheet(true)} />}
+            {post.status !== 'closed' && bumpButton('owner-bar-bump')}
             <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
-                        {recordable && <DropdownMenu.Item className="menu-item" onSelect={() => setTradeSheet(true)}>거래한 회원</DropdownMenu.Item>}
-                        {post.kind === 'sell' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
-                        <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>
+                        {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
+                        {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -336,7 +340,8 @@ export function Detail({ id }: { id: string }) {
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
-        {mine && <TradeSheet postId={tradeSheet ? post.id : null} onClose={() => setTradeSheet(false)} onDone={() => void load()} />}
+        {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
+            onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
             footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-danger-solid" onClick={remove}>삭제</button></>} />
     </div>;
@@ -348,14 +353,14 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
-    // '거래 3회 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
+    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
     // as on the profile).
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
-            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good)}</span>}
+            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>}
             {seen && <span className="author-stats author-seen">{seen}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;
@@ -375,7 +380,7 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
-    return <Modal open={open} onClose={onClose} title="가격 제시" description="수락되면 글이 예약중으로 바뀝니다."
+    return <Modal open={open} onClose={onClose} title="가격 제시"
         footer={<button className="btn btn-primary btn-lg" disabled={busy || !amount} onClick={send}>제시하기</button>}>
         <div className="form-stack">
             {context && <p className="offer-context">{context}</p>}

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronRight, Search, X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
 import { gradeInfo } from '../../shared/membership';
@@ -9,25 +9,34 @@ import { CIcon } from '../components/ui';
 import { MiniCard } from '../components/PostCard';
 
 
-type Notice = { id: number; title: string; body: string; created_at: number };
+type Notice = { id: number; title: string; created_at: number };
 
-function Shelf({ title, kind, withCategories = false, empty }: { title: string; kind: TradeKind; withCategories?: boolean; empty: string }) {
+type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; featured: Post[]; notices: Notice[] };
+
+// One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
+// the board list for that category.
+function Shelf({ title, kind, withCategories = false, empty, initial, initialCategory }: { title: string; kind: TradeKind; withCategories?: boolean; empty: string; initial: Post[] | null; initialCategory?: string }) {
     const { requireLogin, openApply } = useApp();
-    const [category, setCategory] = useState(withCategories ? categoriesForKind(kind)[0].id : '');
-    const [posts, setPosts] = useState<Post[] | null>(null);
+    const [category, setCategory] = useState(withCategories ? initialCategory || categoriesForKind(kind)[0].id : '');
+    const [picked, setPicked] = useState<{ category: string; posts: Post[] | null } | null>(null);
     useEffect(() => {
+        if (!picked || picked.posts !== null) return;
         let alive = true;
-        setPosts(null);
-        api<{ posts: Post[] }>('posts?' + new URLSearchParams({ kind, active: '1', size: '6', ...(category ? { category } : {}) }))
-            .then(d => { if (alive) setPosts(d.posts); }).catch(() => { if (alive) setPosts([]); });
+        api<{ posts: Post[] }>('posts?' + new URLSearchParams({ kind, active: '1', size: '6', category: picked.category }))
+            .then(d => { if (alive) setPicked({ category: picked.category, posts: d.posts }); }).catch(() => { if (alive) setPicked({ category: picked.category, posts: [] }); });
         return () => { alive = false; };
-    }, [kind, category]);
+    }, [kind, picked]);
+    const pick = (id: string) => {
+        setCategory(id);
+        setPicked(id === (initialCategory || categoriesForKind(kind)[0].id) ? null : { category: id, posts: null });
+    };
+    const posts = picked ? picked.posts : initial;
     return <section className="section">
         <div className="section-head">
             <h2 className="section-title">{title}</h2>
             <Link to={withParams('/trade', { kind, category })} className="more-link">더보기<ChevronRight size={16} /></Link>
         </div>
-        {withCategories && <div className="chip-scroll shelf-chips">{categoriesForKind(kind).map(c => <button key={c.id} type="button" className="chip chip-sm" aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{c.name}</button>)}</div>}
+        {withCategories && <div className="chip-scroll shelf-chips">{categoriesForKind(kind).map(c => <button key={c.id} type="button" className="chip chip-sm" aria-pressed={category === c.id} onClick={() => pick(c.id)}>{c.name}</button>)}</div>}
         {posts === null ? <div className="card-grid">{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 190 }} />)}</div>
             : posts.length ? <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} />)}</div>
             : <div className="shelf-empty"><p>{empty}</p><button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(u => {
@@ -39,13 +48,7 @@ function Shelf({ title, kind, withCategories = false, empty }: { title: string; 
 
 // '추천 매물': posts that 엘리트 members (and the manager) put on the home page, across every board.
 // The row is left out while there are none.
-function FeaturedShelf() {
-    const [posts, setPosts] = useState<Post[]>([]);
-    useEffect(() => {
-        let alive = true;
-        api<{ posts: Post[] }>('posts?featured=home&size=6').then(d => { if (alive) setPosts(d.posts); }).catch(() => {});
-        return () => { alive = false; };
-    }, []);
+function FeaturedShelf({ posts }: { posts: Post[] }) {
     if (!posts.length) return null;
     return <section className="section">
         <div className="section-head"><h2 className="section-title">추천 매물</h2></div>
@@ -73,8 +76,22 @@ function TrialEndBand() {
 export function Home() {
     const { me, ready, config, trial, openAuth } = useApp();
     const [q, setQ] = useState('');
-    const [notices, setNotices] = useState<Notice[]>([]);
-    useEffect(() => { api<{ notices: Notice[] }>('notices').then(d => setNotices(d.notices.slice(0, 4))).catch(() => {}); }, []);
+    // The whole page in one request (GET /api/home), sent at once: the server reads the session from
+    // the cookie, so it already follows the member's blocks. It is sent again only when the member
+    // signs in or out on this page. A failed request shows empty shelves.
+    const [home, setHome] = useState<HomeData | null>(null);
+    const loadedFor = useRef<string | null>(null), requests = useRef(0);
+    const viewer = ready ? me?.id || '' : null;
+    useEffect(() => {
+        if (loadedFor.current !== null && (viewer === null || viewer === loadedFor.current)) return;
+        if (loadedFor.current === 'cookie' && viewer !== null) { loadedFor.current = viewer; return; }
+        loadedFor.current = viewer ?? 'cookie';
+        // Only the latest request may fill the page.
+        const n = ++requests.current;
+        api<HomeData>('home').then(d => { if (n === requests.current) setHome(d); })
+            .catch(() => { if (n === requests.current) setHome({ shelves: { sell: [], buy: [], proxy_offer: [] }, sellCategory: '', featured: [], notices: [] }); });
+    }, [viewer]);
+    const notices = home?.notices || [];
     const search = (e: FormEvent) => { e.preventDefault(); void navigate(withParams('/trade', { q: q.trim() })); };
     // The grade promo is for guests and members below 프리미엄; it waits for the session check so a
     // 프리미엄 member never sees it flash.
@@ -109,10 +126,10 @@ export function Home() {
                 <span className="promo-cta">혜택 보기<ChevronRight size={18} /></span>
             </Link>}
 
-            <FeaturedShelf />
-            <Shelf title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." />
-            <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." />
-            <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." />
+            <FeaturedShelf posts={home?.featured || []} />
+            <Shelf key={'sell' + (home ? 1 : 0)} title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." initial={home?.shelves.sell ?? null} initialCategory={home?.sellCategory} />
+            <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." initial={home?.shelves.buy ?? null} />
+            <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." initial={home?.shelves.proxy_offer ?? null} />
 
             <section className="section">
                 <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">더보기<ChevronRight size={16} /></Link></div>

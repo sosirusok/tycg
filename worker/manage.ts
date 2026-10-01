@@ -1,9 +1,11 @@
 import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import { REPORT_REASONS } from '../shared/market';
-import { decorate, endOffersStatements, parse, postSelect } from './posts';
+import { kstDayStart } from '../shared/membership';
+import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
 import { deleteReview, deleteTrade } from './reviews';
+import { storageMode, counterValue, DB_LIMIT_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, D1_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, R2_WARN_BYTES } from './storage';
 
 // One 신고 row: the reporter's name line, and for a member report the reported member's (탈퇴회원 once
 // they left, with whether they are under 이용 정지 now).
@@ -20,6 +22,27 @@ function reportRow(row: any) {
     return out;
 }
 
+// The photo stores and the database: what each holds, its limit, the day's R2 puts and KV deletes.
+async function storageReport() {
+    const now = Date.now();
+    const r = await db().batch([
+        db().prepare('SELECT storage,bytes,rows FROM upload_totals'),
+        db().prepare("SELECT key,value FROM settings WHERE key IN ('sys:r2_site_bytes','sys:r2_puts','sys:kv_deletes')"),
+        db().prepare('SELECT COUNT(*) AS n FROM kv_trash'),
+    ]);
+    const totals = new Map((r[0].results as { storage: string; bytes: number; rows: number }[]).map(t => [t.storage, t]));
+    const settings = new Map((r[1].results as { key: string; value: string }[]).map(x => [x.key, x.value]));
+    const stop = Number(settings.get('sys:r2_site_bytes'));
+    const bytes = (s: string) => Number(totals.get(s)?.bytes) || 0;
+    return {
+        mode: storageMode(), dbBytes: Number(r[2].meta.size_after) || 0, dbLimit: DB_LIMIT_BYTES, dbPhotoStop: DB_PHOTO_STOP,
+        r2Bytes: bytes('r2'), r2Limit: stop > 0 ? stop : R2_SITE_BYTES, r2Warn: R2_WARN_BYTES, r2UploadsToday: counterValue(settings.get('sys:r2_puts'), now), r2DailyUploads: R2_SITE_DAILY_UPLOADS,
+        // KV holds the keys still waiting in kv_trash too (upload_totals 'kv_trash', 0023).
+        kvBytes: bytes('kv') + bytes('kv_trash'), kvLimit: KV_SITE_BYTES, kvTrash: Number((r[2].results[0] as { n: number }).n) || 0, kvDeletesToday: counterValue(settings.get('sys:kv_deletes'), now),
+        d1PhotoBytes: bytes('d1'), d1SiteBytes: D1_SITE_BYTES,
+    };
+}
+
 // Every /api/manage/* route is manager-only: requireManager (role 'manager') runs before any
 // route below or in manageMembers. There is no moderator role, and a member's grade, including
 // 관리자, grants no access here.
@@ -34,8 +57,12 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
+            // 사용량: posts written yesterday (KST) as a relist of the same listing (같은 매물, WP44), on the
+            // partial index posts_relist_created (0023).
+            db().prepare('SELECT COUNT(*) AS n FROM posts WHERE created_at>=? AND created_at<? AND relist=1').bind(kstDayStart(Date.now()) - 86400000, kstDayStart(Date.now())),
         ]);
-        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n });
+        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n,
+            usage: { relistsYesterday: (r[3].results[0] as any).n } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
     if (p[1] === 'reports' && p[2] && p[3] === 'messages' && !p[4] && method === 'GET') {
@@ -58,7 +85,7 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         const now = Date.now();
         await db().batch([
             db().prepare('UPDATE posts SET hidden=?,hidden_reason=? WHERE id=?').bind(hidden, reason, post.id),
-            ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now) : [],
+            ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now, OFFERS_HIDDEN_TEXT) : [],
         ]);
         // The author hears about it in their chat with the manager. Best-effort: the author may have
         // blocked the manager (ensureChat then throws 403), and a failed notice never undoes the change.
@@ -68,6 +95,16 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             catch (e) { console.warn('Hide notice not sent', e instanceof Error ? e.message : 'unknown'); }
         }
         return json({ ok: true });
+    }
+    // 사용량 (WP45): the database size and the photo stores, for the Manage card.
+    if (p[1] === 'storage' && !p[2] && method === 'GET') return json(await storageReport());
+    // The R2 stop the manager can move (settings 'sys:r2_site_bytes'), in whole GB.
+    if (p[1] === 'storage' && !p[2] && method === 'PUT') {
+        const b = await body(req), gb = Number(b.r2LimitGB);
+        if (!Number.isInteger(gb) || gb < 1 || gb > 1000) fail(400, '사진 저장 한도: 1~1000GB로 입력해 주세요.');
+        await db().prepare("INSERT INTO settings(key,value,updated_at) VALUES('sys:r2_site_bytes',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+            .bind(String(gb * 1024 ** 3), Date.now()).run();
+        return json(await storageReport());
     }
     // A 후기 or a whole trade the manager removes (WP23), from the member panel.
     if (p[1] === 'reviews' && p[2] && !p[3] && method === 'DELETE') return deleteReview(p[2]);

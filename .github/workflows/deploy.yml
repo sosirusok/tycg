@@ -7,7 +7,8 @@ name: Deploy to Cloudflare
 #                                    (sosirusok / 우와오). Used only to create that account; the deploy
 #                                    fails while the account does not exist and this secret is missing.
 #   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
-# Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1).
+# Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
+# USE_KV ("false" keeps photos in D1 while R2 is off).
 # Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
 
 on:
@@ -27,6 +28,7 @@ env:
   D1_NAME: zombiego-market-db
   D1_LOCATION: apac
   R2_BUCKET: zombiego-market-uploads
+  KV_TITLE: zombiego-market-photos
   WRANGLER_SEND_METRICS: "false"
   NO_COLOR: "1"
 
@@ -151,10 +153,67 @@ jobs:
               exit 1
             fi
             if [ "$r2" != "true" ]; then
-              echo "::notice title=R2 미사용::이 계정은 R2에 가입되어 있지 않아(10042) 사진을 D1에 저장하는 방식으로 배포합니다."
+              echo "::notice title=R2 미사용::이 계정은 R2에 가입되어 있지 않아(10042) R2 없이 배포합니다. 사진은 KV(없으면 D1)에 저장합니다."
             fi
           fi
           echo "R2_ENABLED=$r2" >> "$GITHUB_ENV"
+
+      # Photos go to KV while R2 is off (KV Free: 1GB). The namespace is found by its title, or created
+      # once when R2 is off; nothing is ever deleted or replaced. With R2 on, an existing namespace is still
+      # bound so the R2 mover can copy its photos. The listing is retried, and a listing that still fails
+      # stops the deploy: dropping the binding of a namespace in use would make every KV photo disappear.
+      # Only a failed create (no namespace yet, nothing to lose) leaves photos in D1 and goes on.
+      - name: Find or create the KV namespace for photos (optional)
+        env:
+          USE_KV: ${{ vars.USE_KV }}
+        run: |
+          set -uo pipefail
+          kv=""
+          # Only while R2 is off does a missing namespace mean photos in D1.
+          warn() {
+            if [ "$R2_ENABLED" = "true" ]; then echo "$1"
+            else echo "::warning title=KV 미사용::$1 이번 배포는 사진을 D1에 저장합니다."; fi
+          }
+          find_kv() {
+            ./node_modules/.bin/wrangler kv namespace list 2>/dev/null | node -e '
+              let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                const a = s.indexOf("["), b = s.lastIndexOf("]");
+                if (a < 0 || b < a) process.exit(2);
+                const hit = JSON.parse(s.slice(a, b + 1)).find(n => n.title === process.env.KV_TITLE);
+                process.stdout.write(hit ? hit.id : "");
+              });'
+          }
+          if [ "${USE_KV:-}" = "false" ]; then
+            echo "KV disabled by repository variable USE_KV=false"
+            echo "KV_ID=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          listed=""
+          for attempt in 1 2 3; do
+            if kv="$(find_kv)"; then listed=1; break; fi
+            kv=""
+            sleep 5
+          done
+          if [ -z "$listed" ]; then
+            echo "::error::KV 저장소 목록을 확인하지 못했습니다. 토큰에 Workers KV Storage 권한이 있는지 확인하거나, KV를 쓰지 않으려면 저장소 변수 USE_KV를 false로 지정하세요."
+            exit 1
+          fi
+          if [ -z "$kv" ] && [ "$R2_ENABLED" != "true" ]; then
+            echo "Creating KV namespace $KV_TITLE"
+            if ./node_modules/.bin/wrangler kv namespace create "$KV_TITLE" --update-config=false; then
+              for attempt in 1 2 3 4 5; do
+                kv="$(find_kv || true)"
+                [ -n "$kv" ] && break
+                sleep 3
+              done
+            fi
+            [ -n "$kv" ] || warn "KV 저장소 $KV_TITLE 을(를) 만들지 못했습니다."
+          fi
+          if [ -n "$kv" ] && ! [[ "$kv" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "::error::KV 저장소 ID 형식이 올바르지 않습니다($kv). KV를 쓰지 않으려면 저장소 변수 USE_KV를 false로 지정하세요."
+            exit 1
+          fi
+          echo "KV_ID=$kv" >> "$GITHUB_ENV"
 
       - name: Put real ids into wrangler.jsonc (runner copy only, never committed)
         # Must run before `vite build`: @cloudflare/vite-plugin copies bindings into the build output.
@@ -178,10 +237,15 @@ jobs:
             // Otherwise deploy's auto-provisioning tries to create the bucket and fails (10042).
             experimental_patchConfig(file, { r2_buckets: undefined }, false);
           }
+          // KV photos (PHOTOS), when the KV step found or made the namespace.
+          if (/^[0-9a-f]{32}$/.test(process.env.KV_ID || "") && !(rawConfig.kv_namespaces || []).some((k) => k.binding === "PHOTOS")) {
+            experimental_patchConfig(file, { kv_namespaces: [{ binding: "PHOTOS", id: process.env.KV_ID }] }, true);
+          }
           const after = experimental_readRawConfig({ config: file }).rawConfig;
           if (after.d1_databases[idx].database_id !== process.env.D1_ID) throw new Error("database_id injection failed");
           if (process.env.R2_ENABLED !== "true" && after.r2_buckets?.length) throw new Error("r2_buckets removal failed");
-          console.log(`config ready: D1 ${process.env.D1_NAME}, R2 ${process.env.R2_ENABLED === "true" ? "on" : "off (photos in D1)"}`);
+          const kvOn = (after.kv_namespaces || []).some((k) => k.binding === "PHOTOS");
+          console.log(`config ready: D1 ${process.env.D1_NAME}, R2 ${process.env.R2_ENABLED === "true" ? "on" : "off"}, KV ${kvOn ? "on" : "off"}`);
           JS
 
       - run: pnpm typecheck
@@ -293,5 +357,7 @@ jobs:
             echo ""
             echo "- 주소: $WORKERS_URL"
             echo "- 데이터베이스: D1 \`$D1_NAME\`"
-            echo "- 사진 저장: $([ "$R2_ENABLED" = true ] && echo "R2 ($R2_BUCKET)" || echo "D1 (R2 미사용)")"
+            if [ "$R2_ENABLED" = true ]; then echo "- 사진 저장: R2 ($R2_BUCKET)"
+            elif [ -n "${KV_ID:-}" ]; then echo "- 사진 저장: KV (R2 미사용)"
+            else echo "- 사진 저장: D1 (R2 미사용)"; fi
           } >> "$GITHUB_STEP_SUMMARY"

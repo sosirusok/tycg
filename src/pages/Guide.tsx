@@ -14,7 +14,7 @@ const STEPS = [
     ['더치트 조회', '입금 전 더치트(thecheat.co.kr)로 상대 전번·계좌 조회.'],
     ['입금', '입금 후 채팅에 입금자명, 시간 남기기.'],
     ['계정 넘김', '입금 확인 후 계정 전달. 받은 쪽은 바로 비번·전번·보안 메일 변경.'],
-    ['거래완료', '글을 거래완료로 변경.'],
+    ['거래완료', '거래완료 누르고 거래한 회원 선택. 상대가 확인하면 거래 기록에 남음.'],
 ] as const;
 
 // Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
@@ -71,6 +71,11 @@ export default function Guide() {
         <section className="section">
             <h2 className="section-title">거래 순서</h2>
             <ol className="steps">{STEPS.map(([title, text], i) => <li key={title}><span className="step-num">{i + 1}</span><b>{title}</b><p>{text}</p></li>)}</ol>
+            <ul className="grade-notes">
+                <li>완료한 글은 되돌릴 수 없습니다.</li>
+                <li>거래 횟수와 거금은 상대가 확인한 거래만 셉니다. 같은 회원과의 거래는 30일에 1번만 셉니다.</li>
+                <li>거금은 글에 올린 가격·MAX·제시 안에서만 셉니다.</li>
+            </ul>
         </section>
 
         <section className="section">
@@ -96,6 +101,8 @@ export default function Guide() {
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
+                <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
+                <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>

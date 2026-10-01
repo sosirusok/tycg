@@ -1,7 +1,8 @@
 import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
+import { storageMode } from './storage';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
-import { memberTrades, memberTradesStatement } from './reviews';
+import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import {
     GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
@@ -13,7 +14,8 @@ export async function siteConfig() {
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
     // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
     const w = await trialWindow(), open = trialOpen(w);
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null } };
+    // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
+    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode() };
 }
 
 const DAY = 86400000;
@@ -306,18 +308,19 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
-            const [grants, badges, apps, sanctions, trades] = await db().batch([
+            const [grants, badges, apps, sanctions, trades, tradeCounts] = await db().batch([
                 db().prepare('SELECT * FROM user_grades WHERE user_id=? ORDER BY granted_at DESC').bind(p[2]),
                 db().prepare('SELECT * FROM user_badges WHERE user_id=?').bind(p[2]),
                 db().prepare('SELECT * FROM applications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(p[2]),
                 db().prepare('SELECT id,days,reason,created_at FROM sanctions WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 20').bind(p[2]),
                 // The member's trades (WP23), so the manager can remove one that never happened.
                 memberTradesStatement(p[2]),
+                memberTradeCountsStatement(p[2]),
             ]);
             // A suspension that has ended reads as none.
             const user = withMember(target);
             if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
-            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results) });
+            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results), tradeCounts: tradeCounts.results[0] });
         }
         // 이용 정지 {days: 3|7|30|0 (영구) | null (해제), reason}. The manager is never suspended. The member
         // hears about it in their chat with the manager, best-effort: a member who blocked the manager

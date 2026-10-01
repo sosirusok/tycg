@@ -1,6 +1,6 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
-    digest, tokenOf, sessionCookie, memberColumns, tradeColumns, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
+    digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME, trialWindow, trialOpen, grantTrial,
 } from './http';
 import { postsHandler } from './posts';
@@ -10,8 +10,11 @@ import { communityHandler } from './community';
 import { membershipHandler, trialState, trialMeHandler } from './membership';
 import { kstDate, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
+import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
+import { homeHandler } from './home';
+import { meterOn, localRequest, metered, meterHeaders } from './meter';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -61,9 +64,6 @@ async function changePassword(req: Request) {
 // Offers 회원 탈퇴 ends: the member's pending offers and the ones on their posts, plus accepted ones
 // whose post is not 거래완료 yet (a finished deal keeps its accepted offer). Bind the member's id twice.
 const WITHDRAW_ENDS_OFFERS = "(sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?)) AND (status='pending' OR (status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status!='closed')))";
-// An accepted offer the member sent holds another member's post at 예약중; that post goes back to 거래중.
-const WITHDRAW_RESERVED = "sender_id=? AND status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status='reserved')";
-
 // 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id and
 // nickname, removes the password, bio and saved data, hides every post and ends open offers and
 // applications. Grade and badge rows stay as the manager's record of each grant; memberColumns
@@ -82,13 +82,13 @@ async function withdraw(req: Request) {
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
         db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?`).bind(now, u.id),
         ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
-        line('회원 탈퇴로 제시가 마감되었습니다. 글이 거래중으로 바뀌었습니다.', WITHDRAW_RESERVED, [u.id]),
-        line('회원 탈퇴로 제시가 마감되었습니다.', `${WITHDRAW_ENDS_OFFERS} AND NOT (${WITHDRAW_RESERVED})`, [u.id, u.id, u.id]),
+        line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
-        db().prepare(`UPDATE posts SET status='open',updated_at=? WHERE id IN (SELECT post_id FROM offers WHERE ${WITHDRAW_RESERVED})`).bind(now, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
         db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${WITHDRAW_ENDS_OFFERS}`).bind(now, u.id, u.id),
         db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
+        // Trade records still waiting for an answer that involve the member end (WP43).
+        db().prepare('DELETE FROM trades WHERE (seller_id=? OR buyer_id=?) AND confirmed_at IS NULL AND author_id IS NOT NULL AND removed_at IS NULL').bind(u.id, u.id),
     ]);
     return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
 }
@@ -190,15 +190,17 @@ async function usersHandler(req: Request, p: string[]) {
         const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))"
             + ' AND (p.author_id=? OR u.suspended_until IS NULL OR u.suspended_until<=?)';
         const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
-        // '거래 3회 · 후기 좋아요 2' (trade_count, good_count) and how many 후기 the 후기 tab holds.
+        // How many 후기 the 후기 tab holds; the trade counts come from tradeStats.
         const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
-            ${tradeColumns('u')},(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count FROM users u WHERE u.id=?`)
+            (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count FROM users u WHERE u.id=?`)
             .bind(...listedArgs, ...listedArgs, p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
-        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, trade_count, good_count, review_count, ...rest } = row;
+        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, review_count, ...rest } = row;
         // A withdrawn member is only a name: no bio, grade, badges, counts or chat.
-        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, tradeCount: 0, goodCount: 0, reviewCount: 0, last_seen_at: null, deleted: true } });
-        const user: Record<string, unknown> = { ...withMember(rest), tradeCount: trade_count, goodCount: good_count, reviewCount: review_count };
+        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, tradeCount: 0, dealSum: 0, goodCount: 0, reviewCount: 0, last_seen_at: null, deleted: true } });
+        // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43): confirmed trades, deduped per counterpart and 30 days.
+        const stats = await tradeStats(row.id);
+        const user: Record<string, unknown> = { ...withMember(rest), tradeCount: stats.trade_count, dealSum: stats.deal_sum, goodCount: stats.good_count, reviewCount: review_count };
         // The nickname before the latest change stays on the profile for 90 days.
         if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
         // The member sees when their nickname can change again (30 days after the last change).
@@ -265,7 +267,17 @@ async function stats() {
     });
 }
 
+// With the test meter on (READ_BUDGET=on, requests to 127.0.0.1 or localhost only), the response
+// carries X-Rows-Read, X-Rows-Written, X-D1-Calls and X-D1-Statements for the whole request.
 export async function handleApi(req: Request) {
+    allowKvTestFailure(req);
+    if (!meterOn() || !localRequest(req)) return route(req);
+    const { result, meter } = await metered(() => route(req));
+    for (const [k, v] of Object.entries(meterHeaders(meter))) result.headers.set(k, v);
+    return result;
+}
+
+async function route(req: Request): Promise<Response> {
     try {
         const url = new URL(req.url), p = url.pathname.slice(5).split('/').filter(Boolean), method = req.method;
         if (method !== 'GET') csrf(req);
@@ -278,6 +290,8 @@ export async function handleApi(req: Request) {
                 break;
             }
             case 'stats': if (method === 'GET') return await stats(); break;
+            // The whole home page (shelves, 추천 매물, notices) in one request (WP42).
+            case 'home': if (method === 'GET' && !p[1]) return await homeHandler(req, url); break;
             case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first() });
             case 'posts': {
                 // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).

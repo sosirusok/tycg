@@ -3,30 +3,32 @@ import { ArrowLeft, ImagePlus, LoaderCircle, MoreHorizontal, Send, ThumbsDown, T
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
+    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, closedLabel, isTradeKind, statusName, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
     type Post, type Review, type TradeKind, type User,
 } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { useApp } from '../app/state';
+import { useAdaptivePoll, useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
-import { TradeSheet } from '../components/TradeSheet';
+import { CompleteSheet } from '../components/CompleteSheet';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
-type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
+type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // The post the chat is about, pinned under the room header.
-type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
+type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null; canAsk?: boolean; hidden?: boolean };
 type ChatFilter = 'all' | 'applications';
-// A trade between the two members (WP23) with the 후기 each of them left, for the '거래 후기 남기기' card.
-// author_id recorded it; it is confirmed once the other member left their 후기; removed by the manager.
-type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; author_id: string | null; confirmed: number; removed: number; reviews: Review[] };
+// A trade between the two members (WP23, WP43) with the 후기 each of them left, for the '거래 확인 요청' card.
+// author_id asked for it; it is confirmed once the other member answered '확인' (or left their 후기);
+// a pending one expires after 7 days; removed by the manager.
+type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; kind: string | null; price: number | null; author_id: string | null; confirmed: number; removed: number; reviews: Review[] };
+const ANSWER_MS = 7 * 86400000;
 
 const POST_MISMATCH = '게시글 작성자를 확인해 주세요.';
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
@@ -34,17 +36,17 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 // copy-lint-ignore-next-line
 const BUYER_REPLIES = ['아직 판매중인가요?', '쿨거 가능해요', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'];
 // copy-lint-ignore-next-line
-const SELLER_REPLIES = ['네 판매중입니다', '예약 걸어둘게요', '판완됐습니다'];
+const SELLER_REPLIES = ['네 판매중입니다', '판완됐습니다'];
 // Per kind: [the member who writes to the post, the post's author]. A sale is the default.
 const KIND_REPLIES: Partial<Record<TradeKind, [string[], string[]]>> = {
     // copy-lint-ignore-next-line
     buy: [['아직 구하시나요?', '쿨거 가능해요', '이중창 인증 가능해요', '전번·계좌 인증 됩니다'], ['네 아직 구합니다', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?']],
     // copy-lint-ignore-next-line
-    exchange: [['아직 교환하시나요?', '쿨거 가능해요', '이중창 인증 가능할까요?'], ['네 교환 가능합니다', '예약 걸어둘게요', '이중창 인증 가능할까요?']],
+    exchange: [['아직 교환하시나요?', '쿨거 가능해요', '이중창 인증 가능할까요?'], ['네 교환 가능합니다', '이중창 인증 가능할까요?']],
     // copy-lint-ignore-next-line
     proxy_request: [['아직 구하시나요?', '바로 진행 가능해요', '경력 보내드릴게요'], ['네 아직 구합니다', '가격 알려주세요', '경력 있으신가요?']],
     // copy-lint-ignore-next-line
-    proxy_offer: [['지금 진행 가능한가요?', '가격 알려주세요', '경력 있으신가요?'], ['네 진행 가능합니다', '예약 걸어둘게요']],
+    proxy_offer: [['지금 진행 가능한가요?', '가격 알려주세요', '경력 있으신가요?'], ['네 진행 가능합니다', '가격 알려주세요']],
 };
 const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일치', '거래내역 부족'];
 // A phone number (010-1234-5678) or an account-like run of digits in a partner's message gets a
@@ -55,12 +57,12 @@ const hasLookup = (text: string) => [...text.matchAll(LOOKUP)].some(([m]) => m.r
 const PHOTOS_PER_MESSAGE = 6;
 
 function toListing(p: Post): Listing {
-    return { id: p.id, title: p.title, kind: p.kind, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, author_id: p.author_id, currentOffer: p.details.currentOffer ? Number(p.details.currentOffer) || null : null };
+    return { id: p.id, title: p.title, kind: p.kind, price: p.price, price_mode: p.price_mode, status: p.status === 'closed' ? 'closed' : 'open', closed_at: p.closed_at ?? null, thumb: p.images[0] ?? null, author_id: p.author_id, currentOffer: p.details.currentOffer ? Number(p.details.currentOffer) || null : null };
 }
 // The price as the cards show it: 'MAX 30만원' for a buy post, 즉거가 (and 현젯) for a sale.
 function listingLine(l: Listing) {
     const price = listingPrice({ kind: l.kind as Post['kind'], price: l.price, price_mode: l.price_mode });
-    return [price, l.kind === 'sell' && l.currentOffer ? '현젯 ' + priceText(l.currentOffer) : '', STATUS_NAMES[l.status] || ''].filter(Boolean).join(' · ');
+    return [price, l.kind === 'sell' && l.currentOffer ? '현젯 ' + priceText(l.currentOffer) : '', statusName(l.kind, l.status)].filter(Boolean).join(' · ');
 }
 
 // Times are shown in Korean time wherever the browser is.
@@ -73,19 +75,38 @@ export default function Chat({ id }: { id?: string }) {
     // The manager can narrow the list to chats with a waiting application (신청 대기).
     const [filter, setFilter] = useState<ChatFilter>('all');
     const view = me?.role === 'manager' ? filter : 'all';
-    // A failed refresh keeps the list on screen; it never turns into an empty list.
-    const loadChats = useCallback(() => {
-        api<{ chats: ChatItem[] }>('chats' + (view === 'applications' ? '?filter=applications' : '')).then(d => { setChats(d.chats); setListError(null); })
-            .catch(e => setListError(e instanceof ApiError ? e.status : 0));
+    // A failed refresh keeps the list on screen; it never turns into an empty list. After the first
+    // load, the list asks only for the chats updated since its last answer (?since=, a minute of overlap
+    // for clock drift) and merges them in. The manager's 신청 대기 view always reloads whole, since its
+    // rows also leave when an application is handled.
+    const since = useRef<number | null>(null);
+    const loadChats = useCallback((full = false) => {
+        const merge = !full && view === 'all' && since.current !== null;
+        const path = view === 'applications' ? 'chats?filter=applications' : merge ? `chats?since=${since.current}` : 'chats';
+        api<{ chats: ChatItem[]; at?: number }>(path).then(d => {
+            if (view === 'all' && typeof d.at === 'number') since.current = Math.max(0, d.at - 60000);
+            setChats(prev => {
+                if (!merge || !prev) return d.chats;
+                const fresh = new Map(d.chats.map(c => [c.id, c]));
+                return [...d.chats, ...prev.filter(c => !fresh.has(c.id))].sort((a, b) => b.updated_at - a.updated_at).slice(0, 100);
+            });
+            setListError(null);
+        }).catch(e => setListError(e instanceof ApiError ? e.status : 0));
     }, [view]);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
         setChats(null); setListError(null);
-        loadChats();
-        const t = setInterval(() => { if (!document.hidden) loadChats(); }, 20000);
-        return () => clearInterval(t);
+        since.current = null;
+        loadChats(true);
     }, [me?.id, loadChats]);
+    useAdaptivePoll(loadChats, !!me);
+    // The open room marked its messages read: its row shows none at once, then the list catches up.
+    const roomActivity = () => {
+        if (id) setChats(list => list && list.map(c => c.id === id ? { ...c, unread: 0 } : c));
+        loadChats();
+        refreshUnread();
+    };
 
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
 
@@ -101,7 +122,7 @@ export default function Chat({ id }: { id?: string }) {
                     </div>}
                 </div>
                 {listError === 401 ? <EmptyState icon="lock" title="로그인이 필요합니다" action={<button type="button" className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} />
-                    : chats === null && listError !== null ? <EmptyState title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(); }}>다시 시도</button>} />
+                    : chats === null && listError !== null ? <EmptyState title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(true); }}>다시 시도</button>} />
                     : chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
                     : chats.length === 0 ? (view === 'applications' ? <EmptyState title="대기 중인 신청이 없습니다" /> : <EmptyState icon="message" title="채팅 내역이 없습니다" />)
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
@@ -115,7 +136,7 @@ export default function Chat({ id }: { id?: string }) {
                         {c.last_post_thumb && <img className="chat-item-thumb" src={imageUrl(c.last_post_thumb)} alt="" loading="lazy" />}
                     </Link></li>)}</ul>}
             </aside>
-            {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
+            {id ? <Room key={id} id={id} me={me} onActivity={roomActivity} onGrant={() => void refreshMe().catch(() => {})} />
                 : !empty && <section className="chat-room chat-empty"><p className="chat-pick">채팅방을 선택하세요</p></section>}
         </div>
     </div>;
@@ -130,8 +151,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const appStatus = useRef(new Map<string, string>());
     const [partner, setPartner] = useState<Partner | null>(null), [blocked, setBlocked] = useState(false), [error, setError] = useState('');
     const [messages, setMessages] = useState<Message[]>([]), [offers, setOffers] = useState<Offer[]>([]), [apps, setApps] = useState<Application[]>([]), [trades, setTrades] = useState<Trade[]>([]);
-    // '거래한 회원' after 거래완료 from the pinned bar, with this chat's partner preselected (WP23).
-    const [tradePost, setTradePost] = useState<number | null>(null);
+    // The 완료 sheet from the pinned bar, with this chat's partner preselected (WP43).
+    const [tradeSheet, setTradeSheet] = useState(false);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
     const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
     const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false), [reporting, setReporting] = useState(false);
@@ -154,7 +175,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     });
 
     // The pinned bar follows the post: it is read again when a 제시 changes state, when a post card,
-    // 제시 or system line arrives (예약중 after 수락, 마감), and once a minute while the room is open,
+    // 제시 or system line arrives (수락, 완료, 마감), and once a minute while the room is open,
     // so a status set on the post page or by the other member shows up too.
     const offerState = useRef(''), listingAt = useRef(0);
     const refreshListing = useCallback(() => {
@@ -302,7 +323,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         if (!closed) void attach(imageFiles(e.dataTransfer.files));
     }
     async function offerAction(offer: Offer, action: string) {
-        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료' : action === 'declined' ? '거절 완료' : '제시 취소 완료'); await poll(); activity.current(); }
+        try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료' : action === 'declined' ? '거절 완료' : action === 'released' ? '수락 취소 완료' : '제시 취소 완료'); await poll(); activity.current(); }
         catch (err) { toast.error(errorText(err)); }
     }
     async function appAction(app: Application, action: 'approve' | 'reject' | 'cancel', note = '') {
@@ -319,19 +340,20 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         catch (err) { toast.error(errorText(err)); }
         finally { setAppBusy(''); }
     }
-    // 예약중 and 거래완료 from the pinned bar; tapping the active one sets the post back to 거래중.
-    // 거래완료 then opens '거래한 회원' with this chat's partner picked. Under 이용 정지 the post can
-    // only be closed, and the sheet stays shut.
-    const nextStatus = (status: 'reserved' | 'closed') => listing?.status === status ? 'open' : status;
-    async function setListingStatus(status: 'reserved' | 'closed') {
+    // The pinned bar (WP43): the author completes an open post with one button (the 완료 sheet, this
+    // chat's partner preselected); within 7 days of 완료 either member of the chat can ask for the trade
+    // record while the post has none; an accepted 제시 in this chat can be released ('수락 취소').
+    async function askRecord() {
         if (!listing || statusBusy) return;
-        const next = nextStatus(status);
         setStatusBusy(true);
-        try {
-            await api(`posts/${listing.id}/status`, 'PATCH', { status: next }); setListing({ ...listing, status: next }); toast(`상태 변경: ${STATUS_NAMES[next]}`);
-            if (next === 'closed' && !suspended) setTradePost(listing.id);
-            await poll(); activity.current();
-        }
+        try { await api(`posts/${listing.id}/trade`, 'POST', {}); toast('요청 완료'); stick.current = true; await poll(false, true); activity.current(); }
+        catch (err) { toast.error(errorText(err)); }
+        finally { setStatusBusy(false); }
+    }
+    async function release(offer: Offer) {
+        if (statusBusy) return;
+        setStatusBusy(true);
+        try { await api('offers/' + offer.id, 'PATCH', { action: 'released' }); toast('수락 취소 완료'); await poll(); activity.current(); }
         catch (err) { toast.error(errorText(err)); }
         finally { setStatusBusy(false); }
     }
@@ -358,10 +380,23 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const ownListing = !!listing && listing.author_id === me.id;
     // Quick replies: any trade chat before my first text message (never in an application chat or a
     // chat with the manager that is not about a post), hidden as soon as the composer has text.
+    // On a completed post only the author of a sale keeps '판완됐습니다'; the 'still selling' chips go.
     const replySet = listing && isTradeKind(listing.kind) ? KIND_REPLIES[listing.kind] : undefined;
+    const closedListing = listing?.status === 'closed';
+    const replies = closedListing ? (ownListing && !replySet ? SELLER_REPLIES.slice(1) : []) : replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES;
     const quick = loaded && !apps.length && !text && !blocked && !partner?.deleted && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
-        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? (replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES) : [];
+        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? replies : [];
     const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
+    const nowMs = Date.now();
+    const listingOpen = !!listing && listing.status !== 'closed';
+    // The trade record this chat holds for the post, when one is confirmed, removed or still waiting.
+    const liveTrade = !!listing && trades.some(t => t.post_id === listing.id && (!!t.confirmed || !!t.removed || t.created_at > nowMs - ANSWER_MS));
+    // canAsk (from the server): not hidden and under the post's 3 requests, so the button never only fails.
+    const recordable = !!listing && !listingOpen && !liveTrade && !suspended && !blocked && !partner?.deleted && listing.canAsk !== false
+        && (listing.closed_at ?? 0) > nowMs - ANSWER_MS && (ownListing || partner?.id === listing.author_id);
+    // A member who answered '거래 아님' in this chat gets the request as a line button, not the main action.
+    const deniedByMe = messages.some(m => m.sender_id === me.id && m.type === 'system' && m.body === '거래 아님');
+    const acceptedHere = listing && listingOpen ? offers.find(o => o.post_id === listing.id && o.status === 'accepted') : undefined;
 
     return <section className={'chat-room' + (managerView ? ' with-panel' : '')} aria-label="대화">
         <div className="room-main" onDragOver={onDragOver} onDrop={onDrop}>
@@ -392,9 +427,12 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                     <Link to={'/posts/' + listing.id} className="room-listing-title">{listing.title}</Link>
                     <span className="room-listing-meta">{listingLine(listing)}</span>
                 </span>
-                {ownListing ? <span className="room-listing-actions" role="group" aria-label="거래 상태">
-                    {(['reserved', 'closed'] as const).map(st => <button type="button" key={st} className={'btn btn-sm ' + (listing.status === st ? 'btn-primary' : 'btn-line')} aria-pressed={listing.status === st} disabled={statusBusy || (suspended && nextStatus(st) !== 'closed')} onClick={() => void setListingStatus(st)}>{STATUS_NAMES[st]}</button>)}
-                </span> : <Link to={'/posts/' + listing.id} className="btn btn-line btn-sm">글 보기</Link>}
+                <span className="room-listing-actions" role="group" aria-label="거래 상태">
+                    {acceptedHere && <button type="button" className="btn btn-line btn-sm" disabled={statusBusy} onClick={() => void release(acceptedHere)}>수락 취소</button>}
+                    {ownListing && listingOpen ? <button type="button" className="btn btn-primary btn-sm" disabled={statusBusy} onClick={() => setTradeSheet(true)}>{closedLabel(listing.kind)}</button>
+                        : recordable ? <button type="button" className={'btn btn-sm ' + (deniedByMe ? 'btn-line' : 'btn-primary')} disabled={statusBusy} onClick={() => ownListing ? setTradeSheet(true) : void askRecord()}>거래 기록 요청</button>
+                        : !ownListing && !acceptedHere && <Link to={'/posts/' + listing.id} className="btn btn-line btn-sm">글 보기</Link>}
+                </span>
             </div>}
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 <div ref={content}>
@@ -410,7 +448,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                             : m.type === 'listing' ? <ListingCard postId={Number(m.reference_id)} title={m.body} />
                             : m.type === 'application' ? <AppCard app={apps.find(a => a.id === m.reference_id)} fallback={m.body} me={me} partner={partner} mine={mine} at={m.created_at} busy={appBusy === m.reference_id} onAction={appAction} next={decided && decided === m.reference_id ? nextApp : undefined} />
                             : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} onMark={markOffer} />
-                            : m.type === 'review' ? <ReviewCard trade={trades.find(t => t.id === m.reference_id)} me={me} gone={!!partner?.deleted} onSaved={() => { void poll(false, true); }} />
+                            : m.type === 'review' ? <ReviewCard trade={trades.find(t => t.id === m.reference_id)} me={me} gone={!!partner?.deleted} asked={m.sender_id === me.id}
+                                denied={messages.some(x => x.id > m.id && x.type === 'system' && x.body === '거래 아님' && x.sender_id !== m.sender_id)} onReport={() => setReporting(true)} onSaved={() => { void poll(false, true); activity.current(); }} />
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
@@ -440,7 +479,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             </form>
         </div>
         {partner && me.role !== 'manager' && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={partner.id} nickname={partner.nickname} conversationId={id} />}
-        <TradeSheet postId={tradePost} preselect={partner?.id} onClose={() => setTradePost(null)} onDone={() => { stick.current = true; void poll().then(() => activity.current()); }} />
+        <CompleteSheet post={tradeSheet && listing ? { id: listing.id, kind: listing.kind, title: listing.title, price: listing.price, price_mode: listing.price_mode, status: listing.status, thumb: listing.thumb, hidden: listing.hidden } : null} preselect={partner?.id} suspended={suspended}
+            onClose={() => setTradeSheet(false)} onDone={() => { stick.current = true; void refreshListing(); void poll(false, true).then(() => activity.current()); }} />
         {managerView && partner && <>
             <aside className="room-panel"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></aside>
             <Modal open={panel} onClose={() => setPanel(false)} title="회원 관리"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></Modal>
@@ -455,9 +495,10 @@ function ListingCard({ postId, title }: { postId: number; title: string }) {
 function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void; onMark: (o: Offer) => void }) {
     if (!offer) return <div className="sys-msg">가격 제시</div>;
     const received = offer.sender_id !== me.id;
-    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯, unless it already is.
+    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯, unless it already is
+    // or the post is completed (a completed post's price no longer changes).
     // Each poll brings the post's own 현젯 with its 제시, so this holds when the bar shows another post too.
-    const markable = received && offer.post_author_id === me.id && offer.post_kind === 'sell' && offer.post_price !== null && offer.amount < offer.post_price
+    const markable = received && offer.post_author_id === me.id && offer.post_kind === 'sell' && offer.post_status !== 'closed' && offer.post_price !== null && offer.amount < offer.post_price
         && (offer.status === 'pending' || offer.status === 'accepted') && offer.post_current_offer !== offer.amount;
     return <div className="event-card">
         <span className="muted small">{received ? '받은 제시' : '보낸 제시'} · <Link to={'/posts/' + offer.post_id}>{offer.title}</Link></span>
@@ -474,18 +515,37 @@ function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; o
 
 const DAY = 86400000;
 
-// '거래 후기 남기기' (WP23): 좋아요 or 아쉬워요, that side's tags and one line. The member the author named
-// writes first, which confirms the trade; the author's card waits until then. Each member writes one 후기
-// within 30 days; afterwards the card shows what they wrote, or that the manager removed it.
-function ReviewCard({ trade, me, gone, onSaved }: { trade?: Trade; me: User; gone: boolean; onSaved: () => void }) {
+const kstDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
+
+// The '거래 확인 요청' card (WP43, design 'trade confirm card'). While pending, the member who did not ask
+// sees '거래 확인' with the post, the closed label and 거래가, and answers '확인' or '거래 아님'; the
+// requester sees '확인 대기 · 10월 8일까지' or '확인 기간 지남', and after a '거래 아님' a '신고' link.
+// Once confirmed it is the '거래 후기 남기기' card (WP23): 좋아요 or 아쉬워요, that side's tags and one line,
+// one 후기 each within 30 days; afterwards it shows what they wrote, or that the manager removed it.
+function ReviewCard({ trade, me, gone, asked, denied, onReport, onSaved }: { trade?: Trade; me: User; gone: boolean; asked: boolean; denied: boolean; onReport: () => void; onSaved: () => void }) {
     const [good, setGood] = useState<boolean | null>(null), [tags, setTags] = useState<string[]>([]), [text, setText] = useState(''), [busy, setBusy] = useState(false);
-    if (!trade) return <div className="sys-msg">{REVIEW_CARD_TEXT}</div>;
+    // The row is gone: answered '거래 아님', or replaced after it expired.
+    if (!trade) return denied ? <div className="event-card review-card">
+        <strong>거래 확인</strong>
+        <p className="small muted">거래 아님</p>
+        {asked && !gone && <button type="button" className="btn btn-text btn-xs review-report" onClick={onReport}>신고</button>}
+    </div> : <div className="sys-msg">거래 확인 요청</div>;
     const mine = trade.reviews.find(r => r.author_id === me.id);
     const party = trade.seller_id === me.id || trade.buyer_id === me.id;
-    const ended = Date.now() > trade.created_at + REVIEW_DAYS * DAY;
-    const waiting = trade.author_id === me.id && !trade.confirmed;
+    const now = Date.now();
+    const ended = now > trade.created_at + REVIEW_DAYS * DAY;
+    const pending = !trade.confirmed && !trade.removed, expired = pending && now > trade.created_at + ANSWER_MS;
+    const requester = trade.author_id === me.id;
+    const info = `‘${trade.title || '삭제된 글'}’ ${closedLabel(trade.kind || '')}${trade.price !== null ? ` · 거래가 ${priceText(trade.price)}` : ''}`;
     const choose = (value: boolean) => { if (value !== good) { setGood(value); setTags([]); } };
     const toggle = (tag: string) => setTags(list => list.includes(tag) ? list.filter(t => t !== tag) : [...list, tag]);
+    async function answer(confirm: boolean) {
+        if (busy || !trade) return;
+        setBusy(true);
+        try { await api(`trades/${trade.id}/answer`, 'POST', { confirm }); toast(confirm ? '확인 완료' : '응답 완료'); onSaved(); }
+        catch (err) { toast.error(errorText(err)); onSaved(); }
+        finally { setBusy(false); }
+    }
     async function submit(e: FormEvent) {
         e.preventDefault();
         if (busy || good === null || !trade) return;
@@ -495,8 +555,22 @@ function ReviewCard({ trade, me, gone, onSaved }: { trade?: Trade; me: User; gon
         finally { setBusy(false); }
     }
     const note = (line: string) => <p className="small muted">{line}</p>;
+    const titleLine = <span className="muted small">{trade.title ? <Link to={'/posts/' + trade.post_id}>{info}</Link> : info}</span>;
+    if (pending) return <div className="event-card review-card trade-confirm">
+        <strong>거래 확인</strong>
+        {titleLine}
+        {!party ? null : gone ? note('탈퇴한 회원입니다.') : expired ? note('확인 기간 지남')
+            : requester ? note(`확인 대기 · ${kstDay(trade.created_at + ANSWER_MS)}까지`)
+            : <>
+                <p className="small">확인하면 두 회원의 거래 기록에 남습니다. 받을 것을 모두 받은 뒤 확인해 주세요.</p>
+                <div className="trade-confirm-actions">
+                    <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => void answer(false)}>거래 아님</button>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void answer(true)}>확인</button>
+                </div>
+            </>}
+    </div>;
     return <div className="event-card review-card">
-        <span className="muted small">거래완료{trade.title && <> · <Link to={'/posts/' + trade.post_id}>{trade.title}</Link></>}</span>
+        {titleLine}
         <strong>{mine && !trade.removed ? '내 후기' : REVIEW_CARD_TEXT}</strong>
         {trade.removed ? note('삭제된 거래입니다.')
             : mine ? (mine.removed ? note('삭제된 후기입니다.') : <>
@@ -504,7 +578,7 @@ function ReviewCard({ trade, me, gone, onSaved }: { trade?: Trade; me: User; gon
                 {mine.tags.length > 0 && <span className="tags">{mine.tags.map(t => <span key={t} className="tag">{t}</span>)}</span>}
                 {mine.text && <p className="small">{mine.text}</p>}
             </>)
-            : !party ? null : gone ? note('탈퇴한 회원입니다.') : ended ? note('후기 기간이 끝났습니다.') : waiting ? note('상대가 거래를 확인하면 후기를 남길 수 있습니다.')
+            : !party ? null : gone ? note('탈퇴한 회원입니다.') : ended ? note('후기 기간이 끝났습니다.')
             : <form className="review-form" onSubmit={submit}>
                 <div className="review-pick" role="group" aria-label="후기">
                     <button type="button" className="chip" aria-pressed={good === true} onClick={() => choose(true)}><ThumbsUp size={16} />좋아요</button>
