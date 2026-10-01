@@ -335,6 +335,33 @@ function UsageCard({ usage }: { usage?: { relistsYesterday: number } }) {
     </section>;
 }
 
+// 링크 차단 (WP48): hosts whose links refuse a post, comment or chat ('등록할 수 없는 링크가 있습니다.') and
+// render as plain text where they are already stored. One domain per line; subdomains are included.
+function LinkBlockCard() {
+    const { refreshConfig } = useApp();
+    const [text, setText] = useState(''), [max, setMax] = useState(200), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
+    useEffect(() => {
+        api<{ domains: string[]; max: number }>('manage/links').then(d => { setText(d.domains.join('\n')); setMax(d.max); setLoaded(true); }).catch(e => toast.error(errorText(e)));
+    }, []);
+    async function save(e: FormEvent) {
+        e.preventDefault();
+        setBusy(true);
+        try {
+            const d = await api<{ domains: string[] }>('manage/links', 'PUT', { domains: text });
+            setText(d.domains.join('\n'));
+            refreshConfig();
+            toast('저장 완료');
+        } catch (err) { toast.error(errorText(err)); }
+        finally { setBusy(false); }
+    }
+    return <form className="settings-form link-block" onSubmit={save}>
+        <label className="field"><span className="field-label">링크 차단</span>
+            <textarea className="textarea" style={{ minHeight: 110 }} value={text} disabled={!loaded} onChange={e => setText(e.target.value)} placeholder={'예: bad-site.com'} spellCheck={false} />
+            <span className="field-hint">한 줄에 주소 하나, 최대 {max}개. 하위 주소 포함.</span></label>
+        <div><button className="btn btn-line" disabled={busy || !loaded}>저장</button></div>
+    </form>;
+}
+
 function Settings({ usage }: { usage?: { relistsYesterday: number } }) {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
@@ -346,7 +373,7 @@ function Settings({ usage }: { usage?: { relistsYesterday: number } }) {
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
-    return <><UsageCard usage={usage} /><TrialCard /><form className="settings-form" onSubmit={save}>
+    return <><UsageCard usage={usage} /><TrialCard /><LinkBlockCard /><form className="settings-form" onSubmit={save}>
         <label className="field"><span className="field-label">등급 입금 안내</span>
             <textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={notice} onChange={e => setNotice(e.target.value)} placeholder="예: 국민은행 000000-00-000000 (예금주 ○○○)" />
             <span className="field-hint">신청 창 입금 안내에 표시. 비우면 ‘채팅으로 안내’로 표시.</span></label>

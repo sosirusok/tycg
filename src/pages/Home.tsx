@@ -73,6 +73,12 @@ function TrialEndBand() {
     </section>;
 }
 
+// The 등급 안내 띠 can be closed for 30 days (tier table: 보임, 닫기 30일), remembered in this browser only.
+const PROMO_KEY = 'home-promo-closed', PROMO_HIDE_MS = 30 * 86400000;
+function promoClosed() {
+    try { const at = Number(localStorage.getItem(PROMO_KEY)); return at > 0 && Date.now() - at < PROMO_HIDE_MS; } catch { return false; }
+}
+
 export function Home() {
     const { me, ready, config, trial, openAuth } = useApp();
     const [q, setQ] = useState('');
@@ -96,6 +102,11 @@ export function Home() {
     // The grade promo is for guests and members below 프리미엄; it waits for the session check so a
     // 프리미엄 member never sees it flash.
     const promo = ready && me?.role !== 'manager' && gradeInfo(me?.grade).rank < 2;
+    const [promoHidden, setPromoHidden] = useState(promoClosed);
+    const closePromo = () => {
+        setPromoHidden(true);
+        try { localStorage.setItem(PROMO_KEY, String(Date.now())); } catch { /* storage blocked: hidden for this visit */ }
+    };
 
     return <div className="home">
         <section className="container hero">
@@ -118,13 +129,16 @@ export function Home() {
                     </span>
                     <span className="promo-cta">회원가입<ChevronRight size={18} /></span>
                 </button>
-                : promo && <Link to="/guide#grade" className="promo">
-                <span className="promo-text">
-                    <span className="promo-eyebrow">등급 혜택</span>
-                    <strong>프리미엄부터 게시판 상단 노출</strong>
-                </span>
-                <span className="promo-cta">혜택 보기<ChevronRight size={18} /></span>
-            </Link>}
+                : promo && !promoHidden && <div className="promo-wrap">
+                    <Link to="/guide#grade" className="promo">
+                        <span className="promo-text">
+                            <span className="promo-eyebrow">등급 혜택</span>
+                            <strong>프리미엄부터 게시판 상단 노출</strong>
+                        </span>
+                        <span className="promo-cta">혜택 보기<ChevronRight size={18} /></span>
+                    </Link>
+                    <button type="button" className="promo-x" aria-label="닫기" onClick={closePromo}><X size={18} /></button>
+                </div>}
 
             <FeaturedShelf posts={home?.featured || []} />
             <Shelf key={'sell' + (home ? 1 : 0)} title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." initial={home?.shelves.sell ?? null} initialCategory={home?.sellCategory} />

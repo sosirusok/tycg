@@ -16,6 +16,7 @@ import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
 import { servicesHandler } from './services';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
+import { notificationsHandler } from './notifications';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -287,8 +288,8 @@ async function route(req: Request): Promise<Response> {
         switch (p[0]) {
             case 'auth': return await authHandler(req, p);
             case 'users': {
-                // users/:id/reviews (WP23) is the 후기 tab; users/:id is the profile.
-                if (p[2] === 'reviews') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+                // users/:id/reviews (WP23) is the 후기 tab and users/:id/trades (WP51) the 거래 기록 tab; users/:id is the profile.
+                if (p[2] === 'reviews' || p[2] === 'trades') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
                 if (p[1]) return await usersHandler(req, p);
                 break;
             }
@@ -311,6 +312,8 @@ async function route(req: Request): Promise<Response> {
                 if (r) return r;
                 break;
             }
+            // 알림함 (WP50).
+            case 'notifications': { const r = await notificationsHandler(req, p, url); if (r) return r; break; }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
             // 중개·가측 신청 (WP65).
             case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }

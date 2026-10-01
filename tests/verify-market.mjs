@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
 
 // Run against the compiled local Worker after applying local D1 migrations.
 // TEST_BASE_URL defaults to http://127.0.0.1:8790. This suite never targets a live site.
@@ -32,16 +33,16 @@ function equal(actual, expected, name) {
 
 function client() {
     let cookie = '';
-    return async (path, method = 'GET', data) => {
+    return async (path, method = 'GET', data, upload) => {
         const response = await fetch(base + '/api/' + path, {
             method,
             redirect: 'error',
             signal: AbortSignal.timeout(15000),
             headers: {
                 ...(cookie ? { Cookie: cookie } : {}),
-                ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+                ...(upload ? { 'Content-Type': upload.type } : data === undefined ? {} : { 'Content-Type': 'application/json' }),
             },
-            body: data === undefined ? undefined : JSON.stringify(data),
+            body: upload ? upload.bytes : data === undefined ? undefined : JSON.stringify(data),
         });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
@@ -164,6 +165,30 @@ try {
         .find(post => post.id === saleId);
     check(Boolean(listedSale), 'public search includes the sale');
     equal(history(listedSale), [600000, 500000], 'list and detail expose the same price history');
+    equal([listedSale.images, listedSale.photo_count], [[], 0], 'a list row without photos has no 대표 and photo_count 0');
+
+    // 대표 이미지 (WP46): list rows carry only images[0] and photo_count; the post itself carries every photo.
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const shots = [];
+    for (let i = 0; i < 3; i++) {
+        const up = await seller('uploads', 'POST', undefined, { type: 'image/png', bytes: Uint8Array.from(Buffer.concat([png, Buffer.from(run + i)])) });
+        equal(up.status, 201, `photo ${i + 1} uploads`);
+        shots.push(up.data.id);
+    }
+    equal(new Set(shots).size, 3, 'three distinct photos');
+    const photosId = await create(seller, { ...common, category: 'other', tags: [], title: `[로컬 QA] ${run}-photos`, images: shots }, 'post with 3 photos');
+    const photoRow = (await search({ q: run + '-photos' })).find(post => post.id === photosId);
+    check(Boolean(photoRow), 'the photo post is in the list');
+    equal(photoRow.images.length, 1, 'a list row has images.length 1');
+    equal(photoRow.images[0], shots[0], 'the list row carries the 대표 (images[0])');
+    equal(photoRow.photo_count, 3, 'a list row has photo_count 3');
+    const photoDetail = await read(photosId);
+    equal(photoDetail.images, shots, 'the detail has all 3 photos in order');
+    equal(photoDetail.photo_count, 3, 'the detail has photo_count 3');
+    await edit(seller, photosId, { ...common, category: 'other', tags: [], title: `[로컬 QA] ${run}-photos`, images: [shots[2], shots[0], shots[1]] }, '대표로 moves the 3rd photo to the front');
+    const recovered = (await search({ q: run + '-photos' })).find(post => post.id === photosId);
+    equal([recovered.images, recovered.photo_count], [[shots[2]], 3], 'the list follows the new 대표');
+    equal((await read(photosId)).images, [shots[2], shots[0], shots[1]], 'the others keep their order');
 
     equal((await guest('posts/' + saleId, 'PUT', sale)).status, 401, 'anonymous edits are denied');
     equal((await validator('posts/' + saleId, 'PUT', { ...sale, price: 1 })).status, 403,
@@ -220,6 +245,36 @@ try {
     check(!await finds(buyId, { ...buyFilter, recordPreference: '전적 있어도 괜찮음' }),
         'buyer record search respects the selected requirement');
 
+    // 스킨 수 (팬텀 %), WP47: a buyer's least 팬텀 % (phantomMin), shown on cards as '팬텀 300% 이상',
+    // and '내 계정 팬텀 %' (myPhantom) finding buyers whose minimum my account reaches or who set none.
+    const phantomBuy = {
+        ...common, kind: 'buy', title: `[로컬 QA] ${run}-buy 팬텀 300`, price: 500000,
+        details: { maxOwners: '3', phantomMin: '300' },
+    };
+    const phantom300 = await create(seller, phantomBuy, 'purchase with a 스킨 수 minimum');
+    const phantom200 = await create(seller, { ...phantomBuy, title: `[로컬 QA] ${run}-buy 팬텀 200`, details: { maxOwners: '4', phantomMin: '0200' } }, 'purchase with a lower 스킨 수 minimum');
+    const stored300 = await read(phantom300);
+    equal(stored300.details.phantomMin, '300', 'purchase stores the 스킨 수 minimum');
+    equal((await read(phantom200)).details.phantomMin, '200', 'the 스킨 수 minimum is stored as a plain number');
+    const market = await build({ configFile: false, logLevel: 'silent', root: cwd, build: { lib: { entry: 'shared/market.ts', formats: ['es'], fileName: 'market' }, write: false, minify: false } });
+    const M = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(market) ? market[0] : market).output[0].code).toString('base64'));
+    // Cards show the first 4 items (CARD_ITEMS in src/components/PostCard.tsx).
+    const card = M.accountSummary(stored300.details);
+    check(card.slice(0, 4).includes('팬텀 300% 이상'), 'the buy card summary shows 팬텀 300% 이상: ' + card.join(', '));
+    check(M.accountSummary(storedBuy.details).slice(0, 4).every(item => !item.startsWith('팬텀')), 'a buy card without a minimum shows no 팬텀 item');
+    check(M.accountSummary({ phantom: '214' }).includes('팬텀 214%'), 'the sale card summary stays 팬텀 214%');
+    equal(M.BUYER_DETAIL_FIELDS.find(f => f.id === 'phantomMin')?.label, '스킨 수 (팬텀 %)', 'the buyer field is labelled 스킨 수 (팬텀 %)');
+    equal(M.DETAIL_FIELDS.account.find(f => f.id === 'phantom')?.label, '스킨 수 (팬텀 %)', 'the sale field is labelled 스킨 수 (팬텀 %)');
+    const phantomFilter = { kind: 'buy', category: 'account', q: run + '-buy' };
+    const mine250 = (await search({ ...phantomFilter, myPhantom: '250' })).map(post => post.id);
+    check(mine250.includes(phantom200), 'myPhantom=250 lists a buyer wanting 200% or more');
+    check(mine250.includes(buyId), 'myPhantom=250 lists a buyer with no 스킨 수 minimum');
+    check(!mine250.includes(phantom300), 'myPhantom=250 leaves out a buyer wanting 300% or more');
+    check(await finds(phantom300, { ...phantomFilter, myPhantom: '300' }), 'myPhantom includes its boundary');
+    for (const bad of ['-1', '1.5', 'abc', '5001']) {
+        equal((await guest('posts?' + new URLSearchParams({ kind: 'buy', myPhantom: bad }))).status, 400, 'invalid myPhantom rejected: ' + bad);
+    }
+
     check(await finds(saleId, { ...saleFilter, skinTags: JSON.stringify(['아람', '유루미']) }),
         'skin search uses any matching selected skin');
     check(!await finds(saleId, { ...saleFilter, skinTags: JSON.stringify(['아람']) }),
@@ -271,7 +326,7 @@ try {
                     ...(wanted === 'account' ? {
                         wantedMaxOwners: '47', wantedRecordPreference: '무전적',
                         wantedNicknameCharsMin: '3', wantedNicknameCharsMax: '4',
-                        wantedNicknameRanks: JSON.stringify(['S']), wantedSkinTags: JSON.stringify(['아람']),
+                        wantedNicknameRanks: JSON.stringify(['S']), wantedSkinTags: JSON.stringify(['아람']), wantedPhantomMin: '300',
                     } : {}),
                 },
             }, 'exchange ' + offered + ' to ' + wanted);
@@ -283,6 +338,10 @@ try {
                 equal([stored.details.wantedNicknameCharsMin, stored.details.wantedNicknameCharsMax], ['3', '4'],
                     'exchange stores desired nickname range');
                 equal(JSON.parse(stored.details.wantedNicknameRanks), ['S'], 'exchange stores desired nickname ranks');
+                equal(stored.details.wantedPhantomMin, '300', 'exchange stores the wanted 스킨 수 minimum');
+                const filter = { kind: 'exchange', category: offered, wantedCategory: wanted, q: run };
+                check(await finds(id, { ...filter, wantedMyPhantom: '300' }), 'wantedMyPhantom=300 finds an exchange wanting 300% or more');
+                check(!await finds(id, { ...filter, wantedMyPhantom: '250' }), 'wantedMyPhantom=250 leaves out an exchange wanting 300% or more');
                 if (offered === 'account') {
                     equal([stored.details.ownerCount, stored.details.nicknameChars, stored.details.nicknameRank], ['120', '2', 'R'],
                         'offered account facts are independent from wanted account requirements');
@@ -313,6 +372,9 @@ try {
         ['negative current offer rejected', { details: { currentOffer: '-1000' } }],
         ['fractional current offer rejected', { details: { currentOffer: '1.5' } }],
         ['buyer ownership limit validated', { kind: 'buy', details: { maxOwners: '0' } }],
+        ['negative buyer 스킨 수 rejected', { kind: 'buy', details: { phantomMin: '-1' } }],
+        ['buyer 스킨 수 beyond the limit rejected', { kind: 'buy', details: { phantomMin: '5001' } }],
+        ['wanted 스킨 수 validated', { kind: 'exchange', details: { wantedCategory: 'account', wantedPhantomMin: '-1' } }],
         ['buyer record choice validated', { kind: 'buy', details: { recordPreference: '알아서' } }],
         ['reversed buyer nickname range rejected', { kind: 'buy', details: { nicknameCharsMin: '4', nicknameCharsMax: '2' } }],
         ['buyer nickname rank JSON validated', { kind: 'buy', details: { nicknameRanks: 'invalid' } }],
@@ -346,7 +408,7 @@ try {
     }
     if (fixtureUsers.length) {
         // No production/remote option is accepted. Only this run's exact fixture IDs are removed.
-        // Test members have no chat, report, upload, or offer records.
+        // Test members have no chat, report or offer records; their photos go with them (uploads cascade).
         try {
             assert.ok(fixtureUsers.every(user => /^[a-f0-9-]{36}$/.test(user.id)
                 && new RegExp(`^v9_${run}_[0-2]$`).test(user.username)), 'Unexpected fixture identity');

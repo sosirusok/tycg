@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, ImagePlus, LoaderCircle, MoreHorizontal, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
+import { ArrowLeft, Check, ImagePlus, LoaderCircle, MoreHorizontal, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
@@ -17,13 +17,14 @@ import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { ServiceSheet } from '../components/ServiceSheet';
+import { RichBody } from '../components/RichBody';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // The post the chat is about, pinned under the room header.
-type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null; canAsk?: boolean; hidden?: boolean };
+type Listing = { id: number; title: string; kind: string; category?: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null; canAsk?: boolean; hidden?: boolean };
 type ChatFilter = 'all' | 'applications';
 // A trade between the two members (WP23, WP43) with the 후기 each of them left, for the '거래 확인 요청' card.
 // author_id asked for it; it is confirmed once the other member answered '확인' (or left their 후기);
@@ -57,8 +58,25 @@ const LOOKUP = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}|\d{2,6}-\d{2,6}-\d{2,8}|\d{10
 const hasLookup = (text: string) => [...text.matchAll(LOOKUP)].some(([m]) => m.replace(/\D/g, '').length >= 10);
 const PHOTOS_PER_MESSAGE = 6;
 
+// 거래 전 확인 (WP51): the safety steps for the post's kind of trade, shown on the client only (no writes)
+// at the top of a chat about a post. The 더치트 step is in every set.
+const CHEAT_CHECK = '입금 전 더치트로 전번·계좌 조회';
+function pretradeItems(l: Pick<Listing, 'kind' | 'category'>): string[] {
+    if (l.kind === 'proxy_request' || l.kind === 'proxy_offer') return ['선입금·후입금 먼저 합의', '동접 시 중단', CHEAT_CHECK];
+    if (l.category === 'account') return ['이중창 인증', CHEAT_CHECK, '받은 뒤 바로 비번·전번·보멜 변경'];
+    if (l.category === 'goods_coupon') return ['쿠폰 코드는 입금 확인 후 전달', CHEAT_CHECK];
+    return [CHEAT_CHECK];
+}
+function Pretrade({ listing }: { listing: Listing }) {
+    return <aside className="pretrade" aria-label="거래 전 확인">
+        <b className="pretrade-title">거래 전 확인</b>
+        <ul>{pretradeItems(listing).map(item => <li key={item}><Check size={14} aria-hidden="true" />{item === CHEAT_CHECK
+            ? <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">{item}</a> : item}</li>)}</ul>
+    </aside>;
+}
+
 function toListing(p: Post): Listing {
-    return { id: p.id, title: p.title, kind: p.kind, price: p.price, price_mode: p.price_mode, status: p.status === 'closed' ? 'closed' : 'open', closed_at: p.closed_at ?? null, thumb: p.images[0] ?? null, author_id: p.author_id, currentOffer: p.details.currentOffer ? Number(p.details.currentOffer) || null : null };
+    return { id: p.id, title: p.title, kind: p.kind, category: p.category, price: p.price, price_mode: p.price_mode, status: p.status === 'closed' ? 'closed' : 'open', closed_at: p.closed_at ?? null, thumb: p.images[0] ?? null, author_id: p.author_id, currentOffer: p.details.currentOffer ? Number(p.details.currentOffer) || null : null };
 }
 // The price as the cards show it: 'MAX 30만원' for a buy post, 즉거가 (and 현젯) for a sale.
 function listingLine(l: Listing) {
@@ -443,6 +461,9 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             </div>}
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 <div ref={content}>
+                {/* Scrolls with the messages, above the ones loaded. */}
+                {/* Pre-trade advice only while the post is in progress; after 완료 it would be stale. */}
+                {listing && loaded && listing.status !== 'closed' && <Pretrade listing={listing} />}
                 {hasMore && <button type="button" className="btn btn-soft btn-xs older" onClick={loadOlder}>이전 대화 보기</button>}
                 {!loaded ? <div className="room-loading"><LoaderCircle className="spin" /></div> : messages.map(m => {
                     const day = dayLabel(m.created_at), showDay = day !== prevDay; prevDay = day;
@@ -460,7 +481,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
-                                    {m.body && <p className="bubble">{m.body}</p>}
+                                    {m.body && <p className="bubble"><RichBody text={m.body} /></p>}
                                 </div>
                                 <span className="bubble-meta">{mine && m.id === lastMine?.id && readThrough >= m.id && <span className="read">읽음</span>}{timeLabel(m.created_at)}</span>
                             </div>}

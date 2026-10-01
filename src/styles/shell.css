@@ -208,3 +208,29 @@
 .footer-links { align-items: center; flex-wrap: wrap; }
 .footer-links button { font-size: var(--fs-13); color: inherit; }
 .footer-links button:hover { color: var(--ink); }
+
+/* 알림 (WP50): the header bell, with the same count pill as 채팅. */
+.header-alerts { position: relative; justify-content: center; width: 40px; padding: 0; }
+.header-alerts[aria-current='page'] { color: var(--brand); }
+.header-alerts .badge-count { top: 2px; left: 20px; }
+.menu-count { min-width: 20px; height: 20px; margin-left: auto; padding: 0 6px; border-radius: var(--r-pill); background: var(--brand); color: var(--white); font-size: var(--fs-12); font-weight: 700; line-height: 20px; text-align: center; }
+@media (max-width: 640px) {
+  .header-alerts { width: 36px; height: 36px; }
+}
+
+/* 알림함 (/me/alerts): a row per 알림 with its type icon, text, time, the post photo and an unread dot. */
+.alerts-page { max-width: 720px; }
+.alerts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.alert-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.alert-list li { border-bottom: 1px solid var(--line); }
+.alert-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px; text-align: left; }
+@media (hover: hover) { .alert-row:hover { background: var(--fill-2); } }
+.alert-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.alert-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--fill); }
+.alert-body { display: grid; gap: 2px; min-width: 0; }
+.alert-text { color: var(--ink-3); font-size: var(--fs-15); line-height: 1.45; }
+.alert-row.is-unread .alert-text { color: var(--ink); font-weight: 600; }
+.alert-time { color: var(--ink-3); font-size: var(--fs-13); }
+.alert-thumb { width: 48px; height: 48px; border-radius: var(--r-8); object-fit: cover; background: var(--fill); }
+.alert-dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--brand); }
+.alert-row:has(.alert-thumb):has(.alert-dot) { grid-template-columns: 40px minmax(0, 1fr) auto auto; }

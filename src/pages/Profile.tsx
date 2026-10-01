@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
+import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -22,7 +22,11 @@ type Profile = User & { postCount: number; closedCount: number; tradeCount?: num
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
 // brokered: the trade of the 후기 was brokered by the manager (운영진 중개, WP65).
 type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean; brokered?: number };
-type ProfileTab = 'active' | 'closed' | 'reviews';
+// One row of the 거래 기록 tab (WP51): a counted trade with the member's side (sold: seller), the title kept
+// with the trade, 거래가 and the other member's name line.
+type TradeRow = { id: string; post_id: number; created_at: number; price: number | null; kind: string; sold: boolean; title: string; post_gone: boolean; post_hidden: boolean; brokered: boolean;
+    partner_id: string | null; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; partner_deleted?: boolean };
+type ProfileTab = 'active' | 'closed' | 'trades' | 'reviews';
 const PAGE_SIZE = 20;
 
 export default function ProfilePage({ id }: { id?: string }) {
@@ -51,8 +55,8 @@ export default function ProfilePage({ id }: { id?: string }) {
         let alive = true;
         listGen.current++;
         setPosts(null); setPage(1);
-        // The 후기 tab loads its own list (ReviewList).
-        if (tab === 'reviews') return;
+        // The 거래 기록 and 후기 tabs load their own lists (TradeList, ReviewList).
+        if (tab === 'reviews' || tab === 'trades') return;
         postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); setCapped({ on: !!d.capped, full: d.posts.length === PAGE_SIZE }); } }).catch(() => { if (alive) setPosts([]); });
         return () => { alive = false; };
     }, [id, tab, postsVersion]);
@@ -131,8 +135,8 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
-                {/* The one trade count: trades confirmed with another member ('거래 3회 · 후기 좋아요 2'), shown once there is any. */}
-                {(!!user.tradeCount || !!user.goodCount) && <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0, user.dealSum ?? 0)}</p>}
+                {/* The one trade count: trades confirmed with another member ('거래 3회 · 후기 좋아요 2'), also at 0 (WP51). */}
+                <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0, user.dealSum ?? 0)}</p>
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount}</p>
                 {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
                 {!mine && user.last_seen_at && <p className="muted small profile-seen">{lastSeenText(user.last_seen_at)}</p>}
@@ -184,8 +188,8 @@ export default function ProfilePage({ id }: { id?: string }) {
         </nav>}
 
         <section className="section">
-            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'reviews', label: '후기' }]} />
-            <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} />
+            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'trades', label: '거래 기록' }, { id: 'reviews', label: '후기' }]} />
+            <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} /> : tab === 'trades' ? <TradeList userId={user.id} />
                 : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
                 {(posts.length < total || (capped.on && capped.full)) && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
@@ -234,7 +238,8 @@ function ReviewList({ userId }: { userId: string }) {
     if (rows === null) return <SkeletonRows count={2} height={72} />;
     if (!rows.length) return <EmptyState title="받은 후기가 없습니다" />;
     return <>
-        <p className="muted small" style={{ marginBottom: 12 }}>{total}건</p>
+        {/* Every confirmed trade is listed; the trust line's '거래 N회' counts a partner once per 30 days. */}
+        <p className="muted small" style={{ marginBottom: 12 }}>전체 {total}건 · 거래 횟수는 같은 회원 30일 1번</p>
         <ul className="review-list">{rows.map(r => <li key={r.id}>
             <div className="review-head">
                 {r.author_deleted ? <NameLine nickname={r.nickname} compact /> : <Link to={'/profile/' + r.author_id} className="review-who"><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} compact /></Link>}
@@ -246,6 +251,57 @@ function ReviewList({ userId }: { userId: string }) {
                 {!!r.brokered && <span className="tag tag-line">운영진 중개</span>}
             </div>
             {r.text && <p className="review-text">{r.text}</p>}
+        </li>)}</ul>
+        {rows.length < total && <button type="button" className="btn btn-line more-btn" disabled={busy} onClick={() => void more()}>더 보기</button>}
+    </>;
+}
+
+// The member's side of a trade, as the board names it.
+function sideName(t: TradeRow) {
+    if (t.kind === 'exchange') return '교환';
+    if (t.kind === 'proxy_request' || t.kind === 'proxy_offer') return t.sold ? '대리(진행)' : '대리(구함)';
+    return t.sold ? '판매' : '구매';
+}
+
+// 거래 기록 (WP51): the member's confirmed trades, newest first, 20 at a time (GET /users/:id/trades). A deleted
+// post keeps the title the trade saved, marked '삭제된 글'; a hidden one is not linked.
+function TradeList({ userId }: { userId: string }) {
+    const [rows, setRows] = useState<TradeRow[] | null>(null), [total, setTotal] = useState(0), [page, setPage] = useState(1), [busy, setBusy] = useState(false);
+    const load = (n: number) => api<{ trades: TradeRow[]; total: number }>(`users/${userId}/trades?page=${n}`);
+    useEffect(() => {
+        let alive = true;
+        setRows(null); setPage(1);
+        load(1).then(d => { if (alive) { setRows(d.trades); setTotal(d.total); } }).catch(() => { if (alive) setRows([]); });
+        return () => { alive = false; };
+    }, [userId]);
+    async function more() {
+        if (busy || !rows) return;
+        setBusy(true);
+        try {
+            const d = await load(page + 1), seen = new Set(rows.map(r => r.id));
+            setRows([...rows, ...d.trades.filter(r => !seen.has(r.id))]);
+            setTotal(d.trades.length ? d.total : rows.length);
+            setPage(page + 1);
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    if (rows === null) return <SkeletonRows count={2} height={72} />;
+    if (!rows.length) return <EmptyState title="거래 기록이 없습니다" />;
+    return <>
+        {/* Every confirmed trade is listed; the trust line's '거래 N회' counts a partner once per 30 days. */}
+        <p className="muted small" style={{ marginBottom: 12 }}>전체 {total}건 · 거래 횟수는 같은 회원 30일 1번</p>
+        <ul className="review-list trade-list">{rows.map(t => <li key={t.id}>
+            <div className="review-head">
+                <span className="trade-title"><span className="tag">{sideName(t)}</span>
+                    {t.post_gone || t.post_hidden ? <span className="trade-title-text">{t.title || '삭제된 글'}</span> : <Link to={'/posts/' + t.post_id} className="trade-title-text">{t.title}</Link>}
+                    {t.post_gone && t.title && <span className="tag tag-line">삭제된 글</span>}</span>
+                <time className="review-date">{dateText(t.created_at)}</time>
+            </div>
+            <div className="review-line">
+                {t.partner_deleted || !t.partner_id ? <NameLine nickname={t.nickname} compact /> : <Link to={'/profile/' + t.partner_id} className="review-who"><NameLine nickname={t.nickname} grade={t.grade} trial={t.grade_trial} role={t.role} badges={t.badges} compact /></Link>}
+                {t.price !== null && <span className="trade-price">거래가 {priceText(t.price)}</span>}
+                {t.brokered && <span className="tag tag-line">운영진 중개</span>}
+            </div>
         </li>)}</ul>
         {rows.length < total && <button type="button" className="btn btn-line more-btn" disabled={busy} onClick={() => void more()}>더 보기</button>}
     </>;

@@ -23,6 +23,10 @@ interface Env {
     // Test only: 'on' lets local requests send X-Test-Db-Bytes (the database size for the D1 photo
     // guard) and X-Test-Storage (store one upload in KV or D1). Set by scripts/test-local.mjs only.
     TEST_HOOKS?: string;
+    // Test only: the origin of a local fixture server (tests/fixtures/preview-server.mjs) that every
+    // 링크 미리보기 fetch goes to, honoured only for saves served on 127.0.0.1 (worker/unfurl.ts).
+    // Set by scripts/test-local.mjs only; deploys never do.
+    PREVIEW_TEST_ORIGIN?: string;
 }
 
 declare module 'cloudflare:workers' {

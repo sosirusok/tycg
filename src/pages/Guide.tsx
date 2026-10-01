@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, SITE_RULES, gapText, gradePriority, type GradeInfo } from '../../shared/membership';
+import { BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -22,6 +23,7 @@ const STEPS = [
 // A cell may hold two lines (영구 and 6개월 prices), each its own line.
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
+const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
 const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
@@ -30,6 +32,11 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
     ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+    // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
+    ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
+    ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
+    // 글자 꾸미기 (WP49): the tools of each grade, shown on the post detail only.
+    ['글자 꾸미기', g => STYLE_LADDER[styleRank(g.id)]],
     // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
     // 운영진 가측가 on the post for every grade (paid requests too).
     // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
@@ -44,6 +51,7 @@ const FREE_ITEMS = [
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '채팅·제시',
+    '링크 자동 연결',
     '찜',
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     '거래 기록·후기',
@@ -81,6 +89,7 @@ export default function Guide() {
                 <li>완료한 글은 되돌릴 수 없습니다.</li>
                 <li>거래 횟수와 거금은 상대가 확인한 거래만 셉니다. 같은 회원과의 거래는 30일에 1번만 셉니다.</li>
                 <li>거금은 글에 올린 가격·MAX·제시 안에서만 셉니다.</li>
+                <li>확인된 거래는 프로필 거래 기록에 남고, 완료된 글에는 거래가가 표시됩니다.</li>
             </ul>
         </section>
 

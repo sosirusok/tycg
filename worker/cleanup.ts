@@ -5,7 +5,8 @@ import { UNREAD_RECOUNT } from './chat';
 import { postTitleKey } from './posts';
 import { PRINT_DAYS } from './prints';
 import { printFill, type UnfilledPrint } from '../shared/listing';
-import { gradeInfo } from '../shared/membership';
+import { gradeInfo, trialAlertSoon, TRIAL_ALERT_ENDED } from '../shared/membership';
+import { notifyStatement } from './notifications';
 
 const DAY = 86400000;
 // Photos removed per daily run (one SELECT, one DELETE and one R2 call).
@@ -43,6 +44,16 @@ const D1_MOVES_PER_RUN = 1;
 // "10월 7일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
+// 알림함 (WP50): read rows go after 14 days, every row after 60, and each member keeps the newest 300;
+// one windowed DELETE of at most 2,000 rows a run.
+export const ALERTS_DELETES_PER_RUN = 2000;
+const ALERTS_KEPT = 300;
+// Members trimmed to the newest ALERTS_KEPT per run; others wait for a later run (the 60-day limit
+// removes their old rows in any case).
+const ALERTS_TRIM_MEMBERS = 50;
+// 플러스 무료 체험 reminders per run (each a set-based INSERT … SELECT and an UPDATE).
+const TRIAL_ALERTS_PER_RUN = 500;
+
 type Due = { id: number; user_id: string; grade: string; expires_at: number };
 type Photo = { id: string; storage: string };
 type Movable = { id: string; storage: string; mime: string };
@@ -55,6 +66,33 @@ const dueReminders = (now: number) => db().prepare(`SELECT g.id,g.user_id,g.grad
     WHERE g.source='manager' AND g.expires_at>? AND g.expires_at<=? AND (g.reminded_at IS NULL OR g.reminded_at<g.expires_at-?)
     AND NOT EXISTS(SELECT 1 FROM user_grades o WHERE o.user_id=g.user_id AND o.id!=g.id AND o.rank>=g.rank AND (o.expires_at IS NULL OR o.expires_at>g.expires_at))
     ORDER BY g.expires_at LIMIT 50`).bind(now, now + 7 * DAY, 7 * DAY);
+
+// '10월 9일 14:32' (KST) of an epoch-ms column, in SQL, as kstDateTime words it.
+const kstSql = (col: string) => {
+    const at = (f: string) => `strftime('${f}',${col}/1000+32400,'unixepoch')`;
+    return `CAST(${at('%m')} AS INTEGER)||'월 '||CAST(${at('%d')} AS INTEGER)||'일 '||${at('%H:%M')}`;
+};
+
+// The 플러스 무료 체험's 알림 (no manager chat, WP41/WP50). A trial ending within 24 hours gets the
+// reminder once (reminded_at=now); a trial that ended (in the last 7 days) and was not seen yet
+// (reminded_at NULL or ≥ 0) gets '플러스 무료 체험이 끝났습니다.' once (reminded_at=-2: the 알림 is sent,
+// and the home end band stays until the member closes it, which sets -1). A member who holds a paid grade that outlives the trial gets neither row, but the
+// trial is still marked so it is not looked at again. Each pair selects the same rows (same order and
+// limit): the 알림 first, then the mark.
+function trialAlertStatements(now: number) {
+    const outlived = (at: string) => `NOT EXISTS(SELECT 1 FROM user_grades o WHERE o.user_id=x.user_id AND o.source!='trial' AND o.rank>=1 AND (o.expires_at IS NULL OR o.expires_at>${at}))`;
+    const soon = "g.source='trial' AND g.reminded_at IS NULL AND g.expires_at>? AND g.expires_at<=?", soonArgs = [now, now + DAY];
+    const ended = "g.source='trial' AND g.expires_at<=? AND g.expires_at>? AND (g.reminded_at IS NULL OR g.reminded_at>=0)", endedArgs = [now, now - 7 * DAY];
+    const [head, tail] = trialAlertSoon('\u0000').split('\u0000');
+    return [
+        notifyStatement('grade_end', `SELECT g.user_id,g.id||':soon' AS ref,NULL AS post_id,NULL AS actor_id,?||${kstSql('g.expires_at')}||? AS text,g.expires_at
+            FROM user_grades g WHERE ${soon} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN}`, [head, tail, ...soonArgs], now, outlived('x.expires_at')),
+        db().prepare(`UPDATE user_grades SET reminded_at=? WHERE id IN (SELECT g.id FROM user_grades g WHERE ${soon} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN})`).bind(now, ...soonArgs),
+        notifyStatement('grade_end', `SELECT g.user_id,g.id||':end' AS ref,NULL AS post_id,NULL AS actor_id,? AS text
+            FROM user_grades g WHERE ${ended} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN}`, [TRIAL_ALERT_ENDED, ...endedArgs], now, outlived('?'), [now]),
+        db().prepare(`UPDATE user_grades SET reminded_at=-2 WHERE id IN (SELECT g.id FROM user_grades g WHERE ${ended} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN})`).bind(...endedArgs),
+    ];
+}
 
 // Unused photos the cleanup may remove: uploaded more than a day ago, no post, chat or draft uses them,
 // nothing touched them for a day (a lookup that reused a photo, WP44, counts as a use), and the delete
@@ -98,7 +136,7 @@ export async function cleanup(now = Date.now()) {
             .bind(mover ? D1_MOVES_PER_RUN : 0),
     };
     const names = Object.keys(reads) as (keyof typeof reads)[];
-    const r = await db().batch([
+    const house = [
         db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now),
         db().prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(now),
         // The daily caps look back to KST midnight and the 새 글 placement at most 2 days.
@@ -115,9 +153,22 @@ export async function cleanup(now = Date.now()) {
             AND EXISTS(SELECT 1 FROM users u WHERE u.id=p.author_id AND u.deleted_at IS NULL) LIMIT ?`).bind(MISSING_PRINTS_PER_RUN),
         db().prepare(`UPDATE posts SET thumb=NULL WHERE id IN (SELECT id FROM posts INDEXED BY posts_thumb WHERE thumb IS NOT NULL
             AND ((status='closed' AND COALESCE(closed_at,updated_at)<?) OR (status!='closed' AND bumped_at<?)) LIMIT ?)`).bind(now - RETAIN_DAYS * DAY, now - THUMB_OPEN_DAYS * DAY, THUMBS_PER_RUN),
-        ...names.map(n => reads[n]),
-    ]);
-    const got = <T>(n: keyof typeof reads) => r[8 + names.indexOf(n)].results as T[];
+        // 링크 미리보기 (WP48): cached previews older than 7 days (the posts keep their own cards).
+        db().prepare('DELETE FROM link_cache WHERE fetched_at<?').bind(now - 7 * DAY),
+        // 알림함 (WP50): the age limits and the newest 300 per member, then the trial's 알림. Only a member
+        // who got a row in the last 3 days can have gone over 300 since the last run, so the count reads
+        // those members' rows (notifications_user) and the window runs over at most 50 of them, never the
+        // whole table.
+        db().prepare(`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications INDEXED BY notifications_created WHERE created_at<?
+            UNION SELECT id FROM notifications INDEXED BY notifications_created WHERE created_at<? AND read_at IS NOT NULL
+            UNION SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC,id DESC) AS rn FROM notifications
+                WHERE user_id IN (SELECT user_id FROM notifications WHERE user_id IN (SELECT user_id FROM notifications INDEXED BY notifications_created WHERE created_at>=?)
+                    GROUP BY user_id HAVING COUNT(*)>? LIMIT ${ALERTS_TRIM_MEMBERS})) WHERE rn>?
+            LIMIT ?)`).bind(now - 60 * DAY, now - 14 * DAY, now - 3 * DAY, ALERTS_KEPT, ALERTS_KEPT, ALERTS_DELETES_PER_RUN),
+        ...trialAlertStatements(now),
+    ];
+    const r = await db().batch([...house, ...names.map(n => reads[n])]);
+    const got = <T>(n: keyof typeof reads) => r[house.length + names.indexOf(n)].results as T[];
     const titles = got<{ id: number; title: string }>('titles'), due = got<Due>('due'), photos = got<Photo>('photos');
     const retain = got<{ id: number }>('retain').map(p => p.id);
     await fillTitleKeys(titles);
@@ -202,12 +253,12 @@ async function fillTitleKeys(first: { id: number; title: string }[]) {
 }
 
 // The statements for every due grant (in the run's write batch): the manager chat where missing, the message, the chat's order and
-// unread counts, and reminded_at. A member who left or who blocked the manager (either way) gets
+// unread counts, reminded_at and the 알림함 row. A member who left or who blocked the manager (either way) gets
 // nothing, and the grant is still marked, so one member is never retried every day.
 function remindGradeEnds(due: Due[], now: number) {
     const list = JSON.stringify(due.map(g => {
         const [a, b] = [MANAGER_ID, g.user_id].sort();
-        return { gid: g.id, uid: g.user_id, a, b, cid: crypto.randomUUID(), text: `${gradeInfo(g.grade).name} 등급이 ${monthDay(g.expires_at)}에 끝납니다. 연장은 인증/등급 신청에서 6개월을 다시 신청해 주세요.` };
+        return { gid: g.id, uid: g.user_id, a, b, cid: crypto.randomUUID(), ref: `${g.id}:${g.expires_at}`, text: `${gradeInfo(g.grade).name} 등급이 ${monthDay(g.expires_at)}에 끝납니다. 연장은 인증/등급 신청에서 6개월을 다시 신청해 주세요.` };
     }));
     const uid = "json_extract(j.value,'$.uid')", pair = "c.user_a=json_extract(j.value,'$.a') AND c.user_b=json_extract(j.value,'$.b')";
     const reachable = `EXISTS(SELECT 1 FROM users m WHERE m.id='${MANAGER_ID}') AND EXISTS(SELECT 1 FROM users t WHERE t.id=${uid} AND t.deleted_at IS NULL)
@@ -219,6 +270,9 @@ function remindGradeEnds(due: Due[], now: number) {
             FROM json_each(?) j JOIN conversations c ON ${pair} WHERE ${reachable}`).bind(now, list),
         db().prepare(`UPDATE conversations SET updated_at=?,${UNREAD_RECOUNT} WHERE id IN (SELECT c.id FROM json_each(?) j JOIN conversations c ON ${pair} WHERE ${reachable})`).bind(now, list),
         db().prepare("UPDATE user_grades SET reminded_at=? WHERE id IN (SELECT json_extract(value,'$.gid') FROM json_each(?))").bind(now, list),
+        // The same text in the member's 알림함 (WP50); the manager is the actor, so a block either way skips it.
+        notifyStatement('grade_end', `SELECT json_extract(j.value,'$.uid') AS user_id,json_extract(j.value,'$.ref') AS ref,NULL AS post_id,? AS actor_id,json_extract(j.value,'$.text') AS text
+            FROM json_each(?) j WHERE j.value IS NOT NULL`, [MANAGER_ID, list], now),
     ];
 }
 

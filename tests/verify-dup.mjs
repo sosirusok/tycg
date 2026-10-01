@@ -156,6 +156,7 @@ const tokensOf = async c => (await c('me/usage')).data.bumpTokens;
 const ageListings = (c, ms) => sql(`UPDATE post_prints SET anchor_at=anchor_at-${ms},gone_at=gone_at-${ms} WHERE user_id='${c.user.id}' AND gone_at IS NOT NULL`);
 const reportsOf = c => sql(`SELECT details,post_id,reporter_id,status FROM reports WHERE target_user_id='${c.user.id}' AND reason='같은 매물 (자동)'`);
 
+// Earlier suites on this database used up the sign-in limits (per IP and per user).
 sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 const manager = client(), guest = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
@@ -393,6 +394,10 @@ equal((await S(`posts/${SP.id}/status`, 'PATCH', { status: 'closed', partnerId: 
 const SR = await created(S, sale({ images: sp.map(p => p.id) }), 'S posts the sold listing again');
 equal(SR.relist, true, 'a relist');
 equal(reportsOf(S).map(r => r.details), [`거래완료 글 #${SP.id} (구매자 지정) · 같은 매물`], 'flagged: 거래완료 글 (구매자 지정) · 같은 매물');
+// 알림함 (WP50): the buyer named on the sale hears about it once.
+const soldAlerts = sql(`SELECT type,post_id,actor_id,text FROM notifications WHERE user_id='${Bu.user.id}' AND type='same_listing'`);
+equal(soldAlerts.map(r => [r.post_id, r.actor_id]), [[SR.id, S.user.id]], 'the buyer gets one same_listing 알림 about the relist');
+check(soldAlerts[0].text.endsWith('글과 같은 매물이 다시 올라왔습니다.') && soldAlerts[0].text.startsWith('‘[QA] 같은 매물'), `its text: ${soldAlerts[0].text}`);
 
 // ---- 10. Daily cleanup of prints ----
 const cl = await register('clean');

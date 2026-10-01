@@ -184,6 +184,18 @@ export function gradePriority(grade: string | null | undefined, trial?: boolean 
     return 4;
 }
 
+// 제목 강조 (WP48), list surfaces only: 0 일반 (회색), 1 플러스 and the 무료 체험 (검정), 2 프리미엄 (굵게),
+// 3 엘리트, 관리자 and the manager (굵게·파랑), from the author's current grade. Order is untouched.
+export type TitleTier = 0 | 1 | 2 | 3;
+export function titleTier(grade: string | null | undefined, role?: string | null): TitleTier {
+    if (role === 'manager') return 3;
+    const rank = gradeInfo(grade).rank;
+    return (rank >= 3 ? 3 : rank) as TitleTier;
+}
+export const TITLE_STYLE_NAMES: Record<TitleTier, string> = { 0: '회색', 1: '검정', 2: '굵게', 3: '굵게·파랑' };
+// 링크 미리보기 (WP48): 플러스 and up (the 무료 체험 too) and the manager, per post (posts.link_preview).
+export const linkPreviewAllowed = (grade: string | null | undefined, role?: string | null) => titleTier(grade, role) >= 1;
+
 // 자동 끌올 (a later package) leaves this many 끌올 in the wallet for manual use.
 export const AUTO_RESERVE = 2;
 
@@ -217,11 +229,19 @@ export const TRIAL_MS = TRIAL_DAYS * 86400000;
 export type TrialState = { endsAt: number | null; popup: boolean; ended: boolean; capped: boolean };
 
 // The popup's benefit rows, from the 플러스 limits the Worker enforces right now. Later packages
-// append a row once their feature ships (자동 끌올, 제목·글자색·링크 미리보기).
+// append a row once their feature ships (자동 끌올; 제목·글자색·링크 미리보기 joined with WP48 and WP49).
 export type TrialRow = { icon: string; title: string; text: string };
 export const TRIAL_ROWS: TrialRow[] = [
     { icon: 'megaphone', title: `끌올 ${PERKS.plus.bumpMax}개 · ${gapText(PERKS.plus.bumpRefillMinutes)}마다 충전`, text: `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다 끌올 (일반 ${gapText(PERKS.normal.bumpGapMinutes)})` },
+    // 제목 강조 검정 (WP48), the 플러스 글자 꾸미기 with 글자색 (WP49) and 링크 미리보기 (WP48).
+    { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
 ];
+
+// 알림함 rows for the trial (WP50), written by the daily cleanup: one in the last 24 hours ('10월 9일
+// 14:32'), one after the end. Until WP52 keeps settings across grades, the reminder ends like the home
+// end band ('플러스는 입금 확인 후 매니저가 지급합니다.').
+export const trialAlertSoon = (when: string) => `플러스 무료 체험이 ${when}에 끝납니다. 플러스는 입금 확인 후 매니저가 지급합니다.`;
+export const TRIAL_ALERT_ENDED = '플러스 무료 체험이 끝났습니다.';
 
 const kstParts = (t: number) => {
     const d = new Date(t + KST);

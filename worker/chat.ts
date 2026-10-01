@@ -2,6 +2,8 @@ import type { User } from '../shared/market';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
+import { assertNoBlockedLinks } from './unfurl';
+import { ALERTS_COUNT_SQL } from './notifications';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -85,7 +87,7 @@ async function chatListing(conversationId: string, u: User) {
         // the 3 asks a post has), so the room hides the button once it would only fail.
         const canAsk = closedAt !== null && closedAt > Date.now() - 7 * 86400000 && !p.hidden && await askCount(p.id) < ASK_LIMIT;
         return {
-            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: closedAt, author_id: p.author_id, canAsk, hidden: !!p.hidden,
+            id: p.id, title: p.title, kind: p.kind, category: p.category, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: closedAt, author_id: p.author_id, canAsk, hidden: !!p.hidden,
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
             thumb: (parse(p.images, []) as string[])[0] ?? null,
             currentOffer: details.currentOffer ? Number(details.currentOffer) || null : null,
@@ -114,9 +116,10 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     // The sum of the member's side of the unread counters, read from the partial indexes that hold
     // only chats with something unread.
     if (p[1] === 'unread' && method === 'GET') {
-        const r = await db().prepare('SELECT (SELECT COALESCE(SUM(a_unread),0) FROM conversations WHERE user_a=? AND a_unread>0)+(SELECT COALESCE(SUM(b_unread),0) FROM conversations WHERE user_b=? AND b_unread>0) AS n')
-            .bind(u.id, u.id).first<{ n: number }>();
-        return json({ unread: r?.n || 0, user: u });
+        // alerts: unread 알림 (WP50) for the header bell, in the same statement (at most 99 rows read).
+        const r = await db().prepare(`SELECT (SELECT COALESCE(SUM(a_unread),0) FROM conversations WHERE user_a=? AND a_unread>0)+(SELECT COALESCE(SUM(b_unread),0) FROM conversations WHERE user_b=? AND b_unread>0) AS n,${ALERTS_COUNT_SQL} AS alerts`)
+            .bind(u.id, u.id, u.id).first<{ n: number; alerts: number }>();
+        return json({ unread: r?.n || 0, alerts: r?.alerts || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
         // ?filter=applications (manager only): the chats with an application still waiting.
@@ -207,6 +210,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             const text = typeof b.body === 'string' ? b.body.trim() : '';
             if (text.length > 2000) fail(400, '메시지는 2000자 이내로 입력해 주세요.');
             if (!text && !images.length) fail(400, '메시지를 입력해 주세요.');
+            // A link to a host the manager blocked (WP48).
+            await assertNoBlockedLinks(req, text);
             if (images.length) {
                 const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
                 if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 보낼 수 있습니다.');

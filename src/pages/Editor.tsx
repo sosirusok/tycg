@@ -1,19 +1,25 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'lucide-react';
+import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, TRADE_KINDS,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RECORD_PREFERENCES, TRADE_KINDS,
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { SITE_RULES } from '../../shared/membership';
-import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, imageUrl, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
+import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
+import { findLinks } from '../../shared/links';
+import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
+import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
 import { SameListingSheet, type Dup } from '../components/SameListingSheet';
+import { PhotoGrid } from '../components/PhotoGrid';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+
+// 글자 꾸미기 sheet (WP49), loaded when first opened.
+const StyleSheet = lazy(() => import('../components/StyleSheet'));
 
 type Form = {
     kind: TradeKind; category: string; title: string; body: string;
@@ -21,21 +27,24 @@ type Form = {
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
+    link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
+    body_style: Mark[]; // 글자 꾸미기 (WP49): ranges over body, shifted as it is typed; drafts carry them
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true, body_style: [] };
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
     const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
+    form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
 }
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [] });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -73,6 +82,14 @@ function bodyPlaceholder(kind: TradeKind, category: string) {
     return ({ account: '스킨, 악세, 라이드, 거래 방법 등', clan: '순위, 기여, 거래 방법 등', goods_coupon: '구성, 특이 사항 등' } as Record<string, string>)[category] || '상태, 거래 방법 등';
 }
 
+// The 판매 board filtered like the post being written: same category and ladder seasons, completed posts.
+function similarHref(category: string, tags: SeasonTag[]) {
+    const q = new URLSearchParams({ kind: 'sell', category });
+    if (category === 'account' && tags.length) q.set('tags', JSON.stringify(tags.map(t => ({ tier: t.tier, season: t.season }))));
+    q.set('closed', 'only');
+    return '/trade?' + q.toString();
+}
+
 function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
     return <section className="ed-section"><div className="ed-head"><h2>{title}</h2>{desc && <p>{desc}</p>}</div>{children}</section>;
 }
@@ -84,7 +101,7 @@ function Fold({ filled, className = 'ed-more', summary, children }: { filled: bo
     return <details className={className} open={open ?? filled} onToggle={e => setOpen(e.currentTarget.open)}><summary>{summary}</summary>{children}</details>;
 }
 
-function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false, error = '', id }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean; error?: string; id?: string }) {
+function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false, error = '', id, hint }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean; error?: string; id?: string; hint?: string }) {
     const errorId = id ? id + '-error' : undefined;
     return <label className="field"><span className="field-label">{label}</span>
         <div className={unit ? 'input-unit' : undefined}>
@@ -99,7 +116,8 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
         {/* 만원 fields show the amount in 원; a whole number of five digits or more (미네랄) shows its separators. */}
         {error ? <span className="field-error" id={errorId} role="alert">{error}</span>
             : decimal ? value && !Number.isNaN(manToWon(value)) && manToWon(value) !== null && <span className="field-hint">{manToWon(value)!.toLocaleString('ko-KR')}원</span>
-            : value.length >= 5 && <span className="field-hint">{Number(value).toLocaleString('ko-KR')}</span>}
+            : value.length >= 5 ? <span className="field-hint">{Number(value).toLocaleString('ko-KR')}</span>
+            : hint && <span className="field-hint">{hint}</span>}
     </label>;
 }
 
@@ -186,7 +204,10 @@ export default function Editor({ id }: { id?: string }) {
         lastSaved.current = saved ? JSON.stringify(next) : '';
         setVersion(v => v + 1);
     };
-    const fromDraft = ({ savedAt: _s, ...rest }: Draft) => { void _s; return normalize(rest); };
+    // A draft keeps only the 꾸미기 of the member's current grade (the post itself comes read-filtered).
+    const rank = me ? styleRank(me.grade, me.role) : 0;
+    const fromDraft = ({ savedAt: _s, ...rest }: Draft) => { void _s; const f = normalize(rest); return { ...f, body_style: normalizeMarks(f.body, f.body_style, rank) }; };
+    const [styling, setStyling] = useState(false);
     // Photos that came with a restored draft (or the post) are looked up too, so the used-photo line
     // below the grid also shows for them.
     useEffect(() => {
@@ -285,6 +306,8 @@ export default function Editor({ id }: { id?: string }) {
     }
 
     const patch = (v: Partial<Form>) => { dirty.current = true; setForm(f => ({ ...f, ...v })); };
+    // Typing moves the 꾸미기 ranges with the text (WP49).
+    const patchBody = (body: string) => { dirty.current = true; setForm(f => ({ ...f, body, body_style: shiftOnEdit(f.body, body, f.body_style) })); };
     const setDetail = (key: string, value: string) => patch({ details: { ...formRef.current.details, [key]: value } });
 
     function changeKind(kind: TradeKind) {
@@ -346,7 +369,6 @@ export default function Editor({ id }: { id?: string }) {
             if (fileInput.current) fileInput.current.value = '';
         }
     }
-    const moveImage = (i: number, d: number) => { const a = [...form.images]; [a[i], a[i + d]] = [a[i + d], a[i]]; patch({ images: a }); };
     // A screenshot pasted anywhere on the page, or a photo dropped on it, goes into 사진 like one picked
     // from the album. Text pastes and drags are left alone, also text that comes with a picture of it
     // (Excel, Word) pasted into a field; a dropped file never replaces the page.
@@ -394,10 +416,12 @@ export default function Editor({ id }: { id?: string }) {
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
-            // The list thumbnail of the 대표 photo (WP45). Without one (no WebP in this browser) the list shows
-            // the photo itself, and an edit keeps the thumbnail it had while the 대표 is the same.
-            const thumb = form.images[0] ? await makeThumb(form.images[0]) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, ...thumb ? { thumb } : {} };
+            // The list thumbnail of the 대표 photo (WP45), made again whenever images[0] changed (WP46) or the
+            // post has none. Without one (no WebP in this browser) the list shows the photo itself, and an
+            // edit keeps the thumbnail it had while the 대표 is the same.
+            const cover = form.images[0], had = post.current;
+            const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -472,7 +496,7 @@ export default function Editor({ id }: { id?: string }) {
         {nickTypes('nicknameTypes')}
         <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
         <div className="ed-grid ed-grid-3">
-            <Num label="팬텀" value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={5000} placeholder="예: 225" />
+            <Num label={PHANTOM_LABEL} value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="예: 246" />
             <Num label="미네랄" value={d.minerals || ''} onChange={v => setDetail('minerals', v)} placeholder="예: 1400000" />
         </div>
@@ -493,8 +517,9 @@ export default function Editor({ id }: { id?: string }) {
         return <div className="grid-gap-16">
             <div className="ed-grid">
                 <Num label="대주 수" value={d[k('maxOwners')] || ''} onChange={v => setDetail(k('maxOwners'), v)} unit="대주 이하" max={9999} placeholder="상관없음" />
-                <div className="field"><span className="field-label">전적</span><Segmented name={prefix + '전적'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
+                <Num label={PHANTOM_LABEL} value={d[k('phantomMin')] || ''} onChange={v => setDetail(k('phantomMin'), v)} unit="% 이상" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             </div>
+            <div className="field"><span className="field-label">전적</span><Segmented name={prefix + '전적'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
             <div className="field"><span className="field-label">원하는 닉네임</span>
                 <div className="range nick-range">
                     <div className="input-unit"><IntegerInput className="input" placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} max={20} onChange={v => setDetail(k('nicknameCharsMin'), v)} /><span>글자</span></div>
@@ -533,6 +558,8 @@ export default function Editor({ id }: { id?: string }) {
     const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
     const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
     const photoCount = `${form.images.length}/${photoCap}`;
+    // 링크 미리보기 (WP48): the switch shows for 플러스 and up (the 무료 체험 too) once the body holds a link.
+    const previewAllowed = !!me && linkPreviewAllowed(me.grade, me.role), hasLink = previewAllowed && findLinks(form.body).length > 0;
 
     return <div className="container page editor">
         <div className="ed-top">
@@ -584,6 +611,8 @@ export default function Editor({ id }: { id?: string }) {
                             <Num decimal id="ed-offer" label="현젯 (현재 제시가)" value={form.offer} onChange={v => patch({ offer: v })} unit="만원" placeholder="없음"
                                 error={offerTooHigh ? '현젯은 즉거가보다 낮게 입력해 주세요.' : ''} />
                         </div>
+                        {/* 비슷한 거래완료 글 (WP51): the 판매 board in a new tab, same category and 래더 기록, completed posts only. */}
+                        <a className="ed-similar" href={similarHref(category, form.tags)} target="_blank" rel="noreferrer">비슷한 거래완료 글</a>
                         {id && <p className="field-hint">이전 즉거가는 취소선으로 남습니다.</p>}
                         <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />제시 받기</label>
                     </div> : <div className="ed-grid">
@@ -605,33 +634,26 @@ export default function Editor({ id }: { id?: string }) {
                 <section className="ed-section">
                     <div className="field">
                         <div className="row"><label className="field-label grow" htmlFor="body">내용 <em>*</em></label>
-                            <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patch({ body: template(kind, category) })}>양식 불러오기</button></div>
-                        <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patch({ body: e.target.value })}
+                            <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patchBody(template(kind, category))}>양식 불러오기</button></div>
+                        <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patchBody(e.target.value)}
                             placeholder={bodyPlaceholder(kind, category)} />
-                        <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span></div>
+                        <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span>
+                            <button type="button" className="btn btn-line btn-sm ed-style-btn" disabled={!form.body.trim()} onClick={() => setStyling(true)}>{form.body_style.length ? `꾸미기 ${form.body_style.length}` : '꾸미기'}</button></div>
+                        {styling && <Suspense fallback={null}><StyleSheet body={form.body} marks={form.body_style} rank={rank} onClose={() => setStyling(false)}
+                            onChange={m => { dirty.current = true; setForm(f => ({ ...f, body_style: m })); }} /></Suspense>}
+                        {previewAllowed && hasLink && <label className="switch mt-8"><input type="checkbox" checked={form.link_preview} onChange={e => patch({ link_preview: e.target.checked })} />링크 미리보기</label>}
                     </div>
                 </section>
 
-                <Section title="사진" desc={`첫 장이 대표 사진 · ${photoCount}`}>
+                <section className="ed-section">
+                    <div className="ed-head ed-head-row"><h2>사진</h2><span className="ed-photo-count">{photoCount}</span></div>
                     <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void addPhotos(Array.from(e.target.files || []))} />
-                    <div className="photo-grid">
-                        {form.images.map((img, i) => <div className="photo" key={img}>
-                            <img src={imageUrl(img)} alt={`사진 ${i + 1}`} />
-                            {i === 0 && <b className="photo-main">대표</b>}
-                            <button type="button" className="photo-remove" aria-label={`사진 ${i + 1} 빼기`} onClick={() => patch({ images: form.images.filter(v => v !== img) })}><X size={14} /></button>
-                            <div className="photo-move">
-                                <button type="button" disabled={i === 0} aria-label="앞으로" onClick={() => moveImage(i, -1)}><ChevronLeft size={14} /></button>
-                                <button type="button" disabled={i === form.images.length - 1} aria-label="뒤로" onClick={() => moveImage(i, 1)}><ChevronRight size={14} /></button>
-                            </div>
-                        </div>)}
-                        {form.images.length < photoCap && <button type="button" className="photo-add" disabled={uploading} onClick={() => fileInput.current?.click()}>
-                            {uploading ? <LoaderCircle size={24} className="spin" /> : <ImagePlus size={26} />}<span>{uploading ? '올리는 중' : photoCount}</span>
-                        </button>}
-                    </div>
+                    <PhotoGrid images={form.images} onChange={images => patch({ images })} canAdd={form.images.length < photoCap} uploading={uploading} onAdd={() => fileInput.current?.click()} />
+                    {form.images.length > 0 && <p className="field-hint mt-8">대표 사진이 목록에 표시</p>}
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
                     {photoLine && !progress && <p className="field-hint mt-8 ed-photo-usage">{photoLine}</p>}
                     {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. {usedWait ? <span className="nowrap">{readyClock(usedWait)}부터 끌올 가능</span> : <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button>}</p>}
-                </Section>
+                </section>
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
                 {!id && freshLine && <p className="field-hint ed-fresh">{freshLine}</p>}

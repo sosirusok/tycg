@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } from 'lucide-react';
-import { Dialog, DropdownMenu } from 'radix-ui';
+import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -12,14 +12,17 @@ import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { AppraisedLine, PriceLine } from '../components/PostCard';
+import { RichBody } from '../components/RichBody';
 import { ServiceSheet } from '../components/ServiceSheet';
+import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number };
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
+    author_created_at?: number; author_prev_nickname?: string };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -56,7 +59,7 @@ function offeredBlocks(post: Post): ReactNode[] {
     const nick = [lengthAndTypes, d.nicknameRank ? rankText([d.nicknameRank]) : ''].filter(Boolean).join(' · ');
     return [
         ...specBlock([
-            ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['팬텀', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
+            ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['스킨 수 (팬텀)', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
             ['가스', num(d.gas)], ['미네랄', num(d.minerals)],
             ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['레벨', num(d.level)], ['연구실', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
@@ -73,7 +76,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
     const ranks = parseList(d[key('nicknameRanks')], NICK_RANKS);
     return [
         ...specBlock([
-            ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['전적', d[key('recordPreference')]],
+            ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['스킨 수 (팬텀)', d[key('phantomMin')] ? d[key('phantomMin')] + '% 이상' : ''], ['전적', d[key('recordPreference')]],
             ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
         ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),
@@ -111,7 +114,7 @@ export function Detail({ id }: { id: string }) {
     const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
-    const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+    const [lightbox, setLightbox] = useState<number | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
@@ -263,7 +266,8 @@ export function Detail({ id }: { id: string }) {
                 {/* On phones the author and their verification checks come right under the title. */}
                 <AuthorBox post={post} own={mine} className="author-box-top" />
                 {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
-                {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
+                {/* The first 2 photos load with the page, the rest as they scroll in (WP46). */}
+                {post.images.length > 0 && <Gallery images={post.images} onOpen={setLightbox} />}
 
                 {info.length > 0 && <section className="detail-section">
                     <h2>{sectionTitle}</h2>
@@ -271,7 +275,7 @@ export function Detail({ id }: { id: string }) {
                 </section>}
                 {post.body.trim() && <section className="detail-section">
                     <h2>내용</h2>
-                    <p className="body-text">{post.body}</p>
+                    <div className="body-text"><RichBody text={post.body} cards={post.link_cards} marks={post.body_style?.m} /></div>
                 </section>}
                 <div className="row muted small detail-tools">
                     <button type="button" className="btn btn-text small" onClick={() => { void navigator.clipboard?.writeText(location.href).then(() => toast('링크 복사 완료')); }}><Link2 size={15} />링크 복사</button>
@@ -338,18 +342,9 @@ export function Detail({ id }: { id: string }) {
             <button type="button" className="btn btn-primary" onClick={startChat}>채팅하기</button>
         </div>}
 
-        <Dialog.Root open={!!lightbox} onOpenChange={o => { if (!o) setLightbox(null); }}>
-            <Dialog.Portal>
-                <Dialog.Overlay className="lightbox" onClick={() => setLightbox(null)} />
-                <Dialog.Content className="lightbox-content" aria-describedby={undefined} onClick={() => setLightbox(null)}>
-                    <Dialog.Title className="sr-only">사진 크게 보기</Dialog.Title>
-                    {lightbox && <img src={imageUrl(lightbox)} alt="" />}
-                    <Dialog.Close className="icon-btn lightbox-close" aria-label="닫기"><X size={26} /></Dialog.Close>
-                </Dialog.Content>
-            </Dialog.Portal>
-        </Dialog.Root>
+        <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
-        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
+        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(prev => ({ ...p, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count }))} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
         {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
@@ -365,15 +360,18 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
-    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
-    // as on the profile).
+    // The trust lines (WP51): '최근 접속' when it is known (not on one's own post, as on the profile), then
+    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' (also at 0: a new member reads as one), the join date and
+    // '이전 닉네임: {닉}' while the nickname changed within 90 days.
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
-            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>}
-            {seen && <span className="author-stats author-seen">{seen}</span>}</span>
+            {seen && <span className="author-stats author-seen">{seen}</span>}
+            <span className="author-stats author-trust">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>
+            {post.author_created_at && <span className="author-stats">{dateText(post.author_created_at)} 가입</span>}
+            {post.author_prev_nickname && <span className="author-stats">이전 닉네임: {post.author_prev_nickname}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;
 }
@@ -406,6 +404,22 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
 }
 
 // Quick 즉거가 and 현젯 change for the author of a 판매 post (PATCH /posts/:id/price).
+// Two rows at most: 10 tiles on wide screens, 6 on phones. With more photos the last tile shows '+N' and
+// opens the lightbox there, so 계정 정보 and 내용 stay near the top (a post may carry 100 photos).
+const GALLERY_WIDE = 10, GALLERY_PHONE = 6;
+function Gallery({ images, onOpen }: { images: string[]; onOpen: (i: number) => void }) {
+    const n = images.length, wideMore = n > GALLERY_WIDE, phoneMore = n > GALLERY_PHONE;
+    return <div className="gallery">{images.slice(0, GALLERY_WIDE).map((img, i) => {
+        const moreWide = wideMore && i === GALLERY_WIDE - 1, morePhone = phoneMore && i === GALLERY_PHONE - 1;
+        const cls = [phoneMore && i >= GALLERY_PHONE ? 'gallery-wide-only' : '', moreWide ? 'has-more-wide' : '', morePhone ? 'has-more-phone' : ''].filter(Boolean).join(' ');
+        return <button type="button" key={img} className={cls || undefined} onClick={() => onOpen(i)} aria-label={moreWide || morePhone ? `사진 ${i + 1} 크게 보기 · 전체 ${n}장` : `사진 ${i + 1} 크게 보기`}>
+            <img src={imageUrl(img)} alt="" loading={i < 2 ? 'eager' : 'lazy'} />
+            {moreWide && <span className="gallery-more gallery-more-wide" aria-hidden="true">+{n - GALLERY_WIDE + 1}</span>}
+            {morePhone && <span className="gallery-more gallery-more-phone" aria-hidden="true">+{n - GALLERY_PHONE + 1}</span>}
+        </button>;
+    })}</div>;
+}
+
 function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: () => void; post: Post; onSaved: (post: DetailPost) => void }) {
     const [price, setPrice] = useState(''), [current, setCurrent] = useState(''), [busy, setBusy] = useState(false);
     useEffect(() => { if (open) { setPrice(wonToMan(post.price)); setCurrent(wonToMan(post.details.currentOffer ? Number(post.details.currentOffer) : null)); } }, [open]);

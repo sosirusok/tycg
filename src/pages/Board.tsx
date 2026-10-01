@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Keyb
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
+    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -42,18 +42,18 @@ const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchPara
 // The name is the filter chips in order, within the server's 32 characters.
 const searchName = (labels: string[]) => { const name = labels.join(', '); return name.length > 32 ? name.slice(0, 31) + '…' : name; };
 
-// Only parameters that mean something for the current tab reach the API. closed=1 stays in the
-// address only; without it the request asks for posts still in progress (active=1).
+// Only parameters that mean something for the current tab reach the API. closed=1 (or only) stays in
+// the address only; without it the request asks for posts still in progress (active=1).
 function allowedKeys(ctx: Ctx) {
     const { kind, category } = ctx;
     // old=1 is '오래된 글 보기': posts not bumped in the last 30 days too.
     const keys = ['kind', 'category', 'q', 'closed', 'page', 'sort', 'badge', 'old'];
     if (kind === 'all') return ['q', 'closed', 'page', 'badge', 'old'];
     if (kind === 'exchange') keys.push('wantedCategory');
-    if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord');
+    if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord', 'wantedMyPhantom');
     if (kind !== 'exchange') keys.push('min', 'max');
     if (category === 'account' || category === 'ladder') keys.push('tags', 'match');
-    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS]));
+    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType', 'myPhantom'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS]));
     return keys;
 }
 
@@ -102,10 +102,11 @@ function Group({ title, children, hint }: { title: string; children: ReactNode; 
 // '내 계정으로 찾기' on 구매 and on the wanted side of 교환: buyers' posts that my account fits.
 function MyAccount({ params, update, prefix }: { params: URLSearchParams; update: (v: Record<string, string>) => void; prefix: '' | 'wanted' }) {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
-    const owners = key('ownerCountOfMine'), chars = key('nicknameChars'), rank = key('nicknameRank'), record = key('myRecord'), type = key('myNicknameType');
+    const owners = key('ownerCountOfMine'), chars = key('nicknameChars'), rank = key('nicknameRank'), record = key('myRecord'), type = key('myNicknameType'), phantom = key('myPhantom');
     return <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 글만 표시">
         <div className="grid-gap-8">
             <LazyNumber label="내 계정 대주 수" value={params.get(owners) || ''} onCommit={v => update({ [owners]: v })} placeholder="내 계정 대주 수" unit="대주" integer min={1} max={9999} />
+            <LazyNumber label="내 계정 팬텀 %" value={params.get(phantom) || ''} onCommit={v => update({ [phantom]: v })} placeholder="내 계정 팬텀 %" unit="%" integer max={PHANTOM_MAX} />
             <Segmented name="내 계정 전적" options={MY_RECORDS} value={params.get(record) || ''} onChange={v => update({ [record]: v })} />
             <LazyNumber label="내 닉네임 글자 수" value={params.get(chars) || ''} onCommit={v => update({ [chars]: v })} placeholder="내 닉네임 글자 수" unit="글자" integer min={1} max={20} />
             <RankPicker value={params.get(rank) ? [params.get(rank)!] : []} onChange={v => update({ [rank]: v[0] || '' })} />
@@ -114,7 +115,7 @@ function MyAccount({ params, update, prefix }: { params: URLSearchParams; update
     </Group>;
 }
 
-// Order: 가격/MAX, 래더, 우대 스킨, 대주 · 전적, 닉네임, 팬텀, 계정 조건, 작성자 인증.
+// Order: 가격/MAX, 래더, 우대 스킨, 대주 · 전적, 닉네임, 스킨 수 (팬텀 %), 계정 조건, 작성자 인증.
 function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; update: (v: Record<string, string>) => void }) {
     const { kind, category } = ctx;
     const buying = kind === 'buy', account = category === 'account', exchange = kind === 'exchange';
@@ -159,8 +160,8 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
                 <NickTypePicker multiple value={readTypes(params.get('nicknameTypes'))} onChange={v => update({ nicknameTypes: v.length ? JSON.stringify(v) : '' })} />
             </div>
         </Group>}
-        {account && !buying && <Group title="팬텀">
-            <LazyNumber label="최소 팬텀 %" value={params.get('phantom') || ''} onCommit={v => update({ phantom: v })} placeholder="몇 % 이상" unit="% 이상" integer max={5000} />
+        {account && !buying && <Group title={PHANTOM_LABEL} hint={PHANTOM_HINT}>
+            <LazyNumber label="최소 팬텀 %" value={params.get('phantom') || ''} onCommit={v => update({ phantom: v })} placeholder="몇 % 이상" unit="% 이상" integer max={PHANTOM_MAX} />
         </Group>}
         {account && !buying && <Group title="계정 조건">
             <div className="chip-row condition-chips" role="group" aria-label="계정 조건">
@@ -178,6 +179,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     const chips: { key: string; label: string; clear: () => void }[] = [];
     const add = (key: string, label: string) => { if (params.get(key)) chips.push({ key, label, clear: () => update({ [key]: '' }) }); };
     add('q', `‘${params.get('q')}’`);
+    if (params.get('closed') === 'only') chips.push({ key: 'closed', label: '거래완료만', clear: () => update({ closed: '' }) });
     const tags = readTags(params.get('tags'));
     for (const tier of TIERS) {
         const seasons = tags.filter(t => t.tier === tier.id).map(t => t.season).sort((a, b) => a - b);
@@ -192,6 +194,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     add('wantedNicknameRank', `내 닉 ${rankText([params.get('wantedNicknameRank') || ''])}`);
     add('wantedMyNicknameType', `내 닉 ${params.get('wantedMyNicknameType')}`);
     add('wantedMyRecord', `내 계정 ${params.get('wantedMyRecord')}`);
+    add('wantedMyPhantom', `내 팬텀 ${params.get('wantedMyPhantom')}%`);
     const buying = ctx.kind === 'buy';
     add('nicknameChars', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameChars')}글자`);
     add('nicknameRank', `${buying ? '내 닉 ' : '닉 '}${rankText([params.get('nicknameRank') || ''])}`);
@@ -203,6 +206,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     add('recordStatus', params.get('recordStatus') || '');
     add('phantom', `팬텀 ${params.get('phantom')}% 이상`);
     add('myRecord', `내 계정 ${params.get('myRecord')}`);
+    add('myPhantom', `내 팬텀 ${params.get('myPhantom')}%`);
     add('min', `${priceText(Number(params.get('min')))} 이상`);
     add('max', `${priceText(Number(params.get('max')))} 이하`);
     for (const c of CONDITIONS) if (conditionOn(params, c)) chips.push({ key: 'cond-' + c.label, label: c.label, clear: () => update(conditionOff(c)) });
@@ -231,11 +235,13 @@ export function Board() {
     if (kind !== 'all') { query.set('kind', kind); query.set('category', category); }
     if (kind === 'exchange') query.set('wantedCategory', wanted);
     for (const key of allowedKeys(ctx)) { const v = params.get(key); if (v && !query.has(key)) query.set(key, v); }
-    // Boards hide 거래완료 unless '거래완료 포함' is on (closed=1).
-    const closed = query.get('closed') === '1';
+    // Boards hide 거래완료 unless '거래완료 포함' is on (closed=1); closed=only lists 거래완료 alone
+    // (the editor's '비슷한 거래완료 글').
+    const closedOnly = query.get('closed') === 'only', closed = closedOnly || query.get('closed') === '1';
     const apiQuery = new URLSearchParams(query);
     apiQuery.delete('closed');
-    if (!closed) apiQuery.set('active', '1');
+    if (closedOnly) apiQuery.set('status', 'closed');
+    else if (!closed) apiQuery.set('active', '1');
     const queryString = apiQuery.toString();
 
     const cacheKey = (me?.id || '') + '|' + queryString;
@@ -309,7 +315,8 @@ export function Board() {
             if (nextKind === 'exchange') p.wantedCategory = nextWanted || 'account';
         }
         if (keepSearch && params.get('q')) p.q = params.get('q')!;
-        if (keepSearch && params.get('closed') === '1') p.closed = '1';
+        const keepClosed = params.get('closed');
+        if (keepSearch && (keepClosed === '1' || keepClosed === 'only')) p.closed = keepClosed;
         void navigate(withParams('/trade', p));
     };
     // Resets every filter, including the search word and 거래완료 포함.
