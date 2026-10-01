@@ -276,8 +276,9 @@ export const REVIEW_CARD_TEXT = '거래 후기 남기기';
 export const reviewName = (good: boolean | number) => good ? '좋아요' : '아쉬워요';
 // '거래 3회 · 후기 좋아요 2' on the profile and the detail page's author box.
 export const tradeStatsText = (trades: number, good: number) => `거래 ${trades}회 · 후기 좋아요 ${good}`;
-// One 후기 as the profile tab and the chat card show it.
-export type Review = { id: number; trade_id: string; author_id: string; target_id: string; good: number; tags: string[]; text: string; created_at: number };
+// One 후기 as the profile tab and the chat card show it. `removed`: the manager deleted it (the chat
+// card of its author says so; lists and counts leave it out).
+export type Review = { id: number; trade_id: string; author_id: string; target_id: string; good: number; tags: string[]; text: string; created_at: number; removed?: number };
 
 // 이용 정지: 3, 7 or 30 days, or 0 for 영구. 영구 is stored as this far-future time, which is past
 // the largest Date, so it is never formatted as a date.
@@ -291,6 +292,9 @@ export function suspendEndText(until: number) {
     const d = new Date(Math.ceil(until / 60000) * 60000 + 9 * 3600000);
     return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
+// The one way every screen and error names the period: '10월 8일 15:40까지' or '영구'
+// ('이용 정지 중입니다. (10월 8일 15:40까지)', '이용 정지 중 (영구)').
+export const suspendUntilText = (until: number) => until >= SUSPEND_FOREVER ? '영구' : suspendEndText(until) + '까지';
 
 // Stored values never change; `labels` only gives some of them the cafe word on screen.
 export const ACCOUNT_CHOICES: Record<string, { label: string; options: readonly string[]; legacy?: readonly string[]; labels?: Record<string, string> }> = {

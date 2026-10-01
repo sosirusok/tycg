@@ -1,6 +1,6 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
-    digest, tokenOf, sessionCookie, memberColumns, tradeColumns, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
+    digest, tokenOf, sessionCookie, memberColumns, tradeColumns, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME,
 } from './http';
 import { postsHandler } from './posts';
@@ -148,12 +148,15 @@ async function usersHandler(req: Request, p: string[]) {
     const method = req.method;
     if (method === 'GET') {
         const viewer = await currentUser(req);
-        // Counts skip 대리(진행) posts whose author lost 대리 인증, as the board list does (the author still counts them).
-        const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))";
+        // Counts skip 대리(진행) posts whose author lost 대리 인증, and every post of a member under 이용 정지,
+        // as the board list does (the author still counts them).
+        const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))"
+            + ' AND (p.author_id=? OR u.suspended_until IS NULL OR u.suspended_until<=?)';
+        const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
         // '거래 3회 · 후기 좋아요 2' (trade_count, good_count) and how many 후기 the 후기 tab holds.
         const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
-            ${tradeColumns('u')},(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id) AS review_count FROM users u WHERE u.id=?`)
-            .bind(viewer?.id || '', viewer?.id || '', p[1]).first<any>();
+            ${tradeColumns('u')},(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count FROM users u WHERE u.id=?`)
+            .bind(...listedArgs, ...listedArgs, p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
         const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, trade_count, good_count, review_count, ...rest } = row;
         // A withdrawn member is only a name: no bio, grade, badges, counts or chat.

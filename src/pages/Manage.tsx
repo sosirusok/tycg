@@ -108,10 +108,13 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
                 <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
             </span>
-            {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
-            {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
-            {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
-            <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+            {/* One group, so the actions wrap together under the text on phones. */}
+            <span className="report-actions">
+                {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
+                {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
+                {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
+                <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+            </span>
         </li>)}</ul>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={onChange} />}</Modal>
         <Modal open={!!evidence} onClose={() => setEvidence(null)} title="신고된 채팅" wide>{evidence && <ReportChat report={evidence} />}</Modal>

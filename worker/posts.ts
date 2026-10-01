@@ -506,18 +506,24 @@ async function listPosts(req: Request, url: URL) {
     return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
 }
 
-// 찜한 글: a sale whose 즉거가 fell after the member saved it carries price_drop {from, to}. Each
-// history row holds the price before one change, so the first row written after the favorite holds
-// the price the member saw (a rise in between records nothing, so it is then the risen price). A rise
-// deletes the rows at or below the new price, so a price back at or above `from` shows no drop.
+// 찜한 글: a sale whose 즉거가 is below the price the member saw when saving it carries price_drop
+// {from, to}. The favorite keeps that price (saved_price). Favorites saved before it existed (or by
+// the previous Worker during a deploy) fall back to the history: each row holds the price before one
+// change, so the first row written after the favorite is the price then, unless it rose in between
+// (a rise records nothing). A rise deletes the rows at or below the new price, so a price back at or
+// above `from` shows no drop either way.
 async function addPriceDrops(posts: any[], userId: string) {
     const sells = posts.filter(p => p.kind === 'sell' && p.price !== null && p.status !== 'closed');
     if (!sells.length) return;
-    const r = await db().prepare('SELECT h.post_id,h.price FROM post_price_history h JOIN favorites f ON f.post_id=h.post_id AND f.user_id=? WHERE h.post_id IN (SELECT value FROM json_each(?)) AND h.changed_at>f.created_at ORDER BY h.id')
-        .bind(userId, JSON.stringify(sells.map(p => p.id))).all<{ post_id: number; price: number }>();
+    const ids = JSON.stringify(sells.map(p => p.id));
+    const [saved, history] = await db().batch([
+        db().prepare('SELECT post_id,saved_price FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(userId, ids),
+        db().prepare('SELECT h.post_id,h.price FROM post_price_history h JOIN favorites f ON f.post_id=h.post_id AND f.user_id=? WHERE h.post_id IN (SELECT value FROM json_each(?)) AND h.changed_at>f.created_at AND f.saved_price IS NULL ORDER BY h.id').bind(userId, ids),
+    ]);
     for (const p of sells) {
-        const first = r.results.find(h => h.post_id === p.id);
-        if (first && first.price > p.price) p.price_drop = { from: first.price, to: p.price };
+        const from = (saved.results as { post_id: number; saved_price: number | null }[]).find(f => f.post_id === p.id)?.saved_price
+            ?? (history.results as { post_id: number; price: number }[]).find(h => h.post_id === p.id)?.price;
+        if (typeof from === 'number' && from > p.price) p.price_drop = { from, to: p.price };
     }
 }
 
@@ -632,7 +638,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     const existing = p[1] ? await visiblePost(p[1], u) : null;
     if (p[2] === 'favorite' && method === 'POST') {
         const b = await body(req);
-        if (b.active) await db().prepare('INSERT OR IGNORE INTO favorites(user_id,post_id,created_at) VALUES(?,?,?)').bind(u.id, existing.id, Date.now()).run();
+        // The price the member saw is kept with the favorite, for 찜한 글's '가격 내림'.
+        if (b.active) await db().prepare('INSERT OR IGNORE INTO favorites(user_id,post_id,created_at,saved_price) SELECT ?,id,?,price FROM posts WHERE id=?').bind(u.id, Date.now(), existing.id).run();
         else await db().prepare('DELETE FROM favorites WHERE user_id=? AND post_id=?').bind(u.id, existing.id).run();
         return json({ ok: true });
     }
@@ -648,7 +655,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
     }
-    // 이용 정지 stops writing, 끌올, 상단 노출 and price changes; closing or deleting a post still works.
+    // 이용 정지 stops writing, 끌올, 상단 노출 and price changes; closing (거래완료) or deleting a post still works.
     if ((p[2] === 'bump' && method === 'POST') || (p[2] === 'feature' && method === 'PUT') || (p[2] === 'price' && method === 'PATCH') || (!p[2] && (method === 'POST' || method === 'PUT'))) requireActive(u);
     if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
     if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
@@ -656,6 +663,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[2] === 'status' && method === 'PATCH') {
         const b = await body(req);
         if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
+        // Under 이용 정지 a post can only be closed (거래중 or 예약중 again reopens it to other members).
+        if (b.status !== 'closed') requireActive(u);
         if (existing.kind === 'proxy_offer' && b.status !== 'closed' && !canOfferProxy(u)) fail(403, '대리 인증이 없으면 대리(진행) 글은 거래완료로만 바꿀 수 있습니다.');
         const now = Date.now();
         await db().batch([

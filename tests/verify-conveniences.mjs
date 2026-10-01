@@ -100,13 +100,14 @@ async function post(title, price) {
     return r.data.id;
 }
 const lowered = await post('after', 600000), before = await post('before', 600000), raised = await post('raised', 600000), closed = await post('closed', 600000);
+const bounced = await post('bounced', 600000), bouncedLow = await post('bounced low', 600000);
 const single = (await guest('posts/' + lowered)).data.post;
 equal(single.author_last_seen_at, stored(seller.user.id), 'one post carries its author last_seen_at');
 check(!('author_last_seen_at' in (await guest(`posts?author=${seller.user.id}`)).data.posts[0]), 'list rows leave it out');
 const price = (id, value) => seller(`posts/${id}/price`, 'PATCH', { price: value });
 equal((await price(before, 550000)).status, 200, 'a price lowered before the favorite');
 await delay(20);
-for (const id of [lowered, before, raised, closed]) equal((await buyer(`posts/${id}/favorite`, 'POST', { active: true })).status, 200, `buyer saves post ${id}`);
+for (const id of [lowered, before, raised, closed, bounced, bouncedLow]) equal((await buyer(`posts/${id}/favorite`, 'POST', { active: true })).status, 200, `buyer saves post ${id}`);
 await delay(20);
 equal((await price(lowered, 500000)).status, 200, 'seller lowers 60만원 to 50만원 after the favorite');
 equal((await price(lowered, 450000)).status, 200, 'and again to 45만원');
@@ -114,12 +115,21 @@ equal((await price(raised, 500000)).status, 200, 'another post goes down to 50�
 equal((await price(raised, 650000)).status, 200, 'and back up to 65만원');
 equal((await price(closed, 500000)).status, 200, 'a post lowered and then closed');
 equal((await seller(`posts/${closed}/status`, 'PATCH', { status: 'closed' })).status, 200, 'is closed');
+for (const id of [bounced, bouncedLow]) equal((await price(id, 700000)).status, 200, 'a saved post goes up to 70만원');
+equal((await price(bounced, 650000)).status, 200, 'then down to 65만원, still above the 60만원 the member saw');
+equal((await price(bouncedLow, 550000)).status, 200, 'another down to 55만원, below it');
 const favorites = (await buyer('posts?scope=favorites&size=40')).data.posts;
 const drop = id => favorites.find(p => p.id === id)?.price_drop;
 equal(drop(lowered), { from: 600000, to: 450000 }, '찜한 글: price_drop from the price when saved to the price now');
 equal(drop(before), undefined, 'a drop before the favorite is not shown');
 equal(drop(raised), undefined, 'a price back above the saved one shows no drop');
 equal(drop(closed), undefined, 'a 거래완료 post shows no drop');
+equal(drop(bounced), undefined, 'a rise and a smaller fall show no drop (the saved price is kept)');
+equal(drop(bouncedLow), { from: 600000, to: 550000 }, 'a fall below the saved price drops from the price the member saw');
+equal(sql(`SELECT saved_price FROM favorites WHERE user_id='${buyer.user.id}' AND post_id=${lowered}`)[0].saved_price, 600000, 'the favorite keeps the price when saved');
+// A favorite saved before saved_price existed falls back to the price history.
+sql(`UPDATE favorites SET saved_price=NULL WHERE user_id='${buyer.user.id}' AND post_id=${lowered}`);
+equal((await buyer('posts?scope=favorites&size=40')).data.posts.find(p => p.id === lowered)?.price_drop, { from: 600000, to: 450000 }, 'without a saved price the drop comes from the history');
 check(!(await guest(`posts?author=${seller.user.id}&size=40`)).data.posts.some(p => 'price_drop' in p), 'other lists carry no price_drop');
 check(!(await seller('posts?scope=favorites')).data.posts.some(p => 'price_drop' in p), 'a member who saved nothing sees no drops');
 

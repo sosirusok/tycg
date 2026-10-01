@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
-import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, SUSPEND_FOREVER, dateText, longDate, reviewName, suspendDaysLabel, suspendEndText, type Review, type User } from '../../shared/market';
+import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, dateText, longDate, reviewName, suspendDaysLabel, suspendUntilText, type Review, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
@@ -11,7 +11,9 @@ type Revoke = { name: string; description?: string; task: () => Promise<unknown>
 type Sanction = { id: number; days: number | null; reason: string; created_at: number };
 // A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
 type ReviewRow = Review & { nickname: string };
-type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[] };
+// One of the member's trades (WP23); confirmed once the other member left their 후기.
+type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string };
+type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[] };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 
@@ -25,10 +27,10 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
     const [resetting, setResetting] = useState(false), [temp, setTemp] = useState('');
     // Turning a badge off or taking back a grade asks first.
     const [revoke, setRevoke] = useState<Revoke | null>(null);
-    // 이용 정지: the period chip and reason, then a confirm (days null: 정지 해제).
-    const [suspendDays, setSuspendDays] = useState<number>(7), [suspendReason, setSuspendReason] = useState(''), [suspending, setSuspending] = useState<{ days: number | null } | null>(null);
-    // 받은 후기 (the latest 20) and the one waiting for the delete confirm.
-    const [reviews, setReviews] = useState<{ rows: ReviewRow[]; total: number } | null>(null), [removing, setRemoving] = useState<ReviewRow | null>(null);
+    // 이용 정지: one button opens the form (period and reason); 정지 해제 asks first.
+    const [suspendDays, setSuspendDays] = useState<number>(7), [suspendReason, setSuspendReason] = useState(''), [suspendForm, setSuspendForm] = useState(false), [clearing, setClearing] = useState(false);
+    // 받은 후기 (the latest 20) and the one waiting for the delete confirm; the same for a trade.
+    const [reviews, setReviews] = useState<{ rows: ReviewRow[]; total: number } | null>(null), [removing, setRemoving] = useState<ReviewRow | null>(null), [removingTrade, setRemovingTrade] = useState<TradeRow | null>(null);
     const load = useCallback(() => Promise.all([
         api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))),
         api<{ reviews: ReviewRow[]; total: number }>(`users/${userId}/reviews`).then(d => setReviews({ rows: d.reviews, total: d.total })).catch(() => setReviews(null)),
@@ -39,7 +41,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     const run = async (task: () => Promise<unknown>, message: string) => {
         setBusy(true);
-        try { await task(); toast(message); setRevoke(null); setSuspending(null); setRemoving(null); await load(); onChange?.(); }
+        try { await task(); toast(message); setRevoke(null); setSuspendForm(false); setClearing(false); setRemoving(null); setRemovingTrade(null); await load(); onChange?.(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     };
@@ -59,8 +61,8 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
     const active = data.grants.filter(g => g.expires_at === null || g.expires_at > now);
     const pending = data.applications.filter(a => a.status === 'pending');
     const suspendedUntil = u.suspended_until && u.suspended_until > now ? u.suspended_until : null;
-    const suspendEnd = (t: number) => t >= SUSPEND_FOREVER ? '영구' : suspendEndText(t) + '까지';
     const suspend = (days: number | null) => () => api(`manage/users/${u.id}/suspend`, 'POST', { days, reason: days === null ? '' : suspendReason.trim() }).then(() => { if (days !== null) setSuspendReason(''); });
+    const sanctions = data.sanctions || [], trades = data.trades || [];
 
     return <div className="member-panel">
         <div className="mp-head">
@@ -106,42 +108,64 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>지난 신청</h4>
             {data.applications.filter(a => a.status !== 'pending').slice(0, 8).map(a => <div key={a.id} className="mp-row small"><span className="grow">{applicationTitle(a)}</span><span className="muted">{APPLICATION_STATUS_NAMES[a.status]}</span></div>)}
         </div>}
-        {u.role !== 'manager' && (!u.deleted_at || suspendedUntil) && <div className="mp-block">
-            <h4>이용 정지{suspendedUntil && <span className="muted small"> {suspendEnd(suspendedUntil)}</span>}</h4>
-            {suspendedUntil ? <div className="mp-row">
+        {/* 이용 정지: shown while one runs or once there is a record; a new one starts from 계정 below. */}
+        {u.role !== 'manager' && (suspendedUntil || sanctions.length > 0) && <div className="mp-block">
+            <h4>이용 정지{suspendedUntil && <span className="muted small"> {suspendUntilText(suspendedUntil)}</span>}</h4>
+            {suspendedUntil && <div className="mp-row">
                 <span className="grow">{u.suspend_reason ? `사유: ${u.suspend_reason}` : '이용 정지 중'}</span>
-                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setSuspending({ days: null })}>정지 해제</button>
-            </div> : <div className="mp-suspend">
-                <div className="chip-row" role="group" aria-label="정지 기간">{SUSPEND_DAYS.map(d => <button type="button" key={d} className="chip chip-sm" aria-pressed={suspendDays === d} onClick={() => setSuspendDays(d)}>{suspendDaysLabel(d)}</button>)}</div>
-                <div className="chip-row" role="group" aria-label="정지 사유 선택">{SUSPEND_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={suspendReason === r} onClick={() => setSuspendReason(r)}>{r}</button>)}</div>
-                <input className="input" value={suspendReason} onChange={e => setSuspendReason(e.target.value)} maxLength={100} placeholder="정지 사유" aria-label="정지 사유" />
-                <button type="button" className="btn btn-dark btn-sm" disabled={busy || suspendReason.trim().length < 2} onClick={() => setSuspending({ days: suspendDays })}>이용 정지</button>
+                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setClearing(true)}>정지 해제</button>
             </div>}
-            {(data.sanctions || []).slice(0, 5).map(x => <div key={x.id} className="mp-row small"><span className="grow">{x.days === null ? '정지 해제' : `이용 정지 ${suspendDaysLabel(x.days)}`}{x.reason && <span className="muted"> · {x.reason}</span>}</span><span className="muted">{dateText(x.created_at)}</span></div>)}
+            {sanctions.length > 0 && <>
+                <h5 className="mp-sub">기록</h5>
+                {sanctions.slice(0, 5).map(x => <div key={x.id} className="mp-row small"><span className="grow">{x.days === null ? '정지 해제' : `이용 정지 ${suspendDaysLabel(x.days)}`}{x.reason && <span className="muted"> · {x.reason}</span>}</span><span className="muted">{dateText(x.created_at)}</span></div>)}
+            </>}
         </div>}
-        {!u.deleted_at && reviews && <div className="mp-block">
-            <h4>받은 후기{reviews.total > 0 && <span className="muted small"> {reviews.total}건</span>}</h4>
-            {reviews.rows.length ? reviews.rows.map(r => <div key={r.id} className="mp-row mp-review">
+        {/* A trade counts once the other member confirmed it; the manager removes one that never happened. */}
+        {trades.length > 0 && <div className="mp-block">
+            <h4>거래</h4>
+            {trades.map(t => <div key={t.id} className="mp-row mp-review">
+                <span className="grow">{t.title || '삭제된 글'} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
+                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemovingTrade(t)}>삭제</button>
+            </div>)}
+        </div>}
+        {!u.deleted_at && reviews && reviews.total > 0 && <div className="mp-block">
+            <h4>받은 후기 <span className="muted small">{reviews.total}건</span></h4>
+            {reviews.rows.map(r => <div key={r.id} className="mp-row mp-review">
                 <span className="grow"><b>{reviewName(r.good)}</b> <span className="muted small">{r.nickname} · {dateText(r.created_at)}</span>
                     {r.tags.length > 0 && <span className="mp-review-text">{r.tags.join(', ')}</span>}
                     {r.text && <span className="mp-review-text">{r.text}</span>}</span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemoving(r)}>삭제</button>
-            </div>) : <p className="muted small">받은 후기 없음</p>}
+            </div>)}
         </div>}
         {u.role !== 'manager' && !u.deleted_at && <div className="mp-block">
             <h4>계정</h4>
-            <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
+            <div className="row">
+                <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
+                {!suspendedUntil && <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setSuspendForm(true)}>이용 정지</button>}
+            </div>
         </div>}
         <Modal open={!!revoke} onClose={() => { if (!busy) setRevoke(null); }} title={revoke ? `${u.nickname}님 ${revoke.name} 회수` : ''} description={revoke?.description}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRevoke(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (revoke) void run(revoke.task, revoke.done); }}>회수</button></>}>
             <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
         </Modal>
-        <Modal open={!!suspending} onClose={() => { if (!busy) setSuspending(null); }} title={suspending?.days === null ? `${u.nickname}님 이용 정지 해제` : `${u.nickname}님 이용 정지 ${suspendDaysLabel(suspending?.days ?? 0)}`}
-            description={suspending && suspending.days !== null ? `사유: ${suspendReason.trim()}` : undefined}
-            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setSuspending(null)}>취소</button>{suspending?.days === null
-                ? <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(suspend(null), '이용 정지 해제')}>해제</button>
-                : <button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (suspending) void run(suspend(suspending.days), '이용 정지 완료'); }}>정지</button>}</>}>
+        <Modal open={suspendForm} onClose={() => { if (!busy) setSuspendForm(false); }} title={`${u.nickname}님 이용 정지`}
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setSuspendForm(false)}>취소</button>
+                <button type="button" className="btn btn-danger-solid" disabled={busy || suspendReason.trim().length < 2} onClick={() => void run(suspend(suspendDays), '이용 정지 완료')}>정지</button></>}>
+            <div className="form-stack">
+                <div className="field"><span className="field-label">기간</span>
+                    <div className="chip-row" role="group" aria-label="정지 기간">{SUSPEND_DAYS.map(d => <button type="button" key={d} className="chip chip-sm" aria-pressed={suspendDays === d} onClick={() => setSuspendDays(d)}>{suspendDaysLabel(d)}</button>)}</div></div>
+                <div className="field"><span className="field-label">사유</span>
+                    <div className="chip-row" role="group" aria-label="정지 사유 선택">{SUSPEND_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={suspendReason === r} onClick={() => setSuspendReason(r)}>{r}</button>)}</div>
+                    <input className="input" value={suspendReason} onChange={e => setSuspendReason(e.target.value)} maxLength={100} placeholder="정지 사유" aria-label="정지 사유" /></div>
+            </div>
+        </Modal>
+        <Modal open={clearing} onClose={() => { if (!busy) setClearing(false); }} title={`${u.nickname}님 이용 정지 해제`}
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setClearing(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(suspend(null), '이용 정지 해제')}>해제</button></>}>
             <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+        </Modal>
+        <Modal open={!!removingTrade} onClose={() => { if (!busy) setRemovingTrade(null); }} title="거래 삭제" description="거래 횟수와 이 거래의 후기가 빠집니다."
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemovingTrade(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (removingTrade) void run(() => api(`manage/trades/${removingTrade.id}`, 'DELETE'), '삭제 완료'); }}>삭제</button></>}>
+            {removingTrade && <p className="small">{removingTrade.title || '삭제된 글'} · {removingTrade.partner_nickname}</p>}
         </Modal>
         <Modal open={!!removing} onClose={() => { if (!busy) setRemoving(null); }} title="후기 삭제" description="복구할 수 없습니다."
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemoving(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (removing) void run(() => api(`manage/reviews/${removing.id}`, 'DELETE'), '삭제 완료'); }}>삭제</button></>}>

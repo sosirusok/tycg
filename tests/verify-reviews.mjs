@@ -4,9 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // 거래 후기 and the trade count (WP23): after a post is 거래완료 its author names the member they
-// traded with from the post's partners (a chat with the post's card, or a 제시 on it); that writes one
-// trade per post and a '거래 후기 남기기' card in their chat. The seller and the buyer may each leave one
-// 후기 within 30 days; profiles count trades and 좋아요. Only the manager deletes a 후기.
+// traded with from the post's partners (a chat with the post's card, or the accepted 제시 on it); that
+// writes one trade per post and a '거래 후기 남기기' card in their chat. The named member confirms the
+// trade with their 후기; only then does it count and may the author review them. Each side leaves one
+// 후기 within 30 days; profiles count confirmed trades and 좋아요. Only the manager removes a 후기 or a
+// trade, and a removed one cannot be written again.
 // Runs only against a local Worker (see scripts/test-local.mjs, 8790).
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790');
 assert.ok(['127.0.0.1', 'localhost'].includes(endpoint.hostname), 'Local Worker origin required.');
@@ -106,7 +108,7 @@ equal((await s(`posts/${P}/trade`, 'POST', {})).status, 400, 'a trade needs a pa
 const trade = await s(`posts/${P}/trade`, 'POST', { partnerId: B });
 equal(trade.status, 201, 'S records the trade with B (201)');
 const T = trade.data.trade;
-equal([T.seller_id, T.buyer_id, T.price, T.post_id], [S, B, 300000, P], 'the author of a sale is the seller; the price is the post price');
+equal([T.seller_id, T.buyer_id, T.price, T.post_id, T.author_id, T.confirmed], [S, B, 300000, P, S, 0], 'the author of a sale is the seller; the price is the post price; not confirmed yet');
 equal((await s(`posts/${P}/trade`, 'POST', { partnerId: B })).status, 409, 'a second trade on the post is refused (409)');
 equal((await s(`posts/${P}/trade`, 'POST', { partnerId: C })).status, 400, 'a non-partner is still refused (400) after the trade');
 equal((await s(`posts/${P}/partners`)).data.trade?.id, T.id, 'the partners call returns the recorded trade');
@@ -115,11 +117,20 @@ equal((await s(`posts/${P}/partners`)).data.trade?.id, T.id, 'the partners call 
 const roomB = (await b(`chats/${chatSB}/messages`)).data;
 const card = roomB.messages.find(m => m.type === 'review');
 check(card && card.reference_id === T.id && card.sender_id === S && card.body === '거래 후기 남기기', 'B\'s chat shows the 거래 후기 남기기 card');
-check(roomB.trades.some(t => t.id === T.id && t.post_id === P && t.title.includes('후기 판매') && t.reviews.length === 0), 'B\'s chat returns the trade with no 후기 yet');
+check(roomB.trades.some(t => t.id === T.id && t.post_id === P && t.title.includes('후기 판매') && t.reviews.length === 0 && t.author_id === S && t.confirmed === 0 && t.removed === 0), 'B\'s chat returns the unconfirmed trade with no 후기 yet');
 check((await s(`chats/${chatSB}/messages`)).data.messages.some(m => m.type === 'review' && m.reference_id === T.id), 'S sees the same card');
 check(!(await c(`chats/${chatSC}/messages`)).data.messages.some(m => m.type === 'review'), 'no card in C\'s chat');
 const listB = (await b('chats')).data.chats.find(x => x.id === chatSB);
 equal([listB.last_message, listB.unread > 0], ['거래 후기 남기기', true], 'B\'s chat list shows the card as the latest, unread');
+
+// --- Confirmation: the author waits for the named member's 후기 ---
+const early = await s(`trades/${T.id}/review`, 'POST', { good: false, tags: ['잠수'] });
+equal(early.status, 409, 'the author cannot review before the other member confirms (409)');
+check(early.data.error.includes('확인'), 'the refusal says the trade waits for confirmation');
+equal([(await guest(`users/${S}`)).data.user.tradeCount, (await guest(`users/${B}`)).data.user.tradeCount], [0, 0], 'an unconfirmed trade counts for nobody');
+const quietPoll = (await b(`chats/${chatSB}/messages?after=${Number.MAX_SAFE_INTEGER - 1}`)).data;
+check(!('trades' in quietPoll), 'a poll without news leaves the trades out');
+check('trades' in (await b(`chats/${chatSB}/messages?after=${Number.MAX_SAFE_INTEGER - 1}&trades=1`)).data, 'a poll asking for them (trades=1) gets them');
 
 // --- 후기 ---
 equal((await b(`trades/${T.id}/review`, 'POST', { good: true, tags: ['잠수'] })).status, 400, 'a 좋아요 takes only the 좋아요 tags');
@@ -129,6 +140,11 @@ equal((await b(`trades/${T.id}/review`, 'POST', { good: true, tags: [], text: '�
 const reviewB = await b(`trades/${T.id}/review`, 'POST', { good: true, tags: ['답장 빠름'], text: '  빠른 거래\n감사합니다  ' });
 equal(reviewB.status, 201, 'B reviews S (좋아요, 답장 빠름) (201)');
 equal([reviewB.data.review.target_id, reviewB.data.review.good, reviewB.data.review.tags, reviewB.data.review.text], [S, 1, ['답장 빠름'], '빠른 거래 감사합니다'], 'the 후기 targets S as one line');
+equal(reviewB.data.confirmed, true, 'B\'s 후기 confirms the trade');
+const lastSeenId = roomB.messages.at(-1).id;
+const confirmPoll = (await s(`chats/${chatSB}/messages?after=${lastSeenId}`)).data;
+check(confirmPoll.messages.some(m => m.type === 'system' && m.sender_id === B && m.body === '거래가 확인되었습니다.'), 'the chat gets 거래가 확인되었습니다. from B');
+check(confirmPoll.trades?.find(t => t.id === T.id)?.confirmed === 1, 'the poll that brings that line brings the confirmed trade');
 equal((await b(`trades/${T.id}/review`, 'POST', { good: false, tags: [] })).status, 409, 'B cannot review the same trade again (409)');
 equal((await c(`trades/${T.id}/review`, 'POST', { good: true, tags: [] })).status, 403, 'a third member cannot review the trade (403)');
 equal((await guest(`trades/${T.id}/review`, 'POST', { good: true, tags: [] })).status, 401, 'a guest cannot review');
@@ -164,7 +180,7 @@ sql(`UPDATE trades SET created_at=${Date.now() - 31 * DAY} WHERE id='${T2.id}'`)
 const late = await d(`trades/${T2.id}/review`, 'POST', { good: false, tags: ['잠수'] });
 equal(late.status, 409, 'a 후기 more than 30 days after the trade is refused');
 check(late.data.error.includes('30일'), 'the refusal names the 30 days');
-equal((await guest(`users/${S}`)).data.user.tradeCount, 2, 'S now has 2 trades');
+equal((await guest(`users/${S}`)).data.user.tradeCount, 1, 'S still has 1 trade: the one with D was never confirmed');
 
 // --- 제시 partners: a chat opened by 제시하기 has no post card; the accepted 제시 gives the price ---
 const P3 = (await s('posts', 'POST', sale('제시 거래', 500000))).data.id;
@@ -177,7 +193,7 @@ equal((await s(`posts/${P3}/status`, 'PATCH', { status: 'closed' })).status, 200
 const p3 = (await s(`posts/${P3}/partners`)).data.partners;
 equal(p3[0]?.id, D, 'the sender of the accepted 제시 comes first');
 equal(p3[0]?.accepted_amount, 450000, 'with the accepted amount');
-check(p3.some(x => x.id === C), 'a member whose 제시 was not accepted is a partner too');
+check(!p3.some(x => x.id === C), 'a member whose 제시 was not accepted (ended by the other acceptance) is not a partner');
 const T3 = await s(`posts/${P3}/trade`, 'POST', { partnerId: D });
 equal([T3.status, T3.data.trade?.price, T3.data.chatId], [201, 450000, offerD.data.chatId], 'the trade price is the accepted 제시, in the 제시 chat');
 
@@ -188,6 +204,8 @@ equal((await c(`chats/${chatBC}/messages`, 'POST', { body: '팝니다', postId: 
 equal((await b(`posts/${want}/status`, 'PATCH', { status: 'closed' })).status, 200, 'B closes the 구매 post');
 const T4 = (await b(`posts/${want}/trade`, 'POST', { partnerId: C })).data.trade;
 equal([T4?.seller_id, T4?.buyer_id], [C, B], 'on a 구매 post the partner is the seller');
+equal((await c(`trades/${T4.id}/review`, 'POST', { good: true, tags: ['설명과 같음'] })).status, 201, 'C (the seller here) confirms with a 후기');
+equal((await b(`trades/${T4.id}/review`, 'POST', { good: true, tags: [] })).status, 201, 'then B, the author, reviews C');
 
 // --- Manager-only delete ---
 const idB = reviewB.data.review.id;
@@ -199,8 +217,25 @@ equal((await guest(`users/${S}/reviews`)).data.total, 1, 'the 후기 is still th
 equal((await manager(`manage/reviews/${idB}`, 'DELETE')).status, 200, 'the manager deletes the 후기');
 equal((await manager(`manage/reviews/${idB}`, 'DELETE')).status, 404, 'a deleted 후기 is gone (404)');
 const afterDelete = (await guest(`users/${S}`)).data.user;
-equal([afterDelete.goodCount, afterDelete.reviewCount, afterDelete.tradeCount], [0, 0, 3], 'S loses the 좋아요 but keeps the trades');
+equal([afterDelete.goodCount, afterDelete.reviewCount, afterDelete.tradeCount], [0, 0, 1], 'S loses the 좋아요 but keeps the confirmed trade');
 equal((await guest(`users/${S}/reviews`)).data.reviews.length, 0, 'the 후기 tab is empty');
+equal((await b(`trades/${T.id}/review`, 'POST', { good: false, tags: ['잠수'] })).status, 409, 'B cannot write the deleted 후기 again (409)');
+const removedCard = (await b(`chats/${chatSB}/messages`)).data.trades.find(t => t.id === T.id).reviews.find(r => r.author_id === B);
+equal([removedCard?.removed, removedCard?.text, removedCard?.tags], [1, '', []], 'B\'s card shows the 후기 as deleted, without its content');
+
+// --- Manager-only trade removal ---
+equal((await d(`trades/${T3.data.trade.id}/review`, 'POST', { good: true, tags: ['약속 잘 지킴'] })).status, 201, 'D confirms the 제시 trade with a 후기');
+equal([(await guest(`users/${S}`)).data.user.tradeCount, (await guest(`users/${S}`)).data.user.goodCount], [2, 1], 'S counts 2 trades and D\'s 좋아요');
+const idT3 = T3.data.trade.id;
+equal((await s(`manage/trades/${idT3}`, 'DELETE')).status, 403, 'a member removing a trade gets 403');
+equal((await adm(`manage/trades/${idT3}`, 'DELETE')).status, 403, 'a 관리자-grade member gets 403');
+equal((await guest(`manage/trades/${idT3}`, 'DELETE')).status, 401, 'a guest gets 401');
+equal((await manager(`manage/trades/${idT3}`, 'DELETE')).status, 200, 'the manager removes the trade');
+equal((await manager(`manage/trades/${idT3}`, 'DELETE')).status, 404, 'a removed trade is gone (404)');
+equal([(await guest(`users/${S}`)).data.user.tradeCount, (await guest(`users/${S}`)).data.user.goodCount, (await guest(`users/${D}`)).data.user.tradeCount], [1, 0, 0], 'the trade and its 좋아요 leave both counts');
+equal((await s(`trades/${idT3}/review`, 'POST', { good: true, tags: [] })).status, 404, 'a removed trade takes no 후기');
+equal((await s(`posts/${P3}/trade`, 'POST', { partnerId: D })).status, 409, 'the post cannot get another trade');
+check((await manager(`manage/users/${S}`)).data.trades.every(t => t.id !== idT3), 'the member panel lists the trades without the removed one');
 
 // --- Paging: 20 per page ---
 const many = Array.from({ length: 21 }, (_, i) => `('${T.id}','pg${i}_${run}','${S}',${i % 2},'[]','',${Date.now() - i * 1000})`).join(',');
@@ -215,5 +250,16 @@ const before = (await guest(`users/${B}`)).data.user.tradeCount;
 equal(before, 2, 'B has 2 trades (P as the buyer, the 구매 post)');
 equal((await s(`posts/${P}`, 'DELETE')).status, 200, 'S deletes P');
 equal((await guest(`users/${B}`)).data.user.tradeCount, before, 'B still counts the trade after the post is gone');
+
+// --- Blocks: a pair where either side blocked the other cannot be named ---
+const P5 = (await s('posts', 'POST', sale('차단 거래'))).data.id;
+equal((await d(`chats/${chatSD}/messages`, 'POST', { body: '이 글도 문의합니다', postId: P5 })).status, 201, 'D asks about P5');
+const cards = async () => (await s(`chats/${chatSD}/messages`)).data.messages.filter(m => m.type === 'review').length;
+const cardsBefore = await cards();
+equal((await d('blocks', 'POST', { userId: S, active: true })).status, 200, 'D blocks S');
+equal((await s(`posts/${P5}/status`, 'PATCH', { status: 'closed' })).status, 200, 'S closes P5');
+check(!(await s(`posts/${P5}/partners`)).data.partners.some(x => x.id === D), 'a member who blocked the author is not listed');
+equal((await s(`posts/${P5}/trade`, 'POST', { partnerId: D })).status, 403, 'naming them is refused (403)');
+equal(await cards(), cardsBefore, 'no new card reaches the blocked chat');
 
 console.log(`verify-reviews: ${checks} checks passed`);

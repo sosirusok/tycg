@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, STATUS_NAMES, exchangeLabel, listingPrice, priceText, relativeTime, type Post } from '../../shared/market';
+import { KIND_ICONS, STATUS_NAMES, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
+import { TradeSheet } from '../components/TradeSheet';
 
 const TABS = [
     { id: 'posts', label: '내 글' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
@@ -26,9 +27,10 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
 type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number };
-// 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now).
+// 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
+// line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
-const priceDrop = (p: SavedPost) => p.price_drop && <span className="price-drop"><span className="tag tag-drop">가격 내림</span><del>{priceText(p.price_drop.from)}</del><b>{priceText(p.price_drop.to)}</b></span>;
+const priceDrop = (p: SavedPost) => p.price_drop && <span className="tag tag-drop">가격 내림</span>;
 // GET /me/usage (null limits are the manager's: no cap).
 type Usage = {
     perks: { bumpsPerDay: number | null; bumpGapHours: number | null; openPosts: number | null };
@@ -45,8 +47,9 @@ function kstClock(t: number) {
 const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).values()];
 
 // 끌올 in the same states as the detail page: '오늘 2/6', '15:40부터 가능' or '오늘 끌올 모두 사용'.
-function bumpState(post: OwnPost, usage: Usage | null, lostProxy: boolean, now: number) {
-    if (!usage || post.status !== 'open' || post.hidden || lostProxy) return { disabled: true, hint: '' };
+// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 거래완료 is allowed).
+function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
+    if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '' };
     const next = (post.bumped_at || post.created_at) + (usage.perks.bumpGapHours || 0) * HOUR;
     if (next > now) return { disabled: true, hint: `${kstClock(next)}부터 가능` };
     if (usage.bumpsLeft === 0) return { disabled: true, hint: '오늘 끌올 모두 사용' };
@@ -54,14 +57,14 @@ function bumpState(post: OwnPost, usage: Usage | null, lostProxy: boolean, now: 
 }
 
 // A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and 상태.
-function SellerRow({ post, usage, now, busy, lostProxy, onBump, onStatus }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; lostProxy: boolean; onBump: () => void; onStatus: (status: string) => void;
+function SellerRow({ post, usage, now, busy, closeOnly, onBump, onStatus }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onStatus: (status: string) => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
-    const bump = bumpState(post, usage, lostProxy, now);
+    const bump = bumpState(post, usage, closeOnly, now);
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
-    // Without 대리 인증 a 대리(진행) post can only be closed (the server refuses the rest).
-    const statuses = Object.entries(STATUS_NAMES).filter(([k]) => !lostProxy || k === post.status || k === 'closed');
+    // Without 대리 인증 a 대리(진행) post, and under 이용 정지 any post, can only be closed (the server refuses the rest).
+    const statuses = Object.entries(STATUS_NAMES).filter(([k]) => !closeOnly || k === post.status || k === 'closed');
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
@@ -96,6 +99,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [data, setData] = useState<ListState | null>(null);
     const [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState<number | null>(null), [now, setNow] = useState(Date.now());
+    // '거래한 회원' after a post is set to 거래완료 here, as on the detail page (WP23).
+    const [tradePost, setTradePost] = useState<number | null>(null);
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -125,6 +130,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     const items = data?.tab === tab ? data.items : null;
     const manager = me.role === 'manager';
+    const suspended = !!me.suspended_until && me.suspended_until > now;
 
     async function unblock(id: string) {
         try { await api('blocks', 'POST', { userId: id, active: false }); toast('차단 해제'); setRev(n => n + 1); } catch (e) { toast.error(errorText(e)); }
@@ -164,6 +170,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
             await api(`posts/${post.id}/status`, 'PATCH', { status });
             patchPost(post.id, { status });
             toast(`상태 변경: ${STATUS_NAMES[status]}`);
+            if (status === 'closed' && !suspended) setTradePost(post.id);
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
@@ -177,9 +184,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
                 : tab === 'posts' ? (items.length ? <>
-                    {usageLine && <p className="mine-usage">{usageLine}</p>}
+                    {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usageLine && <p className="mine-usage">{usageLine}</p>}
                     <ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        lostProxy={p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy')} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
                     {moreButton}
                 </> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />)
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
@@ -197,5 +204,6 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
+        <TradeSheet postId={tradePost} onClose={() => setTradePost(null)} />
     </div>;
 }

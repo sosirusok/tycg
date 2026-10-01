@@ -109,6 +109,8 @@
 
 /* Toasts (sonner) */
 .toast { font-family: var(--font) !important; font-size: var(--fs-14) !important; background: var(--ink) !important; color: var(--white) !important; border: 0 !important; border-radius: var(--r-12) !important; box-shadow: var(--shadow-pop) !important; }
+/* A toast's action ('되돌리기' after deleting a saved search): white on the ink toast. */
+.toast [data-button] { height: 28px !important; padding: 0 10px !important; border-radius: var(--r-pill) !important; background: var(--white) !important; color: var(--ink) !important; font-size: var(--fs-13) !important; font-weight: 600 !important; }
 
 /* Member identity: avatar, nickname, grade and verification badges */
 .avatar { display: inline-grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); font-size: var(--fs-16); font-weight: 700; }

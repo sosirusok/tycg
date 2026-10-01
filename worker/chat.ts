@@ -40,6 +40,22 @@ export function guardedMessageStatements(conversationId: string, senderId: strin
     ];
 }
 
+// The trades between the two members of a chat (WP23) with their 후기, for its '거래 후기 남기기' cards. A
+// chat is the one conversation of its pair, so the trades of the pair are the ones whose card is here.
+// A removed 후기 keeps only who wrote it (the card of its author then says it was removed).
+function pairTradeStatements(userA: string, userB: string) {
+    const pair = '(t.seller_id=? AND t.buyer_id=?) OR (t.seller_id=? AND t.buyer_id=?)', args = [userA, userB, userB, userA];
+    return [
+        db().prepare(`SELECT t.id,t.post_id,t.seller_id,t.buyer_id,t.created_at,t.author_id,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,(t.removed_at IS NOT NULL) AS removed,p.title
+            FROM trades t LEFT JOIN posts p ON p.id=t.post_id WHERE ${pair}`).bind(...args),
+        db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,CASE WHEN r.removed_at IS NULL THEN r.tags ELSE '[]' END AS tags,CASE WHEN r.removed_at IS NULL THEN r.text ELSE '' END AS text,
+            r.created_at,(r.removed_at IS NOT NULL) AS removed FROM reviews r JOIN trades t ON t.id=r.trade_id WHERE ${pair}`).bind(...args),
+    ];
+}
+function pairTrades(trades: D1Result, reviews: D1Result) {
+    return trades.results.map((t: any) => ({ ...t, reviews: reviews.results.filter((v: any) => v.trade_id === t.id).map((v: any) => ({ ...v, tags: parse(v.tags, []) })) }));
+}
+
 // Offer rows written before the 제시 wording still hold '가격 제안', so the preview names the type instead.
 const preview = "(SELECT CASE WHEN m.type='offer' THEN '가격 제시' WHEN m.body='' AND m.attachments!='[]' THEN '사진' ELSE m.body END FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1)";
 
@@ -131,22 +147,24 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         const c = await chatMember(p[1], u.id);
         if (method === 'GET') {
             const after = url.searchParams.has('after'), cursor = after ? (Number(url.searchParams.get('after')) || 0) : (Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER);
-            // The trades between the two members (WP23) and their 후기, for the '거래 후기 남기기' cards. A chat is
-            // the one conversation of its pair, so the trades of the pair are the ones whose card is here.
-            const pair = '(t.seller_id=? AND t.buyer_id=?) OR (t.seller_id=? AND t.buyer_id=?)', pairArgs = [c.user_a, c.user_b, c.user_b, c.user_a];
-            const [r, seen, offers, applications, trades, reviews] = await db().batch([
+            // The trades of the pair (WP23) for the '거래 후기 남기기' cards are read on the first load and when the
+            // room asks (?trades=1, after its member writes a 후기); a 4-second poll reads them only when it
+            // brings a card or a system line (a trade confirmed), so the polls of a quiet chat skip them.
+            const withTrades = (!after && !url.searchParams.has('before')) || url.searchParams.get('trades') === '1';
+            const results = await db().batch([
                 db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
                 db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
                 // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
                 db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
                 db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
-                db().prepare(`SELECT t.id,t.post_id,t.seller_id,t.buyer_id,t.created_at,p.title FROM trades t LEFT JOIN posts p ON p.id=t.post_id WHERE ${pair}`).bind(...pairArgs),
-                db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at FROM reviews r JOIN trades t ON t.id=r.trade_id WHERE ${pair}`).bind(...pairArgs),
+                ...withTrades ? pairTradeStatements(c.user_a, c.user_b) : [],
             ]);
+            const [r, seen, offers, applications] = results;
+            let tradeRows = withTrades ? results.slice(4) : null;
+            if (!tradeRows && r.results.some((m: any) => m.type === 'review' || m.type === 'system')) tradeRows = await db().batch(pairTradeStatements(c.user_a, c.user_b));
             const messages = r.results.map((m: any) => ({ ...m, attachments: parse(m.attachments, []) }));
-            const tradeList = trades.results.map((t: any) => ({ ...t, reviews: reviews.results.filter((v: any) => v.trade_id === t.id).map((v: any) => ({ ...v, tags: parse(v.tags, []) })) }));
             return json({
-                messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results, trades: tradeList,
+                messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results, ...tradeRows ? { trades: pairTrades(tradeRows[0], tradeRows[1]) } : {},
                 hasMore: r.results.length === 100, readThrough: (seen.results[0] as any)?.last_id || 0, blocked: await blocked(c.user_a, c.user_b),
             });
         }

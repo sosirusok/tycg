@@ -6,11 +6,12 @@ import { Avatar, Modal, NameLine } from './ui';
 
 type Partner = { id: string; nickname: string; role: string; grade: string; badges: string[]; conversation_id: string; accepted_amount: number | null };
 
-// '거래한 회원' (WP23), opened after the author sets a post to 거래완료 on the detail page or from the
-// chat's pinned bar (with that chat's partner preselected). Picking a member records the trade and puts
-// a '거래 후기 남기기' card in their chat. The status change is already saved, so closing the sheet
-// ('사이트 밖 거래 · 건너뛰기', X or the overlay) changes nothing. It stays shut when the post has no
-// partners or already has a trade. `postId` null keeps it closed.
+// '거래한 회원' (WP23), opened after the author sets a post to 거래완료 on the detail page, in 내 글 or
+// from the chat's pinned bar (with that chat's partner preselected), and later from the detail page's
+// owner tools. Picking a member records the trade and puts a '거래 후기 남기기' card in their chat; it
+// counts once that member confirms it with their 후기. The status change is already saved, so closing
+// the sheet ('사이트 밖 거래 · 건너뛰기', X or the overlay) changes nothing. It stays shut when the post
+// has no partners or already has a trade. `postId` null keeps it closed.
 export function TradeSheet({ postId, preselect, onClose, onDone }: { postId: number | null; preselect?: string; onClose: () => void; onDone?: (chatId: string) => void }) {
     const [partners, setPartners] = useState<Partner[] | null>(null), [pick, setPick] = useState(''), [busy, setBusy] = useState(false);
     const close = useRef(onClose);
@@ -40,7 +41,7 @@ export function TradeSheet({ postId, preselect, onClose, onDone }: { postId: num
         finally { setBusy(false); }
     }
 
-    return <Modal open={postId !== null && !!partners} onClose={() => { if (!busy) close.current(); }} title="거래한 회원" description="고른 회원과의 채팅에 후기 카드가 올라갑니다."
+    return <Modal open={postId !== null && !!partners} onClose={() => { if (!busy) close.current(); }} title="거래한 회원"
         footer={<>
             <button type="button" className="btn btn-text trade-skip" disabled={busy} onClick={() => close.current()}>사이트 밖 거래 · 건너뛰기</button>
             <button type="button" className="btn btn-primary btn-lg" disabled={busy || !pick} onClick={() => void save()}>등록</button>

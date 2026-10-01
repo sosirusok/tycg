@@ -123,6 +123,9 @@ equal((await manager(`manage/users/${B}/suspend`, 'POST', { days: 7, reason: '' 
 equal((await manager(`manage/users/${B}/suspend`, 'POST', { days: null })).status, 409, 'clearing a member who is not suspended is refused');
 equal((await guest(`users/${B}`)).data.user.suspended, undefined, 'B is not suspended yet');
 
+const offerOnB = await a('offers', 'POST', { postId: postB.data.id, amount: 90000 });
+equal(offerOnB.status, 201, 'A sends a 제시 on B\'s sale');
+
 // --- 7-day suspension ---
 const before = Date.now();
 const suspended = await manager(`manage/users/${B}/suspend`, 'POST', { days: 7, reason: '사기·먹튀' });
@@ -138,6 +141,10 @@ blockedWrite(await b(`posts/${postB.data.id}/price`, 'PATCH', { price: 90000 }),
 blockedWrite(await b(`posts/${postB.data.id}/feature`, 'PUT', { active: true }), 'B\'s 상단 노출');
 blockedWrite(await b('applications', 'POST', { kind: 'badge', target: 'identity' }), 'B\'s application');
 check((await b(`posts/${postB.data.id}/bump`, 'POST', {})).data.error.includes('까지'), 'the refusal says until when');
+blockedWrite(await b(`offers/${offerOnB.data.id}`, 'PATCH', { action: 'accepted' }), 'B accepting a 제시');
+const toSuspended = await d('offers', 'POST', { postId: postB.data.id, amount: 80000 });
+equal(toSuspended.status, 409, 'a 제시 on a suspended member\'s post is refused');
+check(String(toSuspended.data.error).includes('이용 제한'), 'the refusal says the member is restricted');
 
 const managerChat = (await b('chats', 'POST', { userId: 'manager' })).data.id;
 const notice = (await b(`chats/${managerChat}/messages`)).data.messages.find(m => m.type === 'system' && m.sender_id === 'manager');
@@ -150,12 +157,15 @@ check(!(await listed(a, `author=${B}`)).includes(postB.data.id), 'B\'s post is g
 check(!(await listed(a, `q=${encodeURIComponent('제재 판매 B')}`)).includes(postB.data.id), 'B\'s post is gone from search');
 check((await listed(b, `author=${B}`)).includes(postB.data.id), 'B still sees their own post');
 check((await listed(guest, 'kind=sell&size=40')).includes(postA.data.id), 'other members\' posts stay listed');
-equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'B can still change the post status');
+blockedWrite(await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'reserved' }), 'B setting the post to 예약중');
+equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'B can still close the post');
 
 const guestView = (await guest(`users/${B}`)).data.user;
 equal([guestView.suspended, guestView.suspended_until], [true, undefined], 'others see only that B is restricted');
+equal(guestView.postCount, 0, 'others count none of B\'s posts, as the lists show none');
 const ownView = (await b(`users/${B}`)).data.user;
 check(ownView.suspended === true && ownView.suspended_until === suspended.data.suspended_until, 'B sees until when');
+check(ownView.postCount >= 1, 'B still counts their own posts');
 check((await manager(`users/${B}`)).data.user.suspended_until === suspended.data.suspended_until, 'the manager sees until when');
 check((await b('auth/me')).data.user.suspended_until === suspended.data.suspended_until, 'B\'s session carries the end');
 equal((await a(`chats/${chatAB}`)).data.chat.partner.suspended, true, 'A\'s chat room marks B as restricted');
@@ -170,6 +180,7 @@ const afterEnd = await b('posts', 'POST', sale('정지 끝난 뒤 새 글'));
 equal(afterEnd.status, 201, 'B can post once the end time has passed');
 const relisted = await listed(guest, `author=${B}`);
 check(relisted.includes(afterEnd.data.id) && relisted.includes(postB.data.id), 'B\'s posts are listed again');
+equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'open' })).status, 200, 'B can reopen the post once the suspension ends');
 equal((await manager(`manage/users/${B}`)).data.user.suspended_until, null, 'an ended suspension reads as none');
 
 // --- Clearing ---
@@ -189,7 +200,7 @@ const forever = await manager(`manage/users/${D}/suspend`, 'POST', { days: 0, re
 equal([forever.status, forever.data.suspended_until], [200, 9e15], 'suspending a member who blocked the manager works (영구)');
 const refused = await d('posts', 'POST', sale('영구 정지 중'));
 equal(refused.status, 403, 'D cannot post');
-check(refused.data.error.includes('영구'), 'the refusal says 영구');
+equal(refused.data.error, '이용 정지 중입니다. (영구)', 'the refusal says 영구, in the same form as a dated one');
 equal(sql(`SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE (c.user_a='${D}' OR c.user_b='${D}') AND m.sender_id='manager'`)[0].n, 0, 'no notice reaches a member who blocked the manager');
 const dProfile = (await d(`users/${D}`)).data.user;
 equal([dProfile.suspended, dProfile.suspended_until], [true, 9e15], 'D sees the 영구 suspension');

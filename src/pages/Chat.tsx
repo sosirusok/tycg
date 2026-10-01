@@ -3,11 +3,11 @@ import { ArrowLeft, ImagePlus, LoaderCircle, MoreHorizontal, Send, ThumbsDown, T
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, reviewName, suspendEndText, SUSPEND_FOREVER,
+    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
     type Post, type Review, type TradeKind, type User,
 } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
-import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, uploadPhoto } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { useApp } from '../app/state';
@@ -25,7 +25,8 @@ type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'cre
 type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
 type ChatFilter = 'all' | 'applications';
 // A trade between the two members (WP23) with the 후기 each of them left, for the '거래 후기 남기기' card.
-type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; reviews: Review[] };
+// author_id recorded it; it is confirmed once the other member left their 후기; removed by the manager.
+type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; author_id: string | null; confirmed: number; removed: number; reviews: Review[] };
 
 const POST_MISMATCH = '게시글 작성자를 확인해 주세요.';
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
@@ -47,8 +48,10 @@ const KIND_REPLIES: Partial<Record<TradeKind, [string[], string[]]>> = {
 };
 const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일치', '거래내역 부족'];
 // A phone number (010-1234-5678) or an account-like run of digits in a partner's message gets a
-// '더치트 조회' link, the cafes' safety step before sending money.
-const LOOKUP = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}|\d{2,6}-\d{2,6}-\d{2,8}|\d{10,14}/;
+// '더치트 조회' link, the cafes' safety step before sending money. Bank accounts have 10 to 14 digits,
+// so a dashed run with fewer (a date such as 2026-10-01, a score) is not one.
+const LOOKUP = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}|\d{2,6}-\d{2,6}-\d{2,8}|\d{10,14}/g;
+const hasLookup = (text: string) => [...text.matchAll(LOOKUP)].some(([m]) => m.replace(/\D/g, '').length >= 10);
 const PHOTOS_PER_MESSAGE = 6;
 
 function toListing(p: Post): Listing {
@@ -168,12 +171,15 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         if (lastIncoming) api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(() => activity.current()).catch(() => {});
     }, [id, me.id]);
 
-    const poll = useCallback(async (initial = false) => {
-        const d = await api<{ messages: Message[]; offers: Offer[]; applications: Application[]; trades?: Trade[]; readThrough: number; blocked: boolean; hasMore: boolean }>(`chats/${id}/messages` + (initial ? '' : `?after=${last.current}`));
+    // The trades for the review cards come with the first load, with a poll that brings a card or a
+    // system line, and when asked (`withTrades`, after this member writes a 후기); other polls leave them.
+    const poll = useCallback(async (initial = false, withTrades = false) => {
+        const d = await api<{ messages: Message[]; offers: Offer[]; applications: Application[]; trades?: Trade[]; readThrough: number; blocked: boolean; hasMore: boolean }>(`chats/${id}/messages` + (initial ? '' : `?after=${last.current}` + (withTrades ? '&trades=1' : '')));
         if (initial) setHasMore(d.hasMore);
         if (d.messages.length) { merge(d.messages); last.current = Math.max(last.current, ...d.messages.map(m => m.id)); idle.current = 0; markRead(d.messages); }
         else idle.current++;
-        setOffers(d.offers); setApps(d.applications); setTrades(d.trades || []); setReadThrough(d.readThrough); setBlocked(d.blocked);
+        setOffers(d.offers); setApps(d.applications); setReadThrough(d.readThrough); setBlocked(d.blocked);
+        if (d.trades) setTrades(d.trades);
         const offerKey = d.offers.map(o => o.id + ':' + o.status).join(',');
         if (!initial && (offerKey !== offerState.current || d.messages.some(m => m.type === 'listing' || m.type === 'offer' || m.type === 'system') || Date.now() - listingAt.current > 60000)) void refreshListing();
         offerState.current = offerKey;
@@ -266,7 +272,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     }
     // Photos from the picker, a paste or a drop; at most 6 per message, one batch at a time.
     async function attach(files: File[]) {
-        if (!files.length || uploading) return;
+        if (!files.length) return;
+        if (uploading) { toast.error(UPLOAD_BUSY); return; }
         const list = files.slice(0, Math.max(0, PHOTOS_PER_MESSAGE - photos.length));
         if (files.length > list.length) toast.error(`사진은 한 번에 ${PHOTOS_PER_MESSAGE}장까지입니다.`);
         if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
@@ -276,12 +283,14 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
     }
     // A member under 이용 정지 writes only to the manager; elsewhere the composer says until when.
-    const suspendedUntil = me.suspended_until && me.suspended_until > Date.now() && partner && partner.role !== 'manager' ? me.suspended_until : null;
-    // A pasted screenshot or a photo dropped on the room goes up like one picked from the album.
+    const suspended = !!me.suspended_until && me.suspended_until > Date.now();
+    const suspendedUntil = suspended && partner && partner.role !== 'manager' ? me.suspended_until! : null;
+    // A pasted screenshot or a photo dropped on the room goes up like one picked from the album; text
+    // copied with a picture of it (Excel, Word) stays text in the message field.
     const closed = blocked || !!partner?.deleted || !!suspendedUntil;
     function onPaste(e: ClipboardEvent<HTMLFormElement>) {
         const files = imageFiles(e.clipboardData.files);
-        if (!files.length || closed) return;
+        if (!files.length || closed || pastesText(e.target, e.clipboardData)) return;
         e.preventDefault();
         void attach(files);
     }
@@ -311,14 +320,16 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         finally { setAppBusy(''); }
     }
     // 예약중 and 거래완료 from the pinned bar; tapping the active one sets the post back to 거래중.
-    // 거래완료 then opens '거래한 회원' with this chat's partner picked (not while under 이용 정지).
+    // 거래완료 then opens '거래한 회원' with this chat's partner picked. Under 이용 정지 the post can
+    // only be closed, and the sheet stays shut.
+    const nextStatus = (status: 'reserved' | 'closed') => listing?.status === status ? 'open' : status;
     async function setListingStatus(status: 'reserved' | 'closed') {
         if (!listing || statusBusy) return;
-        const next = listing.status === status ? 'open' : status;
+        const next = nextStatus(status);
         setStatusBusy(true);
         try {
             await api(`posts/${listing.id}/status`, 'PATCH', { status: next }); setListing({ ...listing, status: next }); toast(`상태 변경: ${STATUS_NAMES[next]}`);
-            if (next === 'closed' && !(me.suspended_until && me.suspended_until > Date.now())) setTradePost(listing.id);
+            if (next === 'closed' && !suspended) setTradePost(listing.id);
             await poll(); activity.current();
         }
         catch (err) { toast.error(errorText(err)); }
@@ -382,7 +393,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                     <span className="room-listing-meta">{listingLine(listing)}</span>
                 </span>
                 {ownListing ? <span className="room-listing-actions" role="group" aria-label="거래 상태">
-                    {(['reserved', 'closed'] as const).map(st => <button type="button" key={st} className={'btn btn-sm ' + (listing.status === st ? 'btn-primary' : 'btn-line')} aria-pressed={listing.status === st} disabled={statusBusy} onClick={() => void setListingStatus(st)}>{STATUS_NAMES[st]}</button>)}
+                    {(['reserved', 'closed'] as const).map(st => <button type="button" key={st} className={'btn btn-sm ' + (listing.status === st ? 'btn-primary' : 'btn-line')} aria-pressed={listing.status === st} disabled={statusBusy || (suspended && nextStatus(st) !== 'closed')} onClick={() => void setListingStatus(st)}>{STATUS_NAMES[st]}</button>)}
                 </span> : <Link to={'/posts/' + listing.id} className="btn btn-line btn-sm">글 보기</Link>}
             </div>}
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
@@ -392,14 +403,14 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                     const day = dayLabel(m.created_at), showDay = day !== prevDay; prevDay = day;
                     const mine = m.sender_id === me.id;
                     // Not on the manager's own lines (the account for a grade deposit is the site's).
-                    const lookup = !mine && m.type === 'text' && partner?.role !== 'manager' && LOOKUP.test(m.body);
+                    const lookup = !mine && m.type === 'text' && partner?.role !== 'manager' && hasLookup(m.body);
                     return <div key={m.id}>
                         {showDay && <div className="day-sep"><span>{day}</span></div>}
                         {m.type === 'system' ? <div className="sys-msg">{m.body}</div>
                             : m.type === 'listing' ? <ListingCard postId={Number(m.reference_id)} title={m.body} />
                             : m.type === 'application' ? <AppCard app={apps.find(a => a.id === m.reference_id)} fallback={m.body} me={me} partner={partner} mine={mine} at={m.created_at} busy={appBusy === m.reference_id} onAction={appAction} next={decided && decided === m.reference_id ? nextApp : undefined} />
                             : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} onMark={markOffer} />
-                            : m.type === 'review' ? <ReviewCard trade={trades.find(t => t.id === m.reference_id)} me={me} gone={!!partner?.deleted} onSaved={() => { void poll(); }} />
+                            : m.type === 'review' ? <ReviewCard trade={trades.find(t => t.id === m.reference_id)} me={me} gone={!!partner?.deleted} onSaved={() => { void poll(false, true); }} />
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
@@ -416,7 +427,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             <form className="composer" onSubmit={send} onPaste={onPaste}>
                 {partner?.deleted ? <p className="muted small composer-blocked">탈퇴한 회원입니다.</p>
                     : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p>
-                    : suspendedUntil ? <p className="muted small composer-blocked">이용 정지 중입니다. ({suspendedUntil >= SUSPEND_FOREVER ? '영구 정지' : suspendEndText(suspendedUntil) + '까지'})</p> : <>
+                    : suspendedUntil ? <p className="muted small composer-blocked">이용 정지 중입니다. ({suspendUntilText(suspendedUntil)})</p> : <>
                     {quick.length > 0 && <div className="chip-scroll quick-replies" role="group" aria-label="빠른 답장">{quick.map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}</div>}
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
@@ -463,14 +474,16 @@ function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; o
 
 const DAY = 86400000;
 
-// '거래 후기 남기기' (WP23): 좋아요 or 아쉬워요, that side's tags and one line. Each member writes one 후기
-// within 30 days of the trade; afterwards the card shows what they wrote.
+// '거래 후기 남기기' (WP23): 좋아요 or 아쉬워요, that side's tags and one line. The member the author named
+// writes first, which confirms the trade; the author's card waits until then. Each member writes one 후기
+// within 30 days; afterwards the card shows what they wrote, or that the manager removed it.
 function ReviewCard({ trade, me, gone, onSaved }: { trade?: Trade; me: User; gone: boolean; onSaved: () => void }) {
     const [good, setGood] = useState<boolean | null>(null), [tags, setTags] = useState<string[]>([]), [text, setText] = useState(''), [busy, setBusy] = useState(false);
     if (!trade) return <div className="sys-msg">{REVIEW_CARD_TEXT}</div>;
     const mine = trade.reviews.find(r => r.author_id === me.id);
     const party = trade.seller_id === me.id || trade.buyer_id === me.id;
     const ended = Date.now() > trade.created_at + REVIEW_DAYS * DAY;
+    const waiting = trade.author_id === me.id && !trade.confirmed;
     const choose = (value: boolean) => { if (value !== good) { setGood(value); setTags([]); } };
     const toggle = (tag: string) => setTags(list => list.includes(tag) ? list.filter(t => t !== tag) : [...list, tag]);
     async function submit(e: FormEvent) {
@@ -478,17 +491,20 @@ function ReviewCard({ trade, me, gone, onSaved }: { trade?: Trade; me: User; gon
         if (busy || good === null || !trade) return;
         setBusy(true);
         try { await api(`trades/${trade.id}/review`, 'POST', { good, tags, text }); toast('후기 등록 완료'); onSaved(); }
-        catch (err) { toast.error(errorText(err)); }
+        catch (err) { toast.error(errorText(err)); onSaved(); }
         finally { setBusy(false); }
     }
+    const note = (line: string) => <p className="small muted">{line}</p>;
     return <div className="event-card review-card">
         <span className="muted small">거래완료{trade.title && <> · <Link to={'/posts/' + trade.post_id}>{trade.title}</Link></>}</span>
-        <strong>{mine ? '내 후기' : REVIEW_CARD_TEXT}</strong>
-        {mine ? <>
-            <span className="review-verdict">{mine.good ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}{reviewName(mine.good)}</span>
-            {mine.tags.length > 0 && <span className="tags">{mine.tags.map(t => <span key={t} className="tag">{t}</span>)}</span>}
-            {mine.text && <p className="small">{mine.text}</p>}
-        </> : !party ? null : gone ? <p className="small muted">탈퇴한 회원입니다.</p> : ended ? <p className="small muted">후기 기간이 끝났습니다.</p>
+        <strong>{mine && !trade.removed ? '내 후기' : REVIEW_CARD_TEXT}</strong>
+        {trade.removed ? note('삭제된 거래입니다.')
+            : mine ? (mine.removed ? note('삭제된 후기입니다.') : <>
+                <span className="review-verdict">{mine.good ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}{reviewName(mine.good)}</span>
+                {mine.tags.length > 0 && <span className="tags">{mine.tags.map(t => <span key={t} className="tag">{t}</span>)}</span>}
+                {mine.text && <p className="small">{mine.text}</p>}
+            </>)
+            : !party ? null : gone ? note('탈퇴한 회원입니다.') : ended ? note('후기 기간이 끝났습니다.') : waiting ? note('상대가 거래를 확인하면 후기를 남길 수 있습니다.')
             : <form className="review-form" onSubmit={submit}>
                 <div className="review-pick" role="group" aria-label="후기">
                     <button type="button" className="chip" aria-pressed={good === true} onClick={() => choose(true)}><ThumbsUp size={16} />좋아요</button>

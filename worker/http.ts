@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { SUSPEND_FOREVER, suspendEndText, type User } from '../shared/market';
+import { suspendUntilText, type User } from '../shared/market';
 import { BADGES, type BadgeId } from '../shared/membership';
 
 export const MANAGER_ID = 'manager';
@@ -81,11 +81,17 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
-// '거래 3회 · 후기 좋아요 2' (WP23): the trades the member took part in as seller or buyer, and the
-// 좋아요 후기 they received. `alias` is the users table alias in the surrounding query.
+// A trade counts once the other member confirmed it (their 후기) and while the manager has not
+// removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
+export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
+// A 후기 shows while neither it nor its trade was removed by the manager.
+export const liveReview = (r: string) => `${r}.removed_at IS NULL AND EXISTS(SELECT 1 FROM trades lt WHERE lt.id=${r}.trade_id AND lt.removed_at IS NULL)`;
+
+// '거래 3회 · 후기 좋아요 2' (WP23): the confirmed trades the member took part in as seller or buyer,
+// and the 좋아요 후기 they received. `alias` is the users table alias in the surrounding query.
 export function tradeColumns(alias: string, prefix = '') {
-    return `(SELECT COUNT(*) FROM trades tr WHERE tr.seller_id=${alias}.id OR tr.buyer_id=${alias}.id) AS ${prefix}trade_count,`
-        + `(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=${alias}.id AND rv.good=1) AS ${prefix}good_count`;
+    return `(SELECT COUNT(*) FROM trades tr WHERE (tr.seller_id=${alias}.id OR tr.buyer_id=${alias}.id) AND ${countedTrade('tr')}) AS ${prefix}trade_count,`
+        + `(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=${alias}.id AND rv.good=1 AND ${liveReview('rv')}) AS ${prefix}good_count`;
 }
 
 // The one message for anything aimed at a member who left (chat, grants, temporary password).
@@ -158,11 +164,11 @@ export function requireManager(u: User) {
 }
 
 // 이용 정지 (WP22): a suspended member can still sign in, read, close or delete their posts, and write
-// to the manager's chat to appeal, but cannot write posts, 끌올, 상단 노출, change prices, send 제시,
-// apply or write to other members until suspended_until passes.
+// to the manager's chat to appeal, but cannot write posts, 끌올, 상단 노출, change prices, reopen or
+// reserve a post, send or accept 제시, apply or write to other members until suspended_until passes.
 export const isSuspended = (until: number | null | undefined, now = Date.now()) => typeof until === 'number' && until > now;
 export function requireActive(u: User) {
-    if (isSuspended(u.suspended_until)) fail(403, `이용 정지 중입니다. (${u.suspended_until! >= SUSPEND_FOREVER ? '영구 정지' : suspendEndText(u.suspended_until!) + '까지'})`);
+    if (isSuspended(u.suspended_until)) fail(403, `이용 정지 중입니다. (${suspendUntilText(u.suspended_until!)})`);
 }
 
 export function json(d: unknown, status = 200, h: Record<string, string> = {}) {

@@ -84,11 +84,12 @@
 .saved-label { flex: none; margin-right: 2px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
 .saved-chip { display: inline-flex; flex: none; align-items: center; height: 30px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--white); color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; white-space: nowrap; }
 .saved-chip:hover { border-color: var(--line-2); }
-.saved-chip > button:first-child { height: 100%; padding: 0 4px 0 12px; }
+.saved-chip > button:first-child { max-width: 180px; height: 100%; padding: 0 4px 0 12px; overflow: hidden; text-overflow: ellipsis; }
 .saved-chip > button:last-child { display: grid; place-items: center; width: 28px; height: 100%; color: var(--ink-3); }
-.saved-chip.on { border-color: var(--brand); background: var(--brand); color: var(--white); }
+/* The applied saved search is a brand outline: the solid pills below are the filters (and their x only clears one). */
+.saved-chip.on { border-color: var(--brand); color: var(--brand); }
 .saved-chip.on > button:first-child { cursor: default; }
-.saved-chip.on > button:last-child { color: var(--white); }
+.saved-chip.on > button:last-child { color: var(--brand); }
 .filter-open { display: none; }
 .board-notice { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 14px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); }
 .board-notice .btn { margin-left: auto; }
@@ -235,6 +236,8 @@
 .kind-card small { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
 .kind-card.is-locked .cicon { opacity: .5; }
 .nick-range { max-width: 360px; }
+/* 이용 정지: said at the top, before the member fills the form. */
+.editor > .alert { margin-top: 16px; }
 .restore { display: flex; align-items: center; gap: 6px; margin-top: 16px; padding: 12px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); color: var(--ink-2); }
 .restore-action { color: var(--brand); font-weight: 600; white-space: nowrap; }
 .restore-action:hover { text-decoration: underline; }
@@ -382,9 +385,8 @@
 .mp-grant { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 8px; }
 .mp-grant .select { height: 38px; font-size: var(--fs-14); }
 /* 이용 정지: period chips, reason chips, the reason and the button, one per row. */
-.mp-suspend { display: grid; gap: 8px; margin-top: 2px; }
-.mp-suspend .input { height: 38px; font-size: var(--fs-14); }
-.mp-suspend .btn { justify-self: start; }
+/* The small muted heading over a block's history rows (이용 정지 기록). */
+.mp-sub { margin: 8px 0 0; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
 .mp-review { align-items: flex-start; padding: 6px 0; }
 .mp-review b { color: var(--ink); }
 .mp-review-text { display: block; margin-top: 2px; color: var(--ink-2); font-size: var(--fs-13); overflow-wrap: anywhere; }
@@ -456,11 +458,8 @@
 }
 
 /* mine */
-/* 찜한 글: '가격 내림' with the price when saved struck through and the price now. */
-.price-drop { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.price-drop .tag-drop { height: 20px; padding: 0 6px; background: var(--ink-2); color: var(--white); font-weight: 600; }
-.price-drop del { color: var(--ink-4); }
-.price-drop b { color: var(--ink); font-weight: 700; }
+/* 찜한 글: the '가격 내림' tag on the meta line (the price line under it strikes the earlier 즉거가). */
+.tag.tag-drop { height: 20px; padding: 0 6px; background: var(--ink-2); color: var(--white); font-weight: 600; }
 /* '더 보기' under a member's post lists (내 글, 찜한 글, 최근 본 글, profile lists). */
 .more-btn { display: flex; width: 100%; margin-top: 16px; }
 /* 내 글: the seller's rows with today's limits above them. */
@@ -494,6 +493,7 @@
 .simple-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
+.report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A handled row is grayed by its text color, not opacity, so its check marks never turn into a pale brand. */
 .simple-list li.is-done :is(strong, .small, .muted, .nick) { color: var(--ink-3); }
 .simple-list strong, .strong-link { color: var(--ink); font-weight: 700; }

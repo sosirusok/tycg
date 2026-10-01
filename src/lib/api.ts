@@ -81,3 +81,13 @@ export const imageUrl = (id: string) => '/api/images/' + id;
 export const imageFiles = (files: FileList | null | undefined) => Array.from(files || []).filter(f => f.type.startsWith('image/'));
 // Whether a drag carries files, so dragover can accept it (text and links are left alone).
 export const dragsFiles = (types: readonly string[]) => types.includes('Files');
+// A paste into a text field that carries text stays text: Excel and Word also put a picture of the
+// copied cells on the clipboard, which must not replace them. Only a paste of pictures alone (a
+// screenshot, a copied image) anywhere, or any paste outside a text field, becomes photos.
+export function pastesText(target: EventTarget | null, data: DataTransfer | null) {
+    const el = target instanceof HTMLElement ? target : null;
+    const field = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    return field && !!data && Array.from(data.types).includes('text/plain');
+}
+// Shown when photos arrive while the previous ones are still uploading.
+export const UPLOAD_BUSY = '사진을 올리는 중입니다.';

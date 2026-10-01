@@ -1,6 +1,7 @@
 import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, MANAGER_ID, WITHDRAWN } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
+import { memberTrades, memberTradesStatement } from './reviews';
 import {
     PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId,
@@ -219,16 +220,18 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
-            const [grants, badges, apps, sanctions] = await db().batch([
+            const [grants, badges, apps, sanctions, trades] = await db().batch([
                 db().prepare('SELECT * FROM user_grades WHERE user_id=? ORDER BY granted_at DESC').bind(p[2]),
                 db().prepare('SELECT * FROM user_badges WHERE user_id=?').bind(p[2]),
                 db().prepare('SELECT * FROM applications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(p[2]),
                 db().prepare('SELECT id,days,reason,created_at FROM sanctions WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 20').bind(p[2]),
+                // The member's trades (WP23), so the manager can remove one that never happened.
+                memberTradesStatement(p[2]),
             ]);
             // A suspension that has ended reads as none.
             const user = withMember(target);
             if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
-            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results });
+            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results) });
         }
         // 이용 정지 {days: 3|7|30|0 (영구) | null (해제), reason}. The manager is never suspended. The member
         // hears about it in their chat with the manager, best-effort: a member who blocked the manager

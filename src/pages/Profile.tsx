@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Ban, ChevronRight, Flag, MessageCircle, Pencil } from 'lucide-react';
+import { Ban, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, reviewName, suspendEndText, tradeStatsText, SUSPEND_FOREVER, type Post, type Review, type User } from '../../shared/market';
+import { dateText, longDate, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -125,10 +125,11 @@ export default function ProfilePage({ id }: { id?: string }) {
             <div className="grow">
                 <NameLine nickname={user.nickname} grade={user.grade} role={user.role} badges={user.badges} size="lg" />
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
-                {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${user.suspended_until >= SUSPEND_FOREVER ? '영구' : '~' + suspendEndText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
+                {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
-                <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0)}</p>
-                <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount} · 거래완료 {user.closedCount}</p>
+                {/* The one trade count: trades confirmed with another member ('거래 3회 · 후기 좋아요 2'), shown once there is any. */}
+                {(!!user.tradeCount || !!user.goodCount) && <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0)}</p>}
+                <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount}</p>
                 {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
                 {!mine && user.last_seen_at && <p className="muted small profile-seen">{lastSeenText(user.last_seen_at)}</p>}
                 {user.bio && <p className="profile-bio">{user.bio}</p>}
@@ -176,8 +177,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         </nav>}
 
         <section className="section">
-            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' },
-                { id: 'reviews', label: <>후기{user.reviewCount ? <b>{user.reviewCount}</b> : null}</> }]} />
+            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'reviews', label: '후기' }]} />
             <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} />
                 : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
                 {posts.length < total && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
@@ -234,7 +234,7 @@ function ReviewList({ userId }: { userId: string }) {
                 <time className="review-date">{dateText(r.created_at)}</time>
             </div>
             <div className="review-line">
-                <span className={'review-verdict' + (r.good ? '' : ' is-bad')}>{reviewName(r.good)}</span>
+                <span className="review-verdict">{r.good ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}{reviewName(r.good)}</span>
                 {r.tags.map(t => <span key={t} className="tag">{t}</span>)}
             </div>
             {r.text && <p className="review-text">{r.text}</p>}

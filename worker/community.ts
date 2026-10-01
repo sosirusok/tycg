@@ -122,6 +122,8 @@ async function offersHandler(req: Request, p: string[]) {
         if (post.status !== 'open') fail(409, '제시를 받지 않는 글입니다.');
         if (!post.accepts_offers && post.price_mode !== 'offer') fail(400, '제시를 받지 않는 글입니다.');
         if (post.author_id === u.id) fail(400, '내 글에는 제시할 수 없습니다.');
+        // An author under 이용 정지 cannot accept a 제시 (their posts are off every list meanwhile).
+        if (await db().prepare('SELECT 1 FROM users WHERE id=? AND suspended_until>?').bind(post.author_id, Date.now()).first()) fail(409, '이용 제한 회원의 글입니다.');
         const n = amount(b.amount, false), note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : '';
         if (n === null || n < 1000) fail(400, '제시가는 1,000원 이상입니다.');
         if (await db().prepare("SELECT id FROM offers WHERE post_id=? AND sender_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '대기 중인 제시를 먼저 취소해 주세요.');
@@ -142,6 +144,9 @@ async function offersHandler(req: Request, p: string[]) {
         const action = b.action;
         if (!['accepted', 'declined', 'withdrawn'].includes(action)) fail(400, '잘못된 요청입니다.');
         if (action === 'withdrawn' ? offer.sender_id !== u.id : offer.recipient_id !== u.id) fail(403, '권한이 없습니다.');
+        // Accepting reserves the post and writes to the buyer, so a seller under 이용 정지 cannot;
+        // declining and withdrawing still close a 제시.
+        if (action === 'accepted') requireActive(u);
         if (action === 'accepted' && await blocked(offer.sender_id, offer.recipient_id)) fail(403, '차단된 회원의 제시는 수락할 수 없습니다.');
         const now = Date.now();
         // The decision leaves a line in the chat, written only when this request made the change

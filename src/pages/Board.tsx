@@ -336,8 +336,16 @@ export function Board() {
         catch (e) { toast.error(errorText(e)); }
         finally { setSavingSearch(false); }
     }
-    async function deleteSearch(id: string) {
-        try { await api('searches/' + id, 'DELETE'); toast('삭제 완료'); await refreshSaved(); }
+    // The x deletes at once; the toast offers it back (saved again under the same name and query).
+    async function deleteSearch(v: Saved) {
+        try {
+            await api('searches/' + v.id, 'DELETE');
+            toast('삭제 완료', { action: { label: '되돌리기', onClick: () => void restoreSearch(v) } });
+            await refreshSaved();
+        } catch (e) { toast.error(errorText(e)); }
+    }
+    async function restoreSearch(v: Saved) {
+        try { await api('searches', 'POST', { name: v.name, query: v.query }); await refreshSaved(); }
         catch (e) { toast.error(errorText(e)); }
     }
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
@@ -391,8 +399,8 @@ export function Board() {
                 {tabSaved.length > 0 && <div className="chip-scroll saved-searches" role="group" aria-label="저장한 검색">
                     <span className="saved-label">저장한 검색</span>
                     {tabSaved.map(v => { const on = searchKey(v.query) === currentKey; return <span key={v.id} className={'saved-chip' + (on ? ' on' : '')}>
-                        <button type="button" aria-pressed={on} onClick={() => { if (!on) void navigate('/trade?' + v.query); }}>{v.name}</button>
-                        <button type="button" aria-label={v.name + ' 삭제'} onClick={() => void deleteSearch(v.id)}><X size={13} /></button>
+                        <button type="button" aria-pressed={on} title={v.name} onClick={() => { if (!on) void navigate('/trade?' + v.query); }}>{v.name}</button>
+                        <button type="button" aria-label={v.name + ' 삭제'} onClick={() => void deleteSearch(v)}><X size={13} /></button>
                     </span>; })}
                 </div>}
                 {chips.length > 0 && <div className="active-filters">{chips.map(c => <button type="button" key={c.key} onClick={c.clear} aria-label={c.label + ' 해제'}>{c.label}<X size={13} /></button>)}

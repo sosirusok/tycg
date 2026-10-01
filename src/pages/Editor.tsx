@@ -3,10 +3,10 @@ import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'luc
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, STATUS_NAMES, TRADE_KINDS,
-    categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, wonToMan,
+    categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { api, dragsFiles, errorText, imageFiles, imageUrl, uploadPhoto } from '../lib/api';
+import { api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
@@ -281,7 +281,8 @@ export default function Editor({ id }: { id?: string }) {
 
     // Photos from the picker, a paste or a drop, within the grade's cap; one batch at a time.
     async function addPhotos(files: File[]) {
-        if (!files.length || uploading) return;
+        if (!files.length) return;
+        if (uploading) { toast.error(UPLOAD_BUSY); return; }
         const list = files.slice(0, Math.max(0, photoCap - form.images.length));
         if (files.length > list.length) toast.error(`사진은 한 글에 ${photoCap}장까지입니다.`);
         if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
@@ -297,14 +298,15 @@ export default function Editor({ id }: { id?: string }) {
     }
     const moveImage = (i: number, d: number) => { const a = [...form.images]; [a[i], a[i + d]] = [a[i + d], a[i]]; patch({ images: a }); };
     // A screenshot pasted anywhere on the page, or a photo dropped on it, goes into 사진 like one picked
-    // from the album. Text pastes and drags are left alone; a dropped file never replaces the page.
+    // from the album. Text pastes and drags are left alone, also text that comes with a picture of it
+    // (Excel, Word) pasted into a field; a dropped file never replaces the page.
     const addPhotosRef = useRef(addPhotos);
     addPhotosRef.current = addPhotos;
     useEffect(() => {
         if (!loaded) return;
         const paste = (e: ClipboardEvent) => {
             const files = imageFiles(e.clipboardData?.files);
-            if (!files.length) return;
+            if (!files.length || pastesText(e.target, e.clipboardData)) return;
             e.preventDefault();
             void addPhotosRef.current(files);
         };
@@ -327,13 +329,15 @@ export default function Editor({ id }: { id?: string }) {
     const priceWon = form.kind === 'sell' ? manToWon(form.price) : null, offerWon = form.kind === 'sell' ? manToWon(form.offer) : null;
     const offerTooHigh = priceWon !== null && offerWon !== null && !Number.isNaN(priceWon) && !Number.isNaN(offerWon) && offerWon >= priceWon;
 
+    // A refusal shows as a toast too: the alert sits at the end of the form, under the sticky 등록 bar.
+    const showError = (text: string) => { setError(text); toast.error(text); };
     async function submit(e: FormEvent) {
         e.preventDefault();
         if (busy || uploading) return;
         setError('');
         const price = form.kind === 'exchange' ? null : manToWon(form.price);
         const offer = form.kind === 'sell' ? manToWon(form.offer) : null;
-        if (Number.isNaN(price) || Number.isNaN(offer)) { setError('가격은 만원 단위 숫자로 입력해 주세요. 예: 35, 1.5'); return; }
+        if (Number.isNaN(price) || Number.isNaN(offer)) { showError('가격은 만원 단위 숫자로 입력해 주세요. 예: 35, 1.5'); return; }
         // The rule shows under 현젯; nothing is sent until it is fixed.
         if (offerTooHigh) { document.getElementById('ed-offer')?.focus(); return; }
         if (form.kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
@@ -347,7 +351,7 @@ export default function Editor({ id }: { id?: string }) {
             setLeaveGuard(null);
             toast(id ? '수정 완료' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
-        } catch (err) { done.current = false; setError(errorText(err)); }
+        } catch (err) { done.current = false; showError(errorText(err)); }
         finally { setBusy(false); }
     }
 
@@ -357,6 +361,8 @@ export default function Editor({ id }: { id?: string }) {
 
     const { kind, category, details: d } = form;
     const account = category === 'account', buying = kind === 'buy', wanted = d.wantedCategory === 'clan' ? 'clan' : 'account';
+    // Under 이용 정지 the server refuses 등록 and 수정, so the editor says so before any typing; 임시저장 still works.
+    const suspendedUntil = me.suspended_until && me.suspended_until > Date.now() ? me.suspended_until : null;
     const ranksOf = (key: string) => parseList(d[key], NICK_RANKS);
     // 닉 종류: nicknameTypes on 판매 and the offered side of 교환, wantedNicknameTypes on 구매 and the wanted side.
     const nickTypes = (key: 'nicknameTypes' | 'wantedNicknameTypes') => <div className="field"><span className="field-label">닉 종류</span>
@@ -442,6 +448,7 @@ export default function Editor({ id }: { id?: string }) {
             <h1 className="page-title">{id ? '글 수정' : '글쓰기'}</h1>
             <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
         </div>
+        {suspendedUntil && <p className="alert" role="status">이용 정지 중입니다. ({suspendUntilText(suspendedUntil)})</p>}
         {banner && <div className="restore" role="status">
             <span>{banner.mode === 'loaded' ? '임시저장된 글을 불러왔습니다' : '임시저장된 글이 있습니다'}</span>
             <span aria-hidden="true">·</span>
@@ -539,7 +546,7 @@ export default function Editor({ id }: { id?: string }) {
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
                 <div className="ed-bar">
                     <button type="button" className="btn btn-line" onClick={() => void persist(true)}>임시저장</button>
-                    <button type="submit" className="btn btn-primary grow" disabled={busy || uploading}>{busy ? <LoaderCircle size={18} className="spin" /> : id ? '수정' : '등록'}</button>
+                    <button type="submit" className="btn btn-primary grow" disabled={busy || uploading || !!suspendedUntil}>{busy ? <LoaderCircle size={18} className="spin" /> : id ? '수정' : '등록'}</button>
                 </div>
             </fieldset>
         </form>

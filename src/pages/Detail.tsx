@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } fr
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, tagName, tradeStatsText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -91,9 +91,10 @@ function genericBlocks(post: Post, category: string): ReactNode[] {
     ];
 }
 
-// 거래 상태 as one row of three; a 대리(진행) post whose author lost 대리 인증 may only be closed.
-function StatusSeg({ post, name, lostProxy, onChange }: { post: Post; name: string; lostProxy: boolean; onChange: (status: string) => void }) {
-    const options = Object.entries(STATUS_NAMES).filter(([k]) => !lostProxy || k === post.status || k === 'closed');
+// 거래 상태 as one row of three; a 대리(진행) post whose author lost 대리 인증, or any post of an author
+// under 이용 정지, may only be closed.
+function StatusSeg({ post, name, closeOnly, onChange }: { post: Post; name: string; closeOnly: boolean; onChange: (status: string) => void }) {
+    const options = Object.entries(STATUS_NAMES).filter(([k]) => !closeOnly || k === post.status || k === 'closed');
     return <div className="seg seg-full" role="radiogroup" aria-label="거래 상태" style={options.length === 3 ? undefined : { gridTemplateColumns: `repeat(${options.length}, 1fr)` }}>
         {options.map(([k, v]) => <label key={k}><input type="radio" name={name} value={k} checked={post.status === k} onChange={() => onChange(k)} />{v}</label>)}
     </div>;
@@ -105,8 +106,9 @@ export function Detail({ id }: { id: string }) {
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
-    // '거래한 회원' after the author sets 거래완료 (WP23).
-    const [tradeSheet, setTradeSheet] = useState(false);
+    // '거래한 회원' after the author sets 거래완료 (WP23), and later from the owner tools while a 거래완료
+    // post has partners and no trade yet (recordable).
+    const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
     const load = () => api<{ post: DetailPost }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
@@ -114,6 +116,15 @@ export function Detail({ id }: { id: string }) {
     useEffect(() => { if (!ready) return; void load(); }, [id, me?.id, ready]);
     // The author's counters for 끌올 and 게시판 상단 노출.
     useEffect(() => { if (mine) void loadUsage(); else setUsage(null); }, [mine, me?.id]);
+    // Under 이용 정지 the author may only close or delete the post (no 끌올, 상단 노출, 가격 수정, 수정, 거래중/예약중).
+    const suspended = !!me?.suspended_until && me.suspended_until > now;
+    const closedMine = mine && post?.status === 'closed' && !suspended;
+    useEffect(() => {
+        if (!closedMine) { setRecordable(false); return; }
+        let alive = true;
+        api<{ partners: unknown[]; trade: unknown }>(`posts/${id}/partners`).then(d => { if (alive) setRecordable(!d.trade && d.partners.length > 0); }).catch(() => { if (alive) setRecordable(false); });
+        return () => { alive = false; };
+    }, [closedMine, id, tradeSheet]);
     useEffect(() => { if (post) setPageTitle(post.title); }, [post?.title]);
     // Back to this post: return to where the member was once the post is on screen.
     useLayoutEffect(() => {
@@ -147,7 +158,7 @@ export function Detail({ id }: { id: string }) {
 
     // 끌올: '오늘 2/6', '15:40부터 가능' or '오늘 끌올 모두 사용'.
     const bump = !usage ? { disabled: true, hint: '' }
-        : !openNow || lostProxy ? { disabled: true, hint: '' }
+        : !openNow || lostProxy || suspended ? { disabled: true, hint: '' }
         : nextBump > now ? { disabled: true, hint: `${kstClock(nextBump)}부터 가능` }
         : usage.bumpsLeft === 0 ? { disabled: true, hint: '오늘 끌올 모두 사용' }
         : { disabled: false, hint: usage.perks.bumpsPerDay === null ? '' : `오늘 ${usage.bumpsToday}/${usage.perks.bumpsPerDay}` };
@@ -177,7 +188,7 @@ export function Detail({ id }: { id: string }) {
         setBusy(true);
         try {
             await api(`posts/${post!.id}/status`, 'PATCH', { status }); toast(`상태 변경: ${STATUS_NAMES[status]}`);
-            if (status === 'closed' && !(me?.suspended_until && me.suspended_until > Date.now())) setTradeSheet(true);
+            if (status === 'closed' && !suspended) setTradeSheet(true);
             await load(); void loadUsage();
         }
         catch (e) { toast.error(errorText(e)); }
@@ -235,6 +246,7 @@ export function Detail({ id }: { id: string }) {
                     <Link to={withParams('/trade', { kind: post.kind })}>{KIND_NAMES[post.kind]}</Link><ChevronRight size={14} />
                     <Link to={withParams('/trade', { kind: post.kind, category: post.category, wantedCategory: post.kind === 'exchange' ? exchangeWanted : '' })}>{post.kind === 'exchange' ? `${categoryName(post.category)}에서 ${categoryName(exchangeWanted)} 구함` : categoryName(post.category)}</Link>
                 </nav>
+                {mine && suspended && <div className="alert hidden-note"><span className="grow">이용 정지 중입니다. ({suspendUntilText(me!.suspended_until!)})</span></div>}
                 {mine && !manager && post.hidden === 1 && !withdrawnPost && <div className="alert hidden-note">
                     <span className="grow">숨김 처리된 글입니다{post.hidden_reason ? ` · 사유: ${post.hidden_reason}` : ''}</span>
                     <button type="button" className="btn btn-line btn-sm" onClick={managerChat}>매니저 채팅</button>
@@ -248,7 +260,7 @@ export function Detail({ id }: { id: string }) {
                     <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''}</span>
                 </div>
                 {/* On phones the author and their verification checks come right under the title. */}
-                <AuthorBox post={post} className="author-box-top" />
+                <AuthorBox post={post} own={mine} className="author-box-top" />
                 {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
 
                 {info.length > 0 && <section className="detail-section">
@@ -269,10 +281,11 @@ export function Detail({ id }: { id: string }) {
             <aside className="side-card" aria-label="가격과 문의">
                 <PriceLine post={post} large />
                 {mine ? <div className="owner-tools">
-                    <StatusSeg post={post} name="status-side" lostProxy={lostProxy} onChange={setStatus} />
+                    <StatusSeg post={post} name="status-side" closeOnly={lostProxy || suspended} onChange={setStatus} />
+                    {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래한 회원</button>}
                     <div className="owner-bump">{bumpButton('btn-block')}</div>
-                    {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" onClick={() => setPriceOpen(true)}>가격 수정</button>}
-                    <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>
+                    {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
+                    {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
@@ -283,25 +296,26 @@ export function Detail({ id }: { id: string }) {
                 {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing. */}
                 {mine && usage && (slots > 0
                     ? <div className="promo-row">
-                        <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
+                        <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || suspended || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
                         <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
                     </div>
                     : <Link to="/guide#grade" className="promo-up">게시판 상단 노출은 프리미엄부터</Link>)}
                 {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
-                <AuthorBox post={post} className="author-box-side" />
+                <AuthorBox post={post} own={mine} className="author-box-side" />
                 <p className="safety">입금 전 <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트</a>로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>
             </aside>
         </div>
 
         {mine ? <div className="owner-bar">
-            <StatusSeg post={post} name="status-bar" lostProxy={lostProxy} onChange={setStatus} />
+            <StatusSeg post={post} name="status-bar" closeOnly={lostProxy || suspended} onChange={setStatus} />
             {bumpButton('owner-bar-bump')}
             <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
-                        {post.kind === 'sell' && <DropdownMenu.Item className="menu-item" onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
-                        <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>
+                        {recordable && <DropdownMenu.Item className="menu-item" onSelect={() => setTradeSheet(true)}>거래한 회원</DropdownMenu.Item>}
+                        {post.kind === 'sell' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
+                        <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -332,18 +346,20 @@ export function Detail({ id }: { id: string }) {
     </div>;
 }
 
-function AuthorBox({ post, className }: { post: DetailPost; className: string }) {
+function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; className: string }) {
     // A withdrawn author has no profile; the name is plain 탈퇴회원 without grade or badges.
     if (post.author_deleted) return <div className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
-    // '거래 3회 · 후기 좋아요 2', then '최근 접속' when it is known.
-    const seen = lastSeenText(post.author_last_seen_at);
+    // '거래 3회 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
+    // as on the profile).
+    const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
+    const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} />
-            <span className="author-stats">{tradeStatsText(post.author_trade_count ?? 0, post.author_good_count ?? 0)}</span>
+            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good)}</span>}
             {seen && <span className="author-stats author-seen">{seen}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;
