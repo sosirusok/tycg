@@ -13,16 +13,12 @@ import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
 import { TradeSheet } from '../components/TradeSheet';
+import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_good_count?: number };
-type Usage = {
-    perks: { bumpsPerDay: number | null; bumpGapHours: number | null; boardSlots: number | null };
-    bumpsToday: number; bumpsLeft: number | null; featured: { id: number; title: string }[];
-};
-
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -133,8 +129,8 @@ export function Detail({ id }: { id: string }) {
         if (y !== null) window.scrollTo(0, y);
     }, [!!post]);
     useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
-    // The 끌올 button turns on by itself when the gap ends.
-    const nextBump = post && usage ? (post.bumped_at || post.created_at) + (usage.perks.bumpGapHours || 0) * HOUR : 0;
+    // The 끌올 button turns on by itself when it is ready (gap, 새 글 우선 and the next refill).
+    const nextBump = post && usage ? bumpReadyAt(post, usage, now) : 0;
     useEffect(() => {
         if (!nextBump || nextBump <= now) return;
         const t = setTimeout(() => setNow(Date.now()), Math.min(nextBump - now + 500, 2 ** 31 - 1));
@@ -156,12 +152,12 @@ export function Detail({ id }: { id: string }) {
     const lostProxy = mine && post.kind === 'proxy_offer' && !manager && !me?.badges.includes('proxy');
     const openNow = post.status === 'open' && !post.hidden;
 
-    // 끌올: '오늘 2/6', '15:40부터 가능' or '오늘 끌올 모두 사용'.
+    // 끌올: the wallet ('3/4') or '15:40부터 가능'.
+    const wallet = usage && walletNow(usage, now);
     const bump = !usage ? { disabled: true, hint: '' }
         : !openNow || lostProxy || suspended ? { disabled: true, hint: '' }
         : nextBump > now ? { disabled: true, hint: `${kstClock(nextBump)}부터 가능` }
-        : usage.bumpsLeft === 0 ? { disabled: true, hint: '오늘 끌올 모두 사용' }
-        : { disabled: false, hint: usage.perks.bumpsPerDay === null ? '' : `오늘 ${usage.bumpsToday}/${usage.perks.bumpsPerDay}` };
+        : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '' };
     const slots = usage?.perks.boardSlots || 0, slotsUsed = usage?.featured.length || 0;
 
     async function startChat() {

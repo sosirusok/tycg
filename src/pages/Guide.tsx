@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
 import { dateText, priceText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, type GradeInfo } from '../../shared/membership';
+import { BADGES, GRADES, PERKS, SITE_RULES, gapText, type GradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -18,18 +19,28 @@ const STEPS = [
 
 // Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
 // price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
-// A cell may hold two lines (영구 and 6개월 prices, 끌올 count and gap), each its own line.
+// A cell may hold two lines (영구 and 6개월 prices), each its own line.
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
-const BENEFIT_ROWS: [string, (g: GradeInfo, i: number) => string | string[]][] = [
+const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`) : '무료'],
-    ['끌올', (g, i) => { const p = PERKS[g.id]; return i === 0 ? [`하루 ${p.bumpsPerDay}번`, `${p.bumpGapHours}시간마다`] : [`${p.bumpsPerDay}번`, `${p.bumpGapHours}시간`]; }],
-    ['거래중 글', g => `${PERKS[g.id].openPosts}개`],
-    ['하루 새 글', g => `${PERKS[g.id].postsPerDay}개`],
-    ['사진', g => `${PERKS[g.id].photos}장`],
+    ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
+    ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
+    ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
     ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
     ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+];
+// What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
+const FREE_ITEMS = [
+    `사진 글당 ${SITE_RULES.photosPerPost}장`,
+    `거래중 글 ${SITE_RULES.openPosts}개`,
+    `하루 새 글 ${SITE_RULES.postsPerDay}개`,
+    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    '채팅·제시',
+    `찜·검색 저장 ${SITE_RULES.savedSearches}개`,
+    '거래 기록·후기',
+    '신고·차단',
 ];
 
 export default function Guide() {
@@ -73,9 +84,13 @@ export default function Guide() {
                     <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
                     <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
                         <th scope="row">{label}</th>
-                        {TABLE_GRADES.map((g, i) => { const v = cell(g, i); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
+                        {TABLE_GRADES.map(g => { const v = cell(g); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
                     </tr>)}</tbody>
                 </table>
+            </div>
+            <div className="grade-free">
+                <h3>일반 (무료)</h3>
+                <ul>{FREE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
             </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>

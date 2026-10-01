@@ -11,6 +11,7 @@ import { gradeBenefits } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
+import { WalletGauge, useMinuteClock, type Usage } from '../components/Wallet';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -21,8 +22,6 @@ type Profile = User & { postCount: number; closedCount: number; tradeCount?: num
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
 type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean };
 type ProfileTab = 'active' | 'closed' | 'reviews';
-// GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
-type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
 const PAGE_SIZE = 20;
 
 export default function ProfilePage({ id }: { id?: string }) {
@@ -32,6 +31,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const [tab, setTab] = useState<ProfileTab>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [page, setPage] = useState(1), [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
+    const [clock] = useMinuteClock();
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
     const [postsVersion, setPostsVersion] = useState(0);
     // Counts list resets (tab switch, profile save), so a '더 보기' page for an old list is dropped.
@@ -54,7 +54,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); } }).catch(() => { if (alive) setPosts([]); });
         return () => { alive = false; };
     }, [id, tab, postsVersion]);
-    // The owner's counters: '오늘 끌올 2/10 · 거래중 글 4/30 · 상단 노출 1/1'.
+    // The owner's 끌올 gauge: '끌올 3/4 · 1:20 후 충전' (counting down once a minute).
     useEffect(() => {
         if (!mine || me?.role === 'manager') { setUsage(null); return; }
         let alive = true;
@@ -117,10 +117,6 @@ export default function ProfilePage({ id }: { id?: string }) {
     const grade = gradeInfo(user.grade_trial && !mine && me?.role !== 'manager' ? 'normal' : user.grade);
     // The next grade up for sale and the first thing it adds, on the owner's own grade card.
     const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
-    const usageLine = usage && usage.perks.bumpsPerDay !== null && usage.perks.openPosts !== null
-        ? `오늘 끌올 ${usage.bumpsToday}/${usage.perks.bumpsPerDay} · 거래중 글 ${usage.openPosts}/${usage.perks.openPosts}` + (usage.perks.boardSlots ? ` · 상단 노출 ${usage.featured.length}/${usage.perks.boardSlots}` : '')
-        : '';
-
     return <div className="container page profile">
         <section className="profile-head">
             <Avatar name={user.nickname} size="lg" />
@@ -167,7 +163,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
                         : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
-                    {mine && usageLine && <p className="grade-usage">{usageLine}</p>}
+                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" />}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
                     {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
                 </>}

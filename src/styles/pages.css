@@ -465,6 +465,9 @@
 .more-btn { display: flex; width: 100%; margin-top: 16px; }
 /* 내 글: the seller's rows with today's limits above them. */
 .mine-usage { margin-bottom: 12px; color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
+/* 끌올 지갑 gauge (내 글 header and the profile's grade card): '끌올 3/4' then '· 1:20 후 충전'. */
+.wallet-gauge { color: var(--ink-3); font-size: var(--fs-14); font-weight: 400; font-variant-numeric: tabular-nums; }
+.wallet-gauge b { color: var(--ink); font-weight: 700; }
 .seller-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .seller-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 10px 14px; padding: 14px 4px; border-bottom: 1px solid var(--line); }
 .seller-thumb { display: grid; place-items: center; width: 56px; height: 56px; border-radius: var(--r-8); overflow: hidden; background: var(--fill); }
@@ -541,6 +544,13 @@
 .grade-benefits thead th { border-bottom-color: var(--line-2); color: var(--ink); font-weight: 700; white-space: nowrap; }
 .grade-benefits tbody th { color: var(--ink-3); font-weight: 500; white-space: nowrap; }
 .grade-benefits td { color: var(--ink); font-weight: 600; }
+.grade-free { margin-top: 20px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-12); background: var(--white); }
+.grade-free h3 { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.grade-free ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 16px; margin: 12px 0 0; padding: 0; list-style: none; }
+.grade-free li { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--fs-14); }
+.grade-free li svg { flex: none; color: var(--brand); }
+@media (max-width: 960px) { .grade-free ul { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .grade-free { padding: 14px 16px; } .grade-free li { font-size: var(--fs-13); } }
 .grade-notes { display: grid; gap: 6px; margin: 16px 0 0; padding-left: 20px; color: var(--ink-3); font-size: var(--fs-14); }
 /* Phones: columns size to their content (the 일반 column needs the least) and the text is 12px, so
    '6개월 3만원' and '홈 추천 매물' stay on one line at 390. */

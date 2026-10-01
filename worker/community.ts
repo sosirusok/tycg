@@ -1,5 +1,6 @@
 import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
 import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
+import { SITE_RULES } from '../shared/membership';
 import { amount, parse, visiblePost, OFFERS_ENDED_TEXT } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 
@@ -41,7 +42,7 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         if (method === 'POST') {
             const b = await body(req), name = textField(b.name, 1, 32, '검색 이름'), q = textField(b.query, 1, 12000, '검색 조건');
             const count = await db().prepare('SELECT COUNT(*) AS n FROM saved_searches WHERE user_id=?').bind(u.id).first<any>();
-            if (count.n >= 20) fail(409, '검색은 최대 20개까지 저장할 수 있습니다.');
+            if (count.n >= SITE_RULES.savedSearches) fail(409, `검색은 최대 ${SITE_RULES.savedSearches}개까지 저장할 수 있습니다.`);
             await db().prepare('INSERT INTO saved_searches(id,user_id,name,query,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), u.id, name, q, Date.now()).run();
             return json({ ok: true });
         }

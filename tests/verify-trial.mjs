@@ -100,6 +100,8 @@ const aCreated = sql(`SELECT created_at,trial_at FROM users WHERE id='${a.user.i
 equal([a.user.grade, a.user.grade_trial], ['plus', true], 'a new sign-up is 플러스 with grade_trial');
 equal(a.user.grade_expires_at, aCreated.created_at + WEEK, 'the trial ends exactly 7 days after sign-up');
 check(aCreated.trial_at > 0, 'users.trial_at is stamped');
+// WP40: the trial grant fills the 끌올 지갑 to the 플러스 cap.
+equal(sql(`SELECT bump_tokens,bump_at FROM users WHERE id='${a.user.id}'`)[0], { bump_tokens: 4, bump_at: aCreated.trial_at }, 'the trial fills the wallet to 4 (플러스)');
 equal([a.trial.popup, a.trial.endsAt, a.trial.ended, a.trial.capped], [true, aCreated.created_at + WEEK, false, false], 'the sign-up response asks for the popup');
 equal((await me(a)).trial.popup, true, 'auth/me keeps asking until the popup is closed');
 equal((await a('me/trial-popup', 'POST', {})).status, 200, 'POST me/trial-popup');

@@ -109,24 +109,59 @@ export function applicationTemplate(kind: ApplicationKind, target: string, plan?
 
 export const APPLICATION_STATUS_NAMES: Record<ApplicationStatus, string> = { pending: '대기', approved: '지급 완료', rejected: '반려', cancelled: '취소' };
 
+// Cafe basics: the same for every member (the free 일반 grade included). They are only anti-flood
+// ceilings, never a reason to buy a grade. The manager has no open-post or daily-post ceiling.
+export type SiteRules = {
+    photosPerPost: number; openPosts: number; postsPerDay: number; uploadsPer10Min: number; uploadsPerDay: number;
+    freshPerDay: number; keywordAlerts: number; follows: number; savedSearches: number; commentsPer10Min: number; commentsPerDay: number;
+};
+export const SITE_RULES: SiteRules = {
+    photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300,
+    freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200,
+};
+export function rulesOf(u: { role?: string | null }): SiteRules {
+    return u.role === 'manager' ? { ...SITE_RULES, openPosts: Infinity, postsPerDay: Infinity } : SITE_RULES;
+}
+
 // Grade benefits (see the Guide table and the apply modal, which render from this object).
 // The Worker enforces them; the manager account has no caps.
-export type Perks = { bumpsPerDay: number; bumpGapHours: number; openPosts: number; postsPerDay: number; photos: number; boardSlots: number; homeShelf: boolean };
+// 끌올 지갑: up to bumpMax 끌올, one more every bumpRefillMinutes, and the same post again after
+// bumpGapMinutes. Manual 끌올 spends the wallet.
+export type Perks = { bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number; boardSlots: number; homeShelf: boolean };
 
-const ELITE_PERKS: Perks = { bumpsPerDay: 20, bumpGapHours: 1, openPosts: 50, postsPerDay: 50, photos: 12, boardSlots: 3, homeShelf: true };
+const ELITE_PERKS: Perks = { bumpMax: 8, bumpRefillMinutes: 60, bumpGapMinutes: 30, boardSlots: 3, homeShelf: true };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpsPerDay: 3, bumpGapHours: 6, openPosts: 10, postsPerDay: 10, photos: 6, boardSlots: 0, homeShelf: false },
-    plus: { bumpsPerDay: 6, bumpGapHours: 3, openPosts: 20, postsPerDay: 20, photos: 8, boardSlots: 0, homeShelf: false },
-    premium: { bumpsPerDay: 10, bumpGapHours: 2, openPosts: 30, postsPerDay: 30, photos: 10, boardSlots: 1, homeShelf: false },
+    normal: { bumpMax: 3, bumpRefillMinutes: 240, bumpGapMinutes: 180, boardSlots: 0, homeShelf: false },
+    plus: { bumpMax: 4, bumpRefillMinutes: 180, bumpGapMinutes: 120, boardSlots: 0, homeShelf: false },
+    premium: { bumpMax: 6, bumpRefillMinutes: 120, bumpGapMinutes: 60, boardSlots: 1, homeShelf: false },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
 };
-export const MANAGER_PERKS: Perks = { bumpsPerDay: Infinity, bumpGapHours: 0, openPosts: Infinity, postsPerDay: Infinity, photos: 12, boardSlots: 3, homeShelf: true };
+export const MANAGER_PERKS: Perks = { bumpMax: Infinity, bumpRefillMinutes: 60, bumpGapMinutes: 0, boardSlots: 3, homeShelf: true };
 
 export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
     if (u.role === 'manager') return MANAGER_PERKS;
     return PERKS[u.grade as GradeId] || PERKS.normal;
+}
+
+// 자동 끌올 (a later package) leaves this many 끌올 in the wallet for manual use.
+export const AUTO_RESERVE = 2;
+
+// '30분', '1시간', '1시간 30분'.
+export function gapText(min: number) {
+    const h = Math.floor(min / 60), m = min % 60;
+    return [h ? `${h}시간` : '', m ? `${m}분` : ''].filter(Boolean).join(' ') || '0분';
+}
+
+// The wallet at `now` from the stored columns (users.bump_tokens, users.bump_at): one 끌올 per full
+// refill interval since bump_at, capped at bumpMax. A lower grade's cap applies on the next read.
+// nextRefillAt is null while the wallet is full (or unlimited).
+export function walletOf(tokens: number, at: number, perks: Perks, now: number): { tokens: number; nextRefillAt: number | null } {
+    if (!Number.isFinite(perks.bumpMax)) return { tokens: Infinity, nextRefillAt: null };
+    const R = perks.bumpRefillMinutes * 60000, steps = Math.max(0, Math.floor((now - at) / R));
+    const have = Math.min(perks.bumpMax, tokens + steps);
+    return { tokens: have, nextRefillAt: have >= perks.bumpMax ? null : at + (steps + 1) * R };
 }
 
 // Start of the current day on the Korean calendar (daily caps reset at KST midnight).
@@ -146,7 +181,7 @@ export type TrialState = { endsAt: number | null; popup: boolean; ended: boolean
 // append a row once their feature ships (자동 끌올, 제목·글자색·링크 미리보기).
 export type TrialRow = { icon: string; title: string; text: string };
 export const TRIAL_ROWS: TrialRow[] = [
-    { icon: 'megaphone', title: `끌올 하루 ${PERKS.plus.bumpsPerDay}번`, text: `같은 글 ${PERKS.plus.bumpGapHours}시간마다 끌올 (일반 ${PERKS.normal.bumpGapHours}시간)` },
+    { icon: 'megaphone', title: `끌올 ${PERKS.plus.bumpMax}개 · ${gapText(PERKS.plus.bumpRefillMinutes)}마다 충전`, text: `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다 끌올 (일반 ${gapText(PERKS.normal.bumpGapMinutes)})` },
 ];
 
 const kstParts = (t: number) => {

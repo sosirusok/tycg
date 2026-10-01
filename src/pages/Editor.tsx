@@ -6,6 +6,7 @@ import {
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
+import { SITE_RULES } from '../../shared/membership';
 import { api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -122,7 +123,9 @@ function kstClock(t: number) {
 }
 
 type Draft = Partial<Form> & { savedAt?: number };
-type Usage = { perks: { photos: number | null } };
+type Usage = { rules: { photosPerPost: number | null } };
+// Photos per post (the same for every member; SITE_RULES.photosPerPost) until GET me/usage answers.
+const PHOTO_CAP = SITE_RULES.photosPerPost;
 const EXCHANGE_SIDES = ['account', 'clan'] as const;
 const PROXY_MORE_KEYS = ['mode', 'current', 'target', 'schedule', 'duration', 'conditions'];
 const ACCOUNT_MORE_KEYS = ['integrated', 'passwordChange', 'phoneChange', 'backupEmail', 'level', 'labLevel', 'humanSkins', 'zombieSkins', 'closet'];
@@ -146,7 +149,8 @@ export default function Editor({ id }: { id?: string }) {
     // Bumped when the whole form is replaced, so folds and pickers open again for the new values.
     const [version, setVersion] = useState(0);
     const [pendingKind, setPendingKind] = useState<TradeKind | null>(null);
-    const [photoCap, setPhotoCap] = useState(6);
+    const [photoCap, setPhotoCap] = useState(PHOTO_CAP);
+    const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
     formRef.current = form;
@@ -187,8 +191,8 @@ export default function Editor({ id }: { id?: string }) {
             if (p && p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
             const base = p ? fromPost(p.post) : initial;
             post.current = p?.post || null;
-            // An edit may keep the photos a post already has after a grade ends.
-            setPhotoCap(Math.max(usage?.perks.photos ?? 6, p?.post.images.length || 0));
+            // An edit may keep the photos a post already has.
+            setPhotoCap(Math.max(usage?.rules.photosPerPost ?? PHOTO_CAP, p?.post.images.length || 0));
             const draft = dr.draft && typeof dr.draft.kind === 'string' && 'offer' in dr.draft ? dr.draft : null;
             if (!draft) replaceForm(base, false);
             else if (p) {
@@ -279,7 +283,8 @@ export default function Editor({ id }: { id?: string }) {
         patch({ category, tags: [], details: keep });
     }
 
-    // Photos from the picker, a paste or a drop, within the grade's cap; one batch at a time.
+    // Photos from the picker, a paste or a drop, within the cap; one batch at a time, 3 uploads at
+    // once ('사진 올리는 중 12/40'). The photos keep the order they were picked in.
     async function addPhotos(files: File[]) {
         if (!files.length) return;
         if (uploading) { toast.error(UPLOAD_BUSY); return; }
@@ -287,12 +292,24 @@ export default function Editor({ id }: { id?: string }) {
         if (files.length > list.length) toast.error(`사진은 한 글에 ${photoCap}장까지입니다.`);
         if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
         setUploading(true);
-        const added: string[] = [];
-        try { for (const f of list) added.push(await uploadPhoto(f)); }
-        catch (e) { toast.error(errorText(e)); }
+        setProgress({ done: 0, total: list.length });
+        const added: (string | null)[] = list.map(() => null);
+        let next = 0, failed: unknown = null;
+        const worker = async () => {
+            while (next < list.length && !failed) {
+                const i = next++;
+                try { added[i] = await uploadPhoto(list[i]); }
+                catch (e) { failed = failed || e; }
+                setProgress(pr => pr && { ...pr, done: pr.done + 1 });
+            }
+        };
+        try { await Promise.all([worker(), worker(), worker()]); }
         finally {
-            if (added.length) patch({ images: [...formRef.current.images, ...added] });
+            if (failed) toast.error(errorText(failed));
+            const ids = added.filter((v): v is string => !!v);
+            if (ids.length) patch({ images: [...formRef.current.images, ...ids] });
             setUploading(false);
+            setProgress(null);
             if (fileInput.current) fileInput.current.value = '';
         }
     }
@@ -537,6 +554,7 @@ export default function Editor({ id }: { id?: string }) {
                             {uploading ? <LoaderCircle size={24} className="spin" /> : <ImagePlus size={26} />}<span>{uploading ? '올리는 중' : photoCount}</span>
                         </button>}
                     </div>
+                    {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
                 </Section>
 
                 {id && <Section title="거래 상태">

@@ -10,6 +10,7 @@ import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { TradeSheet } from '../components/TradeSheet';
+import { WalletGauge, bumpReadyAt, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 
 const TABS = [
     { id: 'posts', label: '내 글' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
@@ -31,11 +32,6 @@ type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: nu
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
 const priceDrop = (p: SavedPost) => p.price_drop && <span className="tag tag-drop">가격 내림</span>;
-// GET /me/usage (null limits are the manager's: no cap).
-type Usage = {
-    perks: { bumpsPerDay: number | null; bumpGapHours: number | null; openPosts: number | null };
-    bumpsToday: number; bumpsLeft: number | null; openPosts: number;
-};
 type ListState = { tab: TabId; items: any[]; total: number; page: number };
 
 const HOUR = 3600000;
@@ -46,14 +42,15 @@ function kstClock(t: number) {
 }
 const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).values()];
 
-// 끌올 in the same states as the detail page: '오늘 2/6', '15:40부터 가능' or '오늘 끌올 모두 사용'.
+// 끌올 in the same states as the detail page: the wallet ('3/4'), or '15:40부터 가능' (the latest of
+// the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
 // `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 거래완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
     if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '' };
-    const next = (post.bumped_at || post.created_at) + (usage.perks.bumpGapHours || 0) * HOUR;
-    if (next > now) return { disabled: true, hint: `${kstClock(next)}부터 가능` };
-    if (usage.bumpsLeft === 0) return { disabled: true, hint: '오늘 끌올 모두 사용' };
-    return { disabled: false, hint: usage.perks.bumpsPerDay === null ? '' : `오늘 ${usage.bumpsToday}/${usage.perks.bumpsPerDay}` };
+    const ready = bumpReadyAt(post, usage, now);
+    if (ready) return { disabled: true, hint: `${kstClock(ready)}부터 가능` };
+    const w = walletNow(usage, now);
+    return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '' };
 }
 
 // A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and 상태.
@@ -99,6 +96,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [data, setData] = useState<ListState | null>(null);
     const [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState<number | null>(null), [now, setNow] = useState(Date.now());
+    const [clock] = useMinuteClock();
     // '거래한 회원' after a post is set to 거래완료 here, as on the detail page (WP23).
     const [tradePost, setTradePost] = useState<number | null>(null);
     // How many pages of the current tab are on screen, so a reload keeps them.
@@ -117,15 +115,11 @@ export default function Mine({ tab: raw }: { tab?: string }) {
             .catch(e => { if (alive) { toast.error(errorText(e)); loaded.current = { tab, page: 1 }; setData({ tab, items: [], total: 0, page: 1 }); } });
         return () => { alive = false; };
     }, [tab, me?.id, rev]);
-    // 내 글 header ('오늘 끌올 2/6 · 거래중 글 4/20') and the 끌올 states of the rows.
+    // 내 글 header (the 끌올 gauge '끌올 3/4 · 1:20 후 충전') and the 끌올 states of the rows.
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     useEffect(() => { if (me && tab === 'posts') void loadUsage(); }, [tab, me?.id, me?.grade]);
-    // A waiting 끌올 turns on by itself when its time comes.
-    useEffect(() => {
-        if (tab !== 'posts') return;
-        const t = setInterval(() => setNow(Date.now()), 30000);
-        return () => clearInterval(t);
-    }, [tab]);
+    // A waiting 끌올 turns on by itself when its time comes; the gauge counts down once a minute.
+    useEffect(() => { if (tab === 'posts') setNow(clock); }, [clock, tab]);
 
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     const items = data?.tab === tab ? data.items : null;
@@ -156,8 +150,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         if (busy !== null) return;
         setBusy(post.id);
         try {
-            const d = await api<{ bumpedAt: number }>(`posts/${post.id}/bump`, 'POST', {});
+            const d = await api<Wallet & { bumpedAt: number }>(`posts/${post.id}/bump`, 'POST', {});
             patchPost(post.id, { bumped_at: d.bumpedAt, bump_count: (post.bump_count || 0) + 1 });
+            setUsage(u => u && { ...u, bumpTokens: d.bumpTokens, bumpMax: d.bumpMax, bumpRefillMin: d.bumpRefillMin, nextRefillAt: d.nextRefillAt });
             toast('끌올 완료');
             setNow(Date.now());
         } catch (e) { toast.error(errorText(e)); }
@@ -174,7 +169,6 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
-    const usageLine = usage && `오늘 끌올 ${usage.bumpsToday}${usage.perks.bumpsPerDay === null ? '' : '/' + usage.perks.bumpsPerDay} · 거래중 글 ${usage.openPosts}${usage.perks.openPosts === null ? '' : '/' + usage.perks.openPosts}`;
     const moreButton = data && data.tab === tab && isPostTab(tab) && data.items.length < data.total
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
@@ -184,7 +178,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
                 : tab === 'posts' ? (items.length ? <>
-                    {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usageLine && <p className="mine-usage">{usageLine}</p>}
+                    {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     <ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
                         closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
                     {moreButton}

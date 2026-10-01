@@ -19,6 +19,20 @@ const BANNED = [
     '→', '—', '인증·등급',
 ];
 
+// Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone, and the
+// anti-flood ceilings no longer name 예약중.
+const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은'];
+// Wallet wording that must stay in the source (copy.md, style guide §6). Each entry is a literal
+// fragment; templated strings are split at their variables.
+const REQUIRED = [
+    '끌올이 없습니다. ', '에 1개 충전됩니다.',
+    '같은 글은 ', '마다 끌올할 수 있습니다. (', '부터 가능)',
+    '새 글 우선 중인 글은 ', '부터 끌올할 수 있습니다.',
+    '후 충전', '끌올 완료', '끌올이 ', '개로 충전되었습니다.',
+    '도배 방지: 거래중 글은 ', '개까지입니다. 거래완료로 바꾸거나 삭제해 주세요.', '도배 방지: 오늘 새 글은 ',
+    '사진은 한 글에 ', '사진 올리는 중 ', '끌올 보관', '끌올 충전', '같은 글 끌올 간격', '일반 (무료)',
+];
+
 async function files(dir, recursive, test) {
     const full = path.join(root, dir);
     const names = await readdir(full, { recursive }).catch(() => []);
@@ -84,7 +98,7 @@ export function lint(file, src) {
     const { text, marked } = stripComments(src);
     text.split('\n').forEach((content, n) => {
         if (marked.has(n - 1)) return;
-        for (const word of BANNED) if (content.includes(word)) hits.push({ file, line: n + 1, word, text: content.trim() });
+        for (const word of [...BANNED, ...RETIRED]) if (content.includes(word)) hits.push({ file, line: n + 1, word, text: content.trim() });
     });
     return hits;
 }
@@ -124,7 +138,17 @@ async function main() {
     ];
     if (!targets.length) { console.error('copy-lint: no source files found'); return 1; }
     const hits = [];
-    for (const file of targets) hits.push(...lint(file.split(path.sep).join('/'), await readFile(path.join(root, file), 'utf8')));
+    let code = '';
+    for (const file of targets) {
+        const src = await readFile(path.join(root, file), 'utf8');
+        hits.push(...lint(file.split(path.sep).join('/'), src));
+        code += stripComments(src).text + '\n';
+    }
+    const missing = REQUIRED.filter(s => !code.includes(s));
+    if (missing.length) {
+        for (const s of missing) console.error(`copy-lint: required wording missing: '${s}'`);
+        return 1;
+    }
     if (hits.length) {
         for (const h of hits) console.error(`${h.file}:${h.line}: '${h.word}'  ${h.text.length > 160 ? h.text.slice(0, 160) + '…' : h.text}`);
         console.error(`copy-lint: ${hits.length} forbidden phrase(s) found in ${targets.length} files.`);

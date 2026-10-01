@@ -11,6 +11,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
 // The copy lint needs no build or server, so it runs first and stops the run on a forbidden phrase.
 if (spawnSync(process.execPath, ['tests/copy-lint.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
+// The static migration check (additive only from 0016 on) needs no server either.
+if (spawnSync(process.execPath, ['tests/verify-migrations.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
 const config = 'dist/zombiego_market/wrangler.json';
 await access(config).catch(() => { throw new Error('빌드 결과가 없습니다. 먼저 pnpm build를 실행해 주세요.'); });
 

@@ -3,7 +3,7 @@ import { ensureChat, messageStatements, guardedMessageStatements } from './chat'
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement } from './reviews';
 import {
-    PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
+    GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
 import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
@@ -73,6 +73,20 @@ async function manageTrial(req: Request) {
 }
 
 // Only the manager grants grades (the DB triggers in 0009_manager_only refuse any other granted_by).
+// A grant fills the 끌올 지갑 to the cap the member has once it is written (the granted grade's, or a
+// higher grade the member already holds). It runs only when the grant row was written at this time,
+// so a refused grant fills nothing. Expiry and 회수 write nothing: the next read clamps the wallet.
+async function walletFill(userId: string, grade: GradeId, by: string, now: number) {
+    const r = await db().prepare('SELECT MAX(rank) AS rank FROM user_grades WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)').bind(userId, now).first<{ rank: number | null }>();
+    const held = GRADES.find(g => g.rank === Number(r?.rank || 0))?.id || 'normal';
+    const bumpMax = Math.max(PERKS[grade].bumpMax, PERKS[held].bumpMax);
+    return {
+        bumpMax,
+        wallet: db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)')
+            .bind(bumpMax, now, userId, userId, grade, by, now),
+    };
+}
+
 // A 6-month grant extends the member's unexpired 6-month row of the same grade by 6 months instead
 // of adding a second row, so one 회수 removes the whole period. A grade already held permanently
 // is not granted again. The new end date is computed here from the row as read, so the statement
@@ -82,6 +96,7 @@ async function manageTrial(req: Request) {
 export async function grantGradeStatements(userId: string, grade: GradeId, plan: PlanId, by: string, applicationId: string | null, now = Date.now(), guard = '1', guardArgs: unknown[] = []) {
     if (by !== MANAGER_ID) fail(403, '등급은 매니저만 지급할 수 있습니다.');
     const info = gradeInfo(grade);
+    const wallet = await walletFill(userId, grade, by, now);
     if (await db().prepare('SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL LIMIT 1').bind(userId, grade).first()) fail(409, '이미 영구 등급입니다.');
     const noPermanent = 'NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL)';
     if (plan === '6m') {
@@ -90,7 +105,7 @@ export async function grantGradeStatements(userId: string, grade: GradeId, plan:
             const expires = addMonths(existing.expires_at, 6);
             const precondition = `EXISTS(SELECT 1 FROM user_grades WHERE id=? AND expires_at=?) AND ${noPermanent}`, preArgs = [existing.id, existing.expires_at, userId, grade];
             return {
-                expires, precondition, preArgs,
+                expires, precondition, preArgs, ...wallet,
                 statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND expires_at=? AND ${noPermanent} AND ${guard}`)
                     .bind(expires, by, now, applicationId, existing.id, existing.expires_at, userId, grade, ...guardArgs),
             };
@@ -102,7 +117,7 @@ export async function grantGradeStatements(userId: string, grade: GradeId, plan:
     const precondition = noPermanent + (plan === '6m' ? ' AND NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?)' : '');
     const preArgs = [userId, grade, ...plan === '6m' ? [userId, grade, now] : []];
     return {
-        expires, precondition, preArgs,
+        expires, precondition, preArgs, ...wallet,
         statement: db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,application_id) SELECT ?,?,?,?,?,?,? WHERE ${precondition} AND ${guard}`)
             .bind(userId, grade, info.rank, expires, by, now, applicationId, ...preArgs, ...guardArgs),
     };
@@ -144,8 +159,8 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
-            statements.push(grant!.statement);
-            message = `${gradeInfo(app.target).name} 등급 지급 완료${grant!.expires ? ` (${dateLabel(grant!.expires)}까지)` : ' (영구)'}`;
+            statements.push(grant!.statement, grant!.wallet);
+            message = `${gradeInfo(app.target).name} 등급 지급 완료${grant!.expires ? ` (${dateLabel(grant!.expires)}까지)` : ' (영구)'}\n끌올이 ${grant!.bumpMax}개로 충전되었습니다.`;
         }
     } else {
         message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
@@ -332,8 +347,8 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (plan === '6m' && !planInfo(b.grade, '6m')) fail(400, '이 등급은 6개월 기간이 없습니다.');
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
             if (target.deleted_at) fail(400, WITHDRAWN);
-            const { statement } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
-            if (!(await statement.run()).meta.changes) fail(409, GRADE_CHANGED);
+            const { statement, wallet } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
+            if (!(await db().batch([statement, wallet]))[0].meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
         // A member who forgot their password gets a temporary one through the manager's chat.

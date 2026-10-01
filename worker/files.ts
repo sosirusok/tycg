@@ -1,5 +1,9 @@
 import { db, fail, currentUser, requireUser, json, limit } from './http';
+import { SITE_RULES } from '../shared/membership';
 import { putPhoto, getPhoto, deletePhoto, photoLimit, photoLimitText, storageMode, D1_USER_BYTES, D1_SITE_BYTES } from './storage';
+
+// Upload rows one member may hold: every open post full of photos.
+const UPLOAD_ROWS = SITE_RULES.openPosts * SITE_RULES.photosPerPost;
 
 // A photo is "in use" while a post, a chat message or one of the owner's drafts references it.
 export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
@@ -50,11 +54,14 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     }
     if (p[0] === 'uploads' && !p[1] && method === 'POST') {
         const u = await requireUser(req);
-        await limit('upload:' + u.id, 30, 600000);
+        // Anti-flood only, the same for every member (SITE_RULES): 120 per 10 minutes, 300 per day.
+        await limit('upload:' + u.id, SITE_RULES.uploadsPer10Min, 600000);
+        await limit('upload-day:' + u.id, SITE_RULES.uploadsPerDay, 86400000);
         const storage = storageMode();
         // Photos that no post, chat or draft uses are removed a day after upload (see cleanup.ts).
         const mine = await db().prepare("SELECT COUNT(*) AS n,COALESCE(SUM(CASE WHEN storage='d1' THEN size ELSE 0 END),0) AS d1 FROM uploads WHERE owner_id=?").bind(u.id).first<any>();
-        if (mine.n >= 600) fail(409, '사진 업로드 한도를 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
+        // A row ceiling far above any real use (every open post full of photos); storage size is the real limit.
+        if (mine.n >= UPLOAD_ROWS) fail(409, '사진 업로드 한도를 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
         const bytes = await readBody(req, photoLimit());
         const mime = sniff(bytes);
         if (!mime) fail(400, 'JPG, PNG, WebP 사진을 선택해 주세요.');

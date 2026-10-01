@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { suspendUntilText, type User } from '../shared/market';
-import { BADGES, TRIAL_MS, type BadgeId } from '../shared/membership';
+import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -194,6 +194,8 @@ export async function grantTrial(userId: string, now = Date.now(), catchUp = fal
         db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,source) SELECT u.id,'plus',1,u.created_at+${TRIAL_MS},'${MANAGER_ID}',?,'trial' FROM users u
             WHERE u.id=? AND u.trial_at IS NULL AND u.deleted_at IS NULL AND u.role!='manager' AND ${IN_TRIAL_WINDOW} AND NOT EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND ${catchUp ? '1' : "g.source='trial'"})`).bind(now, userId),
         db().prepare("UPDATE users SET trial_at=? WHERE id=? AND trial_at IS NULL AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND source='trial')").bind(now, userId, userId),
+        // The trial fills the 끌올 지갑 to the 플러스 cap (no chat line).
+        db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND trial_at=?').bind(PERKS.plus.bumpMax, now, userId, now),
     ]);
     return r[0].meta.changes > 0;
 }

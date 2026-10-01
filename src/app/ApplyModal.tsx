@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gapText, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { CIcon, DataItems, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
@@ -18,9 +18,10 @@ const won = (n: number) => n.toLocaleString('ko-KR') + '원';
 // What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces).
 // The apply modal lists them; the profile's next grade line shows the first one.
 export function gradeBenefits(id: string): string[] {
-    if (id === 'plus') return [`끌올 하루 ${PERKS.plus.bumpsPerDay}번`, `거래중 글 ${PERKS.plus.openPosts}개`, `사진 ${PERKS.plus.photos}장`];
-    if (id === 'premium') return [`게시판 상단 ${PERKS.premium.boardSlots}자리`, `끌올 하루 ${PERKS.premium.bumpsPerDay}번`, `사진 ${PERKS.premium.photos}장`];
-    if (id === 'elite') return ['홈 추천 매물', `상단 ${PERKS.elite.boardSlots}자리`, `끌올 하루 ${PERKS.elite.bumpsPerDay}번`];
+    const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
+    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`];
+    if (id === 'premium') return [wallet('premium'), `게시판 상단 ${PERKS.premium.boardSlots}자리`];
+    if (id === 'elite') return [wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`, '홈 추천 매물'];
     return [];
 }
 

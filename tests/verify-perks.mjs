@@ -3,9 +3,10 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-// Grade benefits (WP10) on the strict server: post caps and same-title rules, 끌올, 게시판 상단 노출
-// and the home shelf, photo caps, the quick price change, GET me/usage, and the daily cron's
-// bumped_at backfill and grade-end reminder. scripts/test-local.mjs runs it on the 8791 server,
+// Grade benefits on the strict server: the cafe ceilings every member shares (SITE_RULES: open posts,
+// posts per day, photos, uploads) and same-title rules, the 끌올 지갑 (WP40: wallet, refill, same-post
+// gap, 새 글 우선, grant fill, races), 게시판 상단 노출 and the home shelf, the quick price change,
+// GET me/usage, and the daily cron's bumped_at backfill and grade-end reminder. scripts/test-local.mjs runs it on the 8791 server,
 // which has no POST_LIMITS=relaxed and receives test cron events (--test-scheduled).
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8791');
 assert.ok(['127.0.0.1', 'localhost'].includes(endpoint.hostname), 'Local Worker origin required.');
@@ -93,23 +94,30 @@ async function created(c, name, extra) {
 const setStatus = (c, id, status) => c(`posts/${id}/status`, 'PATCH', { status });
 const backdate = (ids, hours) => sql(`UPDATE posts SET bumped_at=bumped_at-${hours * HOUR} WHERE id IN (${ids.join(',')})`);
 
-// 1. Open-post and daily caps (일반: 10 and 10).
+// 1. Anti-flood ceilings, the same for every member: 100 open posts, 30 new posts a day.
 const capper = await register('cap');
-for (let i = 0; i < 10; i++) await created(capper, `일반 새 글 ${i + 1}`);
-check(true, '일반 creates 10 posts with distinct titles');
-refused(await create(capper), 429, '10개까지입니다. 거래완료로', '11th open post is refused');
-const firstOwn = (await capper(`posts?author=${capper.user.id}&size=40`)).data.posts;
-equal((await setStatus(capper, firstOwn[0].id, 'closed')).status, 200, 'one post is closed');
-refused(await create(capper), 429, '오늘 새 글은 10개까지입니다.', 'daily cap still refuses after closing one');
+for (let i = 0; i < 11; i++) await created(capper, `일반 새 글 ${i + 1}`);
+check(true, '일반 creates 11 open posts (the round-2 cap of 10 is gone)');
+const now0 = Date.now();
+sql(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT '${capper.user.id}',NULL,'post','seed-${run}-'||value,${now0} FROM json_each('${JSON.stringify(Array.from({ length: 18 }, (_, i) => i))}')`);
+equal((await capper('me/usage')).data.postsToday, 29, '29 new posts today (11 written, 18 seeded)');
+equal((await create(capper)).status, 201, 'the 30th new post of the day is created');
+refused(await create(capper), 429, '도배 방지: 오늘 새 글은 30개까지입니다.', 'the 31st new post of the day is refused');
 
-// Parallel creates cannot pass the open-post cap.
+// 100 open posts (hidden included); parallel creates cannot pass the ceiling.
+const seedOpen = (c, count) => sql(`INSERT INTO posts(author_id,kind,title,body,price,status,category,created_at,updated_at,bumped_at,title_key)
+    SELECT '${c.user.id}','sell','seed '||value,'자동 검증',10000,'open','other',${Date.now()},${Date.now()},${Date.now()},'seed${run}'||value FROM json_each('${JSON.stringify(Array.from({ length: count }, (_, i) => i))}')`);
 const racer = await register('race');
-for (let i = 0; i < 9; i++) await created(racer, `race ${i}`);
+seedOpen(racer, 99);
 const burst = await Promise.all([1, 2, 3].map(() => create(racer)));
-equal(burst.filter(r => r.status === 201).length, 1, 'three parallel creates at 9/10 open posts: exactly one is created');
+equal(burst.filter(r => r.status === 201).length, 1, 'three parallel creates at 99/100 open posts: exactly one is created');
 check(burst.every(r => r.status === 201 || r.status === 429), 'the others are refused with 429');
-equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE author_id='${racer.user.id}'`)[0].n, 10, 'the member has exactly 10 posts');
+equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE author_id='${racer.user.id}'`)[0].n, 100, 'the member has exactly 100 posts');
 equal(sql(`SELECT COUNT(*) AS n FROM post_seasons s JOIN posts p ON p.id=s.post_id WHERE p.author_id='${racer.user.id}'`)[0].n, 0, 'refused inserts leave no follow-up rows');
+refused(await create(racer), 429, '도배 방지: 거래중 글은 100개까지입니다. 거래완료로 바꾸거나 삭제해 주세요.', 'the 101st open post is refused');
+const racerOwn = (await racer(`posts?author=${racer.user.id}&size=1`)).data.posts;
+equal((await setStatus(racer, racerOwn[0].id, 'closed')).status, 200, 'one post is closed');
+equal((await create(racer)).status, 201, 'closing one frees a place');
 
 // 2. Same-title rules (플러스).
 const plus = await register('plus');
@@ -126,38 +134,131 @@ equal((await plus(`posts/${t2.data.id}`, 'DELETE')).status, 200, 'the new post i
 refused(await titled('28 챌린저 계정 팝니다'), 429, '부터 다시 올릴 수 있습니다', 'reposting a deleted title right away is refused');
 const kst = t => { const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * HOUR); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
 const deletedEvent = sql(`SELECT MAX(created_at) AS t FROM post_events WHERE post_id=${t2.data.id} AND kind='post'`)[0].t;
-refused(await titled('28 챌린저 계정 팝니다'), 429, `${kst(deletedEvent + 3 * HOUR)}부터`, 'the wait ends 3 hours (플러스 gap) after that post');
+refused(await titled('28 챌린저 계정 팝니다'), 429, `${kst(deletedEvent + 2 * HOUR)}부터`, 'the wait ends 2 hours (플러스 gap) after that post');
 const managerTitle = `[QA] 매니저 ${run}`;
 const m1 = await manager('posts', 'POST', sale(managerTitle)), m2 = await manager('posts', 'POST', sale(managerTitle));
 check(m1.status === 201 && m2.status === 201, 'the manager has no same-title cap');
 for (const r of [m1, m2]) await manager(`posts/${r.data.id}`, 'DELETE');
 
-// 3. 끌올 (일반: 6 hours, 3 per day).
+// 3. 끌올 지갑 (일반: 3 held, 1 more every 4 hours, the same post every 3 hours).
+// age(): moves a post's created_at and bumped_at back, as if it was written `hours` ago.
+const age = (ids, hours) => sql(`UPDATE posts SET created_at=created_at-${Math.round(hours * HOUR)},bumped_at=bumped_at-${Math.round(hours * HOUR)} WHERE id IN (${ids.join(',')})`);
+const wallet = async c => { const d = (await c('me/usage')).data; return { tokens: d.bumpTokens, max: d.bumpMax, refillMin: d.bumpRefillMin, next: d.nextRefillAt }; };
+const setWallet = (c, tokens, at) => sql(`UPDATE users SET bump_tokens=${tokens},bump_at=${at} WHERE id='${c.user.id}'`);
 const bumper = await register('bump');
+equal(await wallet(bumper), { tokens: 3, max: 3, refillMin: 240, next: null }, 'a new 일반 member starts with a full wallet (3/3)');
 const b1 = await created(bumper, 'bump post');
-refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 6시간마다 끌올할 수 있습니다.', 'bump right after posting waits for the 6-hour gap');
-backdate([b1], 7);
+refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 3시간마다 끌올할 수 있습니다. (', 'bump right after posting waits for the 3-hour gap');
+age([b1], 3.1);
 const bumped = await bumper(`posts/${b1}/bump`, 'POST');
-equal(bumped.status, 200, 'bump after 7 hours');
-equal([bumped.data.bumpsLeft, bumped.data.bumpsPerDay], [2, 3], 'bumpsLeft 2 of 3');
-check(bumped.data.nextBumpAt - bumped.data.bumpedAt === 6 * HOUR && bumped.data.resetAt > Date.now(), 'nextBumpAt and resetAt are returned');
-equal((await guest('posts?kind=sell')).data.posts[0].id, b1, 'the bumped post is first in 최신순');
+equal(bumped.status, 200, 'bump after 3 hours');
+equal([bumped.data.bumpTokens, bumped.data.bumpMax, bumped.data.bumpRefillMin], [2, 3, 240], 'the bump response carries the wallet (2/3)');
+check(bumped.data.nextRefillAt - bumped.data.bumpedAt === 4 * HOUR, 'the refill clock starts at the first spend from a full wallet');
+check(bumped.data.nextBumpAt - bumped.data.bumpedAt === 3 * HOUR, 'nextBumpAt is 3 hours later');
+equal((await guest(`posts?kind=sell&q=${run}`)).data.posts[0].id, b1, 'the bumped post is first in 최신순');
 const afterBump = (await guest('posts/' + b1)).data.post;
 check(afterBump.bump_count === 1 && afterBump.bumped_at > afterBump.created_at, 'bump_count and bumped_at are returned; created_at is kept');
-refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '(', 'bumping again waits for the gap');
+refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 3시간마다', 'bumping again waits for the gap');
 const other = await register('other');
 equal((await other(`posts/${b1}/bump`, 'POST')).status, 403, 'another member cannot bump');
 equal((await manager(`posts/${b1}/bump`, 'POST')).status, 403, 'the manager cannot bump a member post');
 equal((await setStatus(bumper, b1, 'closed')).status, 200, 'post is closed');
 refused(await bumper(`posts/${b1}/bump`, 'POST'), 409, '거래중인 글만 끌올할 수 있습니다.', 'a closed post cannot be bumped');
+
+// Three bumps empty the wallet; the 4th post waits for the refill.
 const daily = await register('daily');
 const four = [];
 for (let i = 0; i < 4; i++) four.push(await created(daily, 'daily bump post'));
-backdate(four, 7);
-for (let i = 0; i < 3; i++) equal((await daily(`posts/${four[i]}/bump`, 'POST')).data.bumpsLeft, 2 - i, `bump ${i + 1} of 3`);
-refused(await daily(`posts/${four[3]}/bump`, 'POST'), 429, '오늘 끌올 3번을 모두 썼습니다. 자정에 초기화됩니다.', 'the 4th bump of the day is refused');
+age(four, 4);
+let firstSpend = 0;
+for (let i = 0; i < 3; i++) {
+    const r = await daily(`posts/${four[i]}/bump`, 'POST');
+    equal([r.status, r.data.bumpTokens], [200, 2 - i], `bump ${i + 1} of 3 (wallet ${2 - i}/3)`);
+    if (!i) firstSpend = r.data.bumpedAt;
+}
+refused(await daily(`posts/${four[3]}/bump`, 'POST'), 429, `끌올이 없습니다. ${kst(firstSpend + 4 * HOUR)}에 1개 충전됩니다.`, 'the 4th post: the wallet is empty until the refill');
+equal((await wallet(daily)).tokens, 0, 'the wallet reads 0/3');
 equal((await daily(`posts/${four[3]}`, 'PUT', sale('수정한 제목 ' + run))).status, 200, 'editing is allowed');
-equal(sql(`SELECT bumped_at<${Date.now() - 6 * HOUR} AS old FROM posts WHERE id=${four[3]}`)[0].old, 1, 'editing never bumps');
+equal(sql(`SELECT bumped_at<${Date.now() - 3 * HOUR} AS old FROM posts WHERE id=${four[3]}`)[0].old, 1, 'editing never bumps');
+equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${daily.user.id}' AND kind='bump'`)[0].n, 3, 'only the 3 bumps that moved a post are logged');
+
+// Refill: 4 hours and 1 minute after the clock started, 1 is back.
+sql(`UPDATE users SET bump_at=bump_at-${4 * HOUR + 60000} WHERE id='${daily.user.id}'`);
+equal((await wallet(daily)).tokens, 1, 'after 4h01m the wallet holds 1');
+equal((await daily(`posts/${four[3]}/bump`, 'POST')).status, 200, 'and the 4th post is bumped');
+
+// 엘리트: 8 held, 1 every hour; a long wait is capped at 8.
+const eliteW = await register('elitew');
+await grant(eliteW, 'elite');
+setWallet(eliteW, 0, Date.now() - (8 * HOUR + 60000));
+equal(await wallet(eliteW), { tokens: 8, max: 8, refillMin: 60, next: null }, '엘리트 with 0 after 8h01m reads 8/8 (capped)');
+setWallet(eliteW, 0, Date.now() - (20 * HOUR));
+equal((await wallet(eliteW)).tokens, 8, 'and 20 hours never give more than 8');
+
+// The same post again: 엘리트 30분, 프리미엄 1시간, 플러스 2시간, 일반 3시간 after its last bump.
+const ep = await created(eliteW, 'elite gap post');
+age([ep], 1);
+equal((await eliteW(`posts/${ep}/bump`, 'POST')).status, 200, '엘리트 bumps a post');
+sql(`UPDATE posts SET bumped_at=${Date.now() - 20 * 60000} WHERE id=${ep}`);
+refused(await eliteW(`posts/${ep}/bump`, 'POST'), 429, '같은 글은 30분마다 끌올할 수 있습니다.', '엘리트: the same post 20 minutes later');
+const gapMember = async (name, grade, text) => {
+    const c = await register(name);
+    if (grade) await grant(c, grade);
+    const id = await created(c, name + ' gap post');
+    sql(`UPDATE posts SET created_at=${Date.now() - 5 * HOUR},bump_count=1,bumped_at=${Date.now() - 20 * 60000} WHERE id=${id}`);
+    refused(await c(`posts/${id}/bump`, 'POST'), 429, `같은 글은 ${text}마다 끌올할 수 있습니다.`, `${grade || 'normal'}: the same post 20 minutes later`);
+    return c;
+};
+const premiumGap = await gapMember('gpre', 'premium', '1시간');
+const plusGap = await gapMember('gplus', 'plus', '2시간');
+await gapMember('gnorm', null, '3시간');
+equal((await premiumGap('me/usage')).data.bumpMax, 6, '프리미엄 holds 6');
+equal((await plusGap('me/usage')).data.bumpRefillMin, 180, '플러스 refills every 3 hours');
+
+// 새 글 우선: a post placed ahead of now cannot be bumped down, and the wallet is untouched.
+const prio = await register('prio');
+const pp = await created(prio, 'priority post');
+const prioUntil = Date.now() + 30 * 60000;
+sql(`UPDATE posts SET created_at=${Date.now() - 5 * HOUR},bumped_at=${prioUntil},bump_count=0 WHERE id=${pp}`);
+refused(await prio(`posts/${pp}/bump`, 'POST'), 429, `새 글 우선 중인 글은 ${kst(prioUntil)}부터 끌올할 수 있습니다.`, 'a post in 새 글 우선 is not bumped');
+equal((await wallet(prio)).tokens, 3, 'the wallet is unchanged (3/3)');
+equal(sql(`SELECT bumped_at FROM posts WHERE id=${pp}`)[0].bumped_at, prioUntil, 'the post keeps its place');
+equal((await prio(`posts/${pp}`, 'DELETE')).status, 200, 'the priority post is removed (it would stay on top of 최신순 for later runs)');
+
+// A grant fills the wallet to the new grade's cap and says so in the manager chat; the end clamps it.
+const granted = await register('grantw');
+setWallet(granted, 0, Date.now());
+equal((await wallet(granted)).tokens, 0, 'the member is at 0/3');
+const app = await granted('applications', 'POST', { kind: 'grade', target: 'elite', plan: 'permanent' });
+equal(app.status, 201, `the member applies for 엘리트 (${app.data.error || ''})`);
+equal((await manager(`applications/${app.data.id}`, 'PATCH', { action: 'approve' })).status, 200, 'the manager approves');
+equal(await wallet(granted), { tokens: 8, max: 8, refillMin: 60, next: null }, 'the grant fills the wallet to 8/8');
+const grantLine = (await granted(`chats/${app.data.chatId}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body).find(b => b.includes('등급 지급 완료'));
+check(grantLine?.includes('끌올이 8개로 충전되었습니다.'), `the grant chat line says the wallet was filled (${JSON.stringify(grantLine)})`);
+sql(`UPDATE user_grades SET expires_at=${Date.now() - 1000} WHERE user_id='${granted.user.id}'`);
+const clamped = await wallet(granted);
+check(clamped.tokens <= 3 && clamped.max === 3, `after the grade ends the next read clamps to 일반 (${clamped.tokens}/${clamped.max})`);
+const direct = await register('grantd');
+setWallet(direct, 0, Date.now());
+await grant(direct, 'premium');
+equal((await wallet(direct)).tokens, 6, 'a grant from the member page fills the wallet too (6/6)');
+
+// Race: two parallel bumps on two posts with 1 in the wallet: exactly one passes.
+const racer2 = await register('wrace');
+const rp = [await created(racer2, 'race a'), await created(racer2, 'race b')];
+age(rp, 4);
+setWallet(racer2, 1, Date.now());
+const pair = await Promise.all(rp.map(id => racer2(`posts/${id}/bump`, 'POST')));
+equal(pair.map(r => r.status).sort(), [200, 429], 'two parallel bumps with 1 in the wallet: exactly one 200');
+equal(sql(`SELECT bump_tokens FROM users WHERE id='${racer2.user.id}'`)[0].bump_tokens, 0, 'the wallet is at 0');
+equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE id IN (${rp.join(',')}) AND bump_count=1`)[0].n, 1, 'exactly one post moved');
+
+// The manager has no wallet and no gap.
+const mp = await manager('posts', 'POST', sale(`[QA] 매니저 끌올 ${run}`));
+equal(mp.status, 201, 'the manager writes a post');
+const mb = [await manager(`posts/${mp.data.id}/bump`, 'POST'), await manager(`posts/${mp.data.id}/bump`, 'POST')];
+equal(mb.map(r => [r.status, r.data.bumpTokens]), [[200, null], [200, null]], 'the manager bumps twice in a row (no wallet, no gap)');
+await manager(`posts/${mp.data.id}`, 'DELETE');
 
 // 대리(진행) needs 대리 인증 to bump.
 const proxy = await register('proxy');
@@ -165,7 +266,7 @@ equal((await manager(`manage/users/${proxy.user.id}/badges`, 'POST', { badge: 'p
 const proxyPost = await proxy('posts', 'POST', { kind: 'proxy_offer', category: 'ladder', title: `[QA] 대리 ${run}`, body: '자동 검증', price: 10000, status: 'open', tags: [], images: [], details: {} });
 equal(proxyPost.status, 201, '대리(진행) post is created');
 equal((await manager(`manage/users/${proxy.user.id}/badges`, 'POST', { badge: 'proxy', active: false })).status, 200, '대리 인증 is removed');
-backdate([proxyPost.data.id], 7);
+age([proxyPost.data.id], 7);
 equal((await proxy(`posts/${proxyPost.data.id}/bump`, 'POST')).status, 403, 'a 대리(진행) post cannot be bumped without 대리 인증');
 
 // 4. 게시판 상단 노출 and the home shelf.
@@ -218,20 +319,28 @@ const editClosed = await elite(`posts/${E[1]}`, 'PUT', sale('elite closed by edi
 equal(editClosed.status, 200, 'closing through the editor');
 equal(sql(`SELECT featured_at FROM posts WHERE id=${E[1]}`)[0].featured_at, null, 'closing through the editor clears featured_at');
 
-// 5. Photos per post (일반 6, 플러스 8); edits keep photos after a grade ends.
+// 5. Photos: 100 per post for every member; uploads 120 per 10 minutes and 300 per day.
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
-const photos = async (c, count) => { const ids = []; for (let i = 0; i < count; i++) ids.push((await c('uploads', 'POST', undefined, { type: 'image/png', bytes: png })).data.id); return ids; };
-const plainPhotos = await photos(plain, 7);
-refused(await create(plain, { images: plainPhotos }), 400, '사진은 한 글에 6장까지입니다.', '일반 post with 7 photos');
-const photoPlus = await register('photo');
-await grant(photoPlus, 'plus');
-const plusPhotos = await photos(photoPlus, 9);
-const seven = await create(photoPlus, { images: plusPhotos.slice(0, 7) });
-equal(seven.status, 201, '플러스 post with 7 photos');
-refused(await create(photoPlus, { images: plusPhotos }), 400, '사진은 한 글에 8장까지입니다.', '플러스 post with 9 photos');
-const grantRow = (await manager('manage/users/' + photoPlus.user.id)).data.grants.find(g => g.grade === 'plus');
-equal((await manager(`manage/users/${photoPlus.user.id}/grades/${grantRow.id}`, 'DELETE')).status, 200, 'manager revokes 플러스');
-equal((await photoPlus('posts/' + seven.data.id, 'PUT', sale('photo edit ' + run, { images: plusPhotos.slice(0, 7) }))).status, 200, 'the 7-photo post can still be edited as 일반');
+const upload = c => c('uploads', 'POST', undefined, { type: 'image/png', bytes: png });
+const photos = async (c, count) => {
+    const ids = [];
+    for (let i = 0; i < count; i++) { const r = await upload(c); assert.equal(r.status, 201, `upload ${i + 1}: ${JSON.stringify(r.data)}`); ids.push(r.data.id); }
+    return ids;
+};
+const photoMember = await register('photo');
+const many = await photos(photoMember, 101);
+check(true, '일반 uploads 101 photos within 10 minutes');
+const hundred = await create(photoMember, { images: many.slice(0, 100) });
+equal(hundred.status, 201, '일반 post with 100 photos');
+refused(await create(photoMember, { images: many }), 400, '사진은 한 글에 100장까지입니다.', '일반 post with 101 photos');
+// A post that already holds more (written before this rule) keeps its photos on edit.
+sql(`UPDATE posts SET images='${JSON.stringify(many)}' WHERE id=${hundred.data.id}`);
+equal((await photoMember('posts/' + hundred.data.id, 'PUT', sale('photo edit ' + run, { images: many }))).status, 200, 'an edit keeps the 101 photos the post already has');
+await photos(photoMember, 19);
+equal((await upload(photoMember)).status, 429, 'the 121st upload within 10 minutes is refused');
+const dayMember = await register('upday');
+sql(`INSERT INTO rate_limits(key,count,reset_at) VALUES('upload-day:${dayMember.user.id}',300,${Date.now() + DAY})`);
+equal((await upload(dayMember)).status, 429, 'the 301st upload of the day is refused');
 
 // 6. Quick price change (판매).
 const seller = await register('sell');
@@ -261,13 +370,14 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
-equal([usage.grade, usage.bumpsToday, usage.bumpsLeft, usage.openPosts, usage.postsToday], ['normal', 3, 0, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpsPerDay: 3, bumpGapHours: 6, openPosts: 10, postsPerDay: 10, photos: 6, boardSlots: 0, homeShelf: false }, '일반 perks');
-check(usage.resetAt > Date.now() && usage.resetAt - Date.now() <= DAY, 'resetAt is the next KST midnight');
+equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 240, bumpGapMinutes: 180, boardSlots: 0, homeShelf: false }, '일반 perks');
+equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
+check(usage.nextRefillAt > Date.now() && usage.nextRefillAt - Date.now() <= 4 * HOUR, 'nextRefillAt is within the next 4 hours');
 const premiumUsage = (await premium('me/usage')).data;
-equal([premiumUsage.grade, premiumUsage.perks.boardSlots, premiumUsage.perks.photos, premiumUsage.featured.map(f => f.id)], ['premium', 1, 10, [B]], 'premium perks and featured list');
+equal([premiumUsage.grade, premiumUsage.perks.boardSlots, premiumUsage.bumpMax, premiumUsage.featured.map(f => f.id)], ['premium', 1, 6, [B]], 'premium perks and featured list');
 const managerUsage = (await manager('me/usage')).data;
-equal([managerUsage.perks.bumpsPerDay, managerUsage.perks.openPosts, managerUsage.bumpsLeft], [null, null, null], 'the manager has no caps (null)');
+equal([managerUsage.perks.bumpMax, managerUsage.bumpTokens, managerUsage.nextRefillAt, managerUsage.rules.openPosts, managerUsage.rules.photosPerPost], [null, null, null, null, 100], 'the manager has no wallet and no open-post ceiling (null)');
 equal((await guest('me/usage')).status, 401, 'usage needs a login');
 
 // 8. Cron: bumped_at and title_key backfill, and old post events.
