@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, Flag, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, suspendEndText, SUSPEND_FOREVER, type Post, type User } from '../../shared/market';
+import { dateText, longDate, reviewName, suspendEndText, tradeStatsText, SUSPEND_FOREVER, type Post, type Review, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -16,7 +16,11 @@ import { MemberReportModal } from '../components/MemberReport';
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
 // suspended: under 이용 정지 now; suspended_until (until when) reaches only the member and the manager.
-type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
+// tradeCount, goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
+type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
+// One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
+type ReviewRow = Review & { nickname: string; role: string; grade: string; badges: string[]; author_deleted?: boolean };
+type ProfileTab = 'active' | 'closed' | 'reviews';
 // GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
 type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
 const PAGE_SIZE = 20;
@@ -25,7 +29,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const { me, setMe, refreshMe, requireLogin, openApply, logout } = useApp();
     // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
-    const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
+    const [tab, setTab] = useState<ProfileTab>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [page, setPage] = useState(1), [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
@@ -45,6 +49,8 @@ export default function ProfilePage({ id }: { id?: string }) {
         let alive = true;
         listGen.current++;
         setPosts(null); setPage(1);
+        // The 후기 tab loads its own list (ReviewList).
+        if (tab === 'reviews') return;
         postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); } }).catch(() => { if (alive) setPosts([]); });
         return () => { alive = false; };
     }, [id, tab, postsVersion]);
@@ -121,6 +127,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${user.suspended_until >= SUSPEND_FOREVER ? '영구' : '~' + suspendEndText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
+                <p className="profile-trades">{tradeStatsText(user.tradeCount ?? 0, user.goodCount ?? 0)}</p>
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount} · 거래완료 {user.closedCount}</p>
                 {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
                 {!mine && user.last_seen_at && <p className="muted small profile-seen">{lastSeenText(user.last_seen_at)}</p>}
@@ -169,8 +176,10 @@ export default function ProfilePage({ id }: { id?: string }) {
         </nav>}
 
         <section className="section">
-            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }]} />
-            <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
+            <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' },
+                { id: 'reviews', label: <>후기{user.reviewCount ? <b>{user.reviewCount}</b> : null}</> }]} />
+            <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} />
+                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
                 {posts.length < total && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
@@ -192,6 +201,46 @@ export default function ProfilePage({ id }: { id?: string }) {
         <PasswordModal open={account === 'password'} onClose={() => setAccount('')} />
         <WithdrawModal open={account === 'withdraw'} onClose={() => setAccount('')} onDone={() => { setAccount(''); setMe(null); void navigate('/'); toast('탈퇴 완료'); }} />
     </div>;
+}
+
+// The 후기 a member received, newest first, 20 at a time with '더 보기' (GET /users/:id/reviews).
+function ReviewList({ userId }: { userId: string }) {
+    const [rows, setRows] = useState<ReviewRow[] | null>(null), [total, setTotal] = useState(0), [page, setPage] = useState(1), [busy, setBusy] = useState(false);
+    const load = (n: number) => api<{ reviews: ReviewRow[]; total: number }>(`users/${userId}/reviews?page=${n}`);
+    useEffect(() => {
+        let alive = true;
+        setRows(null); setPage(1);
+        load(1).then(d => { if (alive) { setRows(d.reviews); setTotal(d.total); } }).catch(() => { if (alive) setRows([]); });
+        return () => { alive = false; };
+    }, [userId]);
+    async function more() {
+        if (busy || !rows) return;
+        setBusy(true);
+        try {
+            const d = await load(page + 1), seen = new Set(rows.map(r => r.id));
+            setRows([...rows, ...d.reviews.filter(r => !seen.has(r.id))]);
+            setTotal(d.reviews.length ? d.total : rows.length);
+            setPage(page + 1);
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    if (rows === null) return <SkeletonRows count={2} height={72} />;
+    if (!rows.length) return <EmptyState title="받은 후기가 없습니다" />;
+    return <>
+        <p className="muted small" style={{ marginBottom: 12 }}>{total}건</p>
+        <ul className="review-list">{rows.map(r => <li key={r.id}>
+            <div className="review-head">
+                {r.author_deleted ? <NameLine nickname={r.nickname} compact /> : <Link to={'/profile/' + r.author_id} className="review-who"><NameLine nickname={r.nickname} grade={r.grade} role={r.role} badges={r.badges} compact /></Link>}
+                <time className="review-date">{dateText(r.created_at)}</time>
+            </div>
+            <div className="review-line">
+                <span className={'review-verdict' + (r.good ? '' : ' is-bad')}>{reviewName(r.good)}</span>
+                {r.tags.map(t => <span key={t} className="tag">{t}</span>)}
+            </div>
+            {r.text && <p className="review-text">{r.text}</p>}
+        </li>)}</ul>
+        {rows.length < total && <button type="button" className="btn btn-line more-btn" disabled={busy} onClick={() => void more()}>더 보기</button>}
+    </>;
 }
 
 // Other devices are signed out by the change; this one stays signed in.

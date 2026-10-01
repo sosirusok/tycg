@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
-import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, SUSPEND_FOREVER, dateText, longDate, suspendDaysLabel, suspendEndText, type User } from '../../shared/market';
+import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, SUSPEND_FOREVER, dateText, longDate, reviewName, suspendDaysLabel, suspendEndText, type Review, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
@@ -9,6 +9,8 @@ import { Modal, NameLine } from './ui';
 type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null };
 type Revoke = { name: string; description?: string; task: () => Promise<unknown>; done: string };
 type Sanction = { id: number; days: number | null; reason: string; created_at: number };
+// A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
+type ReviewRow = Review & { nickname: string };
 type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[] };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
@@ -25,14 +27,19 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
     const [revoke, setRevoke] = useState<Revoke | null>(null);
     // 이용 정지: the period chip and reason, then a confirm (days null: 정지 해제).
     const [suspendDays, setSuspendDays] = useState<number>(7), [suspendReason, setSuspendReason] = useState(''), [suspending, setSuspending] = useState<{ days: number | null } | null>(null);
-    const load = useCallback(() => api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))), [userId]);
+    // 받은 후기 (the latest 20) and the one waiting for the delete confirm.
+    const [reviews, setReviews] = useState<{ rows: ReviewRow[]; total: number } | null>(null), [removing, setRemoving] = useState<ReviewRow | null>(null);
+    const load = useCallback(() => Promise.all([
+        api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))),
+        api<{ reviews: ReviewRow[]; total: number }>(`users/${userId}/reviews`).then(d => setReviews({ rows: d.reviews, total: d.total })).catch(() => setReviews(null)),
+    ]), [userId]);
     useEffect(() => { void load(); }, [load, version]);
     const plans = gradeInfo(grade).plans;
     useEffect(() => { if (!plans.some(p => p.id === plan)) setPlan('permanent'); }, [grade]);
 
     const run = async (task: () => Promise<unknown>, message: string) => {
         setBusy(true);
-        try { await task(); toast(message); setRevoke(null); setSuspending(null); await load(); onChange?.(); }
+        try { await task(); toast(message); setRevoke(null); setSuspending(null); setRemoving(null); await load(); onChange?.(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     };
@@ -112,6 +119,15 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             </div>}
             {(data.sanctions || []).slice(0, 5).map(x => <div key={x.id} className="mp-row small"><span className="grow">{x.days === null ? '정지 해제' : `이용 정지 ${suspendDaysLabel(x.days)}`}{x.reason && <span className="muted"> · {x.reason}</span>}</span><span className="muted">{dateText(x.created_at)}</span></div>)}
         </div>}
+        {!u.deleted_at && reviews && <div className="mp-block">
+            <h4>받은 후기{reviews.total > 0 && <span className="muted small"> {reviews.total}건</span>}</h4>
+            {reviews.rows.length ? reviews.rows.map(r => <div key={r.id} className="mp-row mp-review">
+                <span className="grow"><b>{reviewName(r.good)}</b> <span className="muted small">{r.nickname} · {dateText(r.created_at)}</span>
+                    {r.tags.length > 0 && <span className="mp-review-text">{r.tags.join(', ')}</span>}
+                    {r.text && <span className="mp-review-text">{r.text}</span>}</span>
+                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemoving(r)}>삭제</button>
+            </div>) : <p className="muted small">받은 후기 없음</p>}
+        </div>}
         {u.role !== 'manager' && !u.deleted_at && <div className="mp-block">
             <h4>계정</h4>
             <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
@@ -126,6 +142,10 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 ? <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(suspend(null), '이용 정지 해제')}>해제</button>
                 : <button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (suspending) void run(suspend(suspending.days), '이용 정지 완료'); }}>정지</button>}</>}>
             <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+        </Modal>
+        <Modal open={!!removing} onClose={() => { if (!busy) setRemoving(null); }} title="후기 삭제" description="복구할 수 없습니다."
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemoving(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (removing) void run(() => api(`manage/reviews/${removing.id}`, 'DELETE'), '삭제 완료'); }}>삭제</button></>}>
+            {removing && <p className="small">{reviewName(removing.good)} · {removing.nickname}{removing.text ? ` · ${removing.text}` : ''}</p>}
         </Modal>
         <Modal open={resetting} onClose={() => { if (!busy) setResetting(false); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setResetting(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void issue()}>발급</button></>}>

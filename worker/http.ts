@@ -81,6 +81,13 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
+// '거래 3회 · 후기 좋아요 2' (WP23): the trades the member took part in as seller or buyer, and the
+// 좋아요 후기 they received. `alias` is the users table alias in the surrounding query.
+export function tradeColumns(alias: string, prefix = '') {
+    return `(SELECT COUNT(*) FROM trades tr WHERE tr.seller_id=${alias}.id OR tr.buyer_id=${alias}.id) AS ${prefix}trade_count,`
+        + `(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=${alias}.id AND rv.good=1) AS ${prefix}good_count`;
+}
+
 // The one message for anything aimed at a member who left (chat, grants, temporary password).
 export const WITHDRAWN = '탈퇴한 회원입니다.';
 // What a withdrawn member is called on screen. The stored nickname keeps a random suffix only

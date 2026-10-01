@@ -267,6 +267,18 @@ export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·�
 // A report about a member (from the chat header or the profile) adds the cafe words 젯취·거파 and 잠수.
 export const MEMBER_REPORT_REASONS = ['사기·먹튀', '젯취·거파', '잠수', '대주수·전적 속임', '욕설·비방', '기타'] as const;
 
+// 거래 후기 (WP23): 좋아요 or 아쉬워요, plus any of that side's tags and one line of at most 100 characters.
+export const REVIEW_TAGS = { good: ['약속 잘 지킴', '답장 빠름', '설명과 같음'], bad: ['잠수', '거래 파기', '설명과 다름'] } as const;
+export const REVIEW_TEXT_MAX = 100;
+export const REVIEW_DAYS = 30;
+// The card a trade puts in the chat of its two members (also the chat list preview).
+export const REVIEW_CARD_TEXT = '거래 후기 남기기';
+export const reviewName = (good: boolean | number) => good ? '좋아요' : '아쉬워요';
+// '거래 3회 · 후기 좋아요 2' on the profile and the detail page's author box.
+export const tradeStatsText = (trades: number, good: number) => `거래 ${trades}회 · 후기 좋아요 ${good}`;
+// One 후기 as the profile tab and the chat card show it.
+export type Review = { id: number; trade_id: string; author_id: string; target_id: string; good: number; tags: string[]; text: string; created_at: number };
+
 // 이용 정지: 3, 7 or 30 days, or 0 for 영구. 영구 is stored as this far-future time, which is past
 // the largest Date, so it is never formatted as a date.
 export const SUSPEND_DAYS = [3, 7, 30, 0] as const;

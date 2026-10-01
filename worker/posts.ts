@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember, setting, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeColumns, withMember, setting, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
@@ -35,8 +35,9 @@ export async function latestSeason() {
     return Number.isInteger(v) && v >= LATEST_SEASON && v <= 200 ? v : LATEST_SEASON;
 }
 
-// One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out).
-const onePostSelect = postSelect.replace(' FROM posts p ', ',u.last_seen_at AS author_last_seen_at FROM posts p ');
+// One post also carries the author's '최근 접속' and '거래 3회 · 후기 좋아요 2' (WP23) for the detail
+// page's author box (lists leave them out).
+const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,${tradeColumns('u', 'author_')} FROM posts p `);
 async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
@@ -85,7 +86,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
-        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; }
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_good_count; }
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,

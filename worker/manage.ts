@@ -3,6 +3,7 @@ import { REPORT_REASONS } from '../shared/market';
 import { decorate, endOffersStatements, parse, postSelect } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
+import { deleteReview } from './reviews';
 
 // One 신고 row: the reporter's name line, and for a member report the reported member's (탈퇴회원 once
 // they left, with whether they are under 이용 정지 now).
@@ -68,6 +69,8 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         }
         return json({ ok: true });
     }
+    // A 후기 the manager removes (WP23), from the member panel.
+    if (p[1] === 'reviews' && p[2] && !p[3] && method === 'DELETE') return deleteReview(p[2]);
     if (p[1] === 'report' && method === 'POST') {
         const b = await body(req);
         await db().prepare('UPDATE reports SET status=? WHERE id=?').bind(b.status === 'pending' ? 'pending' : 'resolved', b.id).run();

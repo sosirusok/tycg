@@ -1,6 +1,6 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
-    digest, tokenOf, sessionCookie, memberColumns, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
+    digest, tokenOf, sessionCookie, memberColumns, tradeColumns, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME,
 } from './http';
 import { postsHandler } from './posts';
@@ -10,6 +10,7 @@ import { communityHandler } from './community';
 import { membershipHandler } from './membership';
 import { manageHandler } from './manage';
 import { usageHandler } from './perks';
+import { reviewsHandler } from './reviews';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -149,13 +150,15 @@ async function usersHandler(req: Request, p: string[]) {
         const viewer = await currentUser(req);
         // Counts skip 대리(진행) posts whose author lost 대리 인증, as the board list does (the author still counts them).
         const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))";
-        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
+        // '거래 3회 · 후기 좋아요 2' (trade_count, good_count) and how many 후기 the 후기 tab holds.
+        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
+            ${tradeColumns('u')},(SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id) AS review_count FROM users u WHERE u.id=?`)
             .bind(viewer?.id || '', viewer?.id || '', p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
-        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, ...rest } = row;
+        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, trade_count, good_count, review_count, ...rest } = row;
         // A withdrawn member is only a name: no bio, grade, badges, counts or chat.
-        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, last_seen_at: null, deleted: true } });
-        const user: Record<string, unknown> = withMember(rest);
+        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, tradeCount: 0, goodCount: 0, reviewCount: 0, last_seen_at: null, deleted: true } });
+        const user: Record<string, unknown> = { ...withMember(rest), tradeCount: trade_count, goodCount: good_count, reviewCount: review_count };
         // The nickname before the latest change stays on the profile for 90 days.
         if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
         // The member sees when their nickname can change again (30 days after the last change).
@@ -228,15 +231,25 @@ export async function handleApi(req: Request) {
         if (method !== 'GET') csrf(req);
         switch (p[0]) {
             case 'auth': return await authHandler(req, p);
-            case 'users': if (p[1]) return await usersHandler(req, p); break;
+            case 'users': {
+                // users/:id/reviews (WP23) is the 후기 tab; users/:id is the profile.
+                if (p[2] === 'reviews') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+                if (p[1]) return await usersHandler(req, p);
+                break;
+            }
             case 'stats': if (method === 'GET') return await stats(); break;
             case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first() });
-            case 'posts': return await postsHandler(req, p, url);
+            case 'posts': {
+                // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).
+                if (p[2] === 'partners' || p[2] === 'trade') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+                return await postsHandler(req, p, url);
+            }
             case 'uploads': case 'images': { const r = await filesHandler(req, p); if (r) return r; break; }
             case 'chats': { const r = await chatHandler(req, p, url); if (r) return r; break; }
             case 'config': case 'applications': { const r = await membershipHandler(req, p); if (r) return r; break; }
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
             case 'me': if (p[1] === 'usage' && method === 'GET') return await usageHandler(req); break;
+            case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

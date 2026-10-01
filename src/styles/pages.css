@@ -137,6 +137,13 @@
 .author-box .name-line .nick { font-size: var(--fs-15); }
 .author-stats { display: block; color: var(--ink-3); font-size: var(--fs-13); margin-top: 4px; }
 .author-box-top { display: none; }
+/* '거래 3회 · 후기 좋아요 2', then '최근 접속' under it. */
+.author-stats + .author-stats { margin-top: 2px; }
+/* '거래한 회원' after 거래완료 (detail and the chat's pinned bar): radio cards of the partners, and
+   '사이트 밖 거래 · 건너뛰기' as a text button beside 등록. */
+.partner-option { align-items: center; padding: 12px 16px; }
+.partner-option .apply-option-body { flex: 1; }
+.modal-foot .trade-skip { flex: none; padding: 0 4px; font-size: var(--fs-14); }
 .owner-tools { display: grid; gap: 8px; }
 .seg.seg-full { display: grid; grid-template-columns: repeat(3, 1fr); }
 .seg.seg-full label { min-width: 0; padding: 0 6px; white-space: nowrap; }
@@ -344,6 +351,12 @@
 .event-status.st-approved { background: var(--ink-2); color: var(--white); }
 .listing-card { display: flex; align-items: center; gap: 12px; }
 .listing-card:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+/* '거래 후기 남기기': 좋아요 / 아쉬워요 side by side, that side's tags, one line and 등록. */
+.review-form { display: grid; gap: 10px; margin-top: 4px; }
+.review-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.review-pick .chip { justify-content: center; }
+.review-form .input { height: 40px; font-size: var(--fs-14); }
+.review-verdict { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
 .composer { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
 .quick-replies { margin-bottom: 8px; }
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
@@ -372,6 +385,9 @@
 .mp-suspend { display: grid; gap: 8px; margin-top: 2px; }
 .mp-suspend .input { height: 38px; font-size: var(--fs-14); }
 .mp-suspend .btn { justify-self: start; }
+.mp-review { align-items: flex-start; padding: 6px 0; }
+.mp-review b { color: var(--ink); }
+.mp-review-text { display: block; margin-top: 2px; color: var(--ink-2); font-size: var(--fs-13); overflow-wrap: anywhere; }
 .mp-temp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-20); letter-spacing: .08em; }
 @media (max-width: 1200px) {
   .chat-room.with-panel { grid-template-columns: minmax(0, 1fr); }
@@ -399,6 +415,17 @@
 .profile-head { display: flex; align-items: flex-start; gap: 20px; }
 .profile-bio { margin-top: 12px; color: var(--ink-2); white-space: pre-wrap; }
 .profile-seen { margin-top: 2px; }
+/* '거래 3회 · 후기 좋아요 2' right under the name line. */
+.profile-trades { margin-top: 8px; color: var(--ink); font-size: var(--fs-15); font-weight: 600; }
+/* 후기 tab: who and when, then 좋아요 or 아쉬워요 with the tags, then the line. */
+.review-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.review-list li { display: grid; gap: 8px; padding: 16px 4px; border-bottom: 1px solid var(--line); }
+.review-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.review-who { min-width: 0; }
+.review-date { flex: none; color: var(--ink-3); font-size: var(--fs-13); }
+.review-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.review-line .review-verdict { margin-right: 4px; font-size: var(--fs-14); }
+.review-text { color: var(--ink-2); font-size: var(--fs-15); overflow-wrap: anywhere; }
 .profile-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .profile-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 32px; }
 .card-title { margin-bottom: 14px; font-size: var(--fs-16); font-weight: 700; }

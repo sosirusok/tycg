@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } fr
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, tagName, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, tagName, tradeStatsText, wonToMan,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -12,10 +12,12 @@ import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
+import { TradeSheet } from '../components/TradeSheet';
 
 type Row = [string, ReactNode];
-// Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null };
+// Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
+// and the author's trade and 좋아요 counts from WP23).
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_good_count?: number };
 type Usage = {
     perks: { bumpsPerDay: number | null; bumpGapHours: number | null; boardSlots: number | null };
     bumpsToday: number; bumpsLeft: number | null; featured: { id: number; title: string }[];
@@ -103,6 +105,8 @@ export function Detail({ id }: { id: string }) {
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
+    // '거래한 회원' after the author sets 거래완료 (WP23).
+    const [tradeSheet, setTradeSheet] = useState(false);
     const load = () => api<{ post: DetailPost }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
@@ -166,10 +170,16 @@ export function Detail({ id }: { id: string }) {
             catch (e) { toast.error(errorText(e)); }
         });
     }
+    // 거래완료 then asks who the trade was with; the status is saved first, so the sheet never holds it up.
+    // A member under 이용 정지 cannot write to other members, so the sheet stays shut for them.
     async function setStatus(status: string) {
         if (busy || status === post!.status) return;
         setBusy(true);
-        try { await api(`posts/${post!.id}/status`, 'PATCH', { status }); toast(`상태 변경: ${STATUS_NAMES[status]}`); await load(); void loadUsage(); }
+        try {
+            await api(`posts/${post!.id}/status`, 'PATCH', { status }); toast(`상태 변경: ${STATUS_NAMES[status]}`);
+            if (status === 'closed' && !(me?.suspended_until && me.suspended_until > Date.now())) setTradeSheet(true);
+            await load(); void loadUsage();
+        }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
@@ -316,6 +326,7 @@ export function Detail({ id }: { id: string }) {
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
+        {mine && <TradeSheet postId={tradeSheet ? post.id : null} onClose={() => setTradeSheet(false)} onDone={() => void load()} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
             footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-danger-solid" onClick={remove}>삭제</button></>} />
     </div>;
@@ -327,9 +338,13 @@ function AuthorBox({ post, className }: { post: DetailPost; className: string })
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
+    // '거래 3회 · 후기 좋아요 2', then '최근 접속' when it is known.
+    const seen = lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
-        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats">{lastSeenText(post.author_last_seen_at) || '프로필 보기'}</span></span>
+        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} />
+            <span className="author-stats">{tradeStatsText(post.author_trade_count ?? 0, post.author_good_count ?? 0)}</span>
+            {seen && <span className="author-stats author-seen">{seen}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;
 }

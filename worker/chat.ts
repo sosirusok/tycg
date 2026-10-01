@@ -131,16 +131,22 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         const c = await chatMember(p[1], u.id);
         if (method === 'GET') {
             const after = url.searchParams.has('after'), cursor = after ? (Number(url.searchParams.get('after')) || 0) : (Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER);
-            const [r, seen, offers, applications] = await db().batch([
+            // The trades between the two members (WP23) and their 후기, for the '거래 후기 남기기' cards. A chat is
+            // the one conversation of its pair, so the trades of the pair are the ones whose card is here.
+            const pair = '(t.seller_id=? AND t.buyer_id=?) OR (t.seller_id=? AND t.buyer_id=?)', pairArgs = [c.user_a, c.user_b, c.user_b, c.user_a];
+            const [r, seen, offers, applications, trades, reviews] = await db().batch([
                 db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
                 db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
                 // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
                 db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
                 db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
+                db().prepare(`SELECT t.id,t.post_id,t.seller_id,t.buyer_id,t.created_at,p.title FROM trades t LEFT JOIN posts p ON p.id=t.post_id WHERE ${pair}`).bind(...pairArgs),
+                db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at FROM reviews r JOIN trades t ON t.id=r.trade_id WHERE ${pair}`).bind(...pairArgs),
             ]);
             const messages = r.results.map((m: any) => ({ ...m, attachments: parse(m.attachments, []) }));
+            const tradeList = trades.results.map((t: any) => ({ ...t, reviews: reviews.results.filter((v: any) => v.trade_id === t.id).map((v: any) => ({ ...v, tags: parse(v.tags, []) })) }));
             return json({
-                messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results,
+                messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results, trades: tradeList,
                 hasMore: r.results.length === 100, readThrough: (seen.results[0] as any)?.last_id || 0, blocked: await blocked(c.user_a, c.user_b),
             });
         }
