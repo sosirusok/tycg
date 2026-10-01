@@ -56,16 +56,20 @@
 .price-offer { color: var(--ink-2); font-size: var(--fs-13); }
 .price-offer b { font-weight: 700; }
 .price-want { color: var(--ink); font-size: var(--fs-15); font-weight: 700; line-height: 1.45; }
-.price-lg .price-want { font-size: var(--fs-18); }
+.price-lg .price-want { font-size: var(--fs-16); }
 .price-lg .price-label { font-size: var(--fs-14); }
 .price-lg .price-values del { font-size: var(--fs-16); }
 .price-lg .price-values strong { font-size: var(--fs-28); letter-spacing: -0.8px; }
 .price-lg .price-offer { font-size: var(--fs-15); margin-top: 4px; }
 
-/* Home shelves: one row of cards that scrolls sideways and snaps to a card. A column is at least
-   260px and at most a third of the row, so a shelf with one or two posts does not stretch them. */
-.card-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, calc((100% - 32px) / 3)); gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
-.card-grid::-webkit-scrollbar { display: none; }
+/* Home shelves: on desktop a grid of three columns that wraps (a mouse wheel cannot scroll a row
+   sideways), so a shelf with one or two posts does not stretch them either. Phones and tablets get
+   one row that scrolls sideways and snaps to a card, with the next card peeking in. */
+.card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 960px) {
+  .card-grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(260px, calc((100% - 32px) / 3)); overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  .card-grid::-webkit-scrollbar { display: none; }
+}
 @media (max-width: 640px) { .card-grid { grid-auto-columns: 78%; gap: 12px; } }
 .mini-card { display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); scroll-snap-align: start; transition: box-shadow .15s, border-color .15s; }
 /* A grid cell may shrink below its one-line name row, which then ellipsizes. */

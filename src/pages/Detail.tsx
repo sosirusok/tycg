@@ -363,7 +363,11 @@ function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: 
     const [price, setPrice] = useState(''), [current, setCurrent] = useState(''), [busy, setBusy] = useState(false);
     useEffect(() => { if (open) { setPrice(wonToMan(post.price)); setCurrent(wonToMan(post.details.currentOffer ? Number(post.details.currentOffer) : null)); } }, [open]);
     const priceWon = manToWon(price), currentWon = manToWon(current);
+    // The editor's rule, shown under 현젯 the same way: an empty 즉거가 keeps the saved one.
+    const basePrice = priceWon !== null && !Number.isNaN(priceWon) ? priceWon : post.price;
+    const tooHigh = basePrice !== null && currentWon !== null && !Number.isNaN(currentWon) && currentWon >= basePrice;
     async function save() {
+        if (tooHigh) return;
         if (Number.isNaN(priceWon)) { toast.error('즉거가: 만원 단위로 입력해 주세요. 예: 35'); return; }
         if (Number.isNaN(currentWon)) { toast.error('현젯: 만원 단위로 입력해 주세요. 예: 30'); return; }
         setBusy(true);
@@ -374,14 +378,15 @@ function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: 
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
-    const unitField = (label: string, value: string, set: (v: string) => void, won: number | null) => <label className="field"><span className="field-label">{label}</span>
-        <div className="input-unit"><input className="input" type="number" inputMode="decimal" min="0.1" step="0.1" value={value} onChange={e => set(e.target.value)} /><span>만원</span></div>
-        {won !== null && !Number.isNaN(won) && <span className="field-hint">{won.toLocaleString('ko-KR')}원</span>}</label>;
+    const unitField = (label: string, value: string, set: (v: string) => void, won: number | null, error = '') => <label className="field"><span className="field-label">{label}</span>
+        <div className="input-unit"><input className="input" type="number" inputMode="decimal" min="0.1" step="0.1" value={value} aria-invalid={error ? true : undefined} onChange={e => set(e.target.value)} /><span>만원</span></div>
+        {error ? <span className="field-error" role="alert">{error}</span>
+            : won !== null && !Number.isNaN(won) && <span className="field-hint">{won.toLocaleString('ko-KR')}원</span>}</label>;
     return <Modal open={open} onClose={onClose} title="가격 수정"
-        footer={<button className="btn btn-primary btn-lg" disabled={busy || (priceWon === null && post.price === null && currentWon === null)} onClick={save}>저장</button>}>
+        footer={<button className="btn btn-primary btn-lg" disabled={busy || tooHigh || (priceWon === null && post.price === null && currentWon === null)} onClick={save}>저장</button>}>
         <div className="form-stack">
             {unitField('즉거가', price, setPrice, priceWon)}
-            {unitField('현젯', current, setCurrent, currentWon)}
+            {unitField('현젯', current, setCurrent, currentWon, tooHigh ? '현젯은 즉거가보다 낮게 입력해 주세요.' : '')}
         </div>
     </Modal>;
 }

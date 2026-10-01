@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
-import { CIcon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
+import { CIcon, DataItems, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
 import { useApp } from './state';
 
 type Choice = { kind: ApplicationKind; target: string; plan?: PlanId };
@@ -120,7 +120,11 @@ export function ApplyModal() {
                 })}
             </div>
         </div> : <div className="apply-pane">
-            <p className="apply-intro">입금 확인 후 매니저가 지급합니다.</p>
+            <p className="apply-intro">입금 확인 후 매니저가 지급합니다. <Link to="/guide#grade" className="apply-link" onClick={e => {
+                closeApply();
+                // Already on the guide: the address does not change, so scroll to the table here.
+                if (location.pathname === '/guide') { e.preventDefault(); history.replaceState(history.state, '', '/guide#grade'); setTimeout(() => document.getElementById('grade')?.scrollIntoView({ block: 'start' }), 50); }
+            }}>혜택 보기</Link></p>
             <div className="grade-table" role="radiogroup" aria-label="등급과 기간">
                 {GRADES.map(g => {
                     const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id, benefits = gradeBenefits(g.id);
@@ -128,7 +132,7 @@ export function ApplyModal() {
                         <CIcon name={g.icon} size={32} />
                         <div className="grade-row-name">
                             <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
-                            {benefits.length > 0 && <span className="grade-row-perks">{benefits.join(' · ')}</span>}
+                            {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
                         </div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {
@@ -145,15 +149,10 @@ export function ApplyModal() {
                     </div>;
                 })}
             </div>
-            <p className="apply-note">입금 확인 후 바로 적용. 6개월 등급이 끝나도 올린 글과 사진은 그대로 남습니다. <Link to="/guide#grade" className="apply-link" onClick={e => {
-                closeApply();
-                // Already on the guide: the address does not change, so scroll to the table here.
-                if (location.pathname === '/guide') { e.preventDefault(); history.replaceState(history.state, '', '/guide#grade'); setTimeout(() => document.getElementById('grade')?.scrollIntoView({ block: 'start' }), 50); }
-            }}>혜택 전체 보기</Link></p>
             <div className="pay-box">
                 <strong>입금 안내</strong>
                 <p>{config.paymentNotice || '입금 계좌는 신청 후 채팅으로 안내합니다.'}</p>
-                <p className="muted small">입금 후 채팅에 입금자명, 입금 시간을 남겨 주세요. 6개월권은 지급일부터 6개월, 연장은 끝나는 날부터 6개월.</p>
+                <p className="muted small">입금 후 채팅에 입금자명, 입금 시간을 남겨 주세요. 6개월권은 지급일부터 6개월, 연장은 끝나는 날부터 6개월. 6개월 등급이 끝나도 올린 글과 사진은 그대로 남습니다.</p>
             </div>
         </div>}
     </Modal>;

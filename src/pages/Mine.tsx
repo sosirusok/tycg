@@ -56,8 +56,7 @@ function SellerRow({ post, usage, now, busy, lostProxy, onBump, onStatus }: {
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, lostProxy, now);
-    const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory)
-        : post.kind === 'buy' && post.price !== null ? `MAX ${priceText(post.price)}` : listingPrice(post);
+    const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
     // Without 대리 인증 a 대리(진행) post can only be closed (the server refuses the rest).
     const statuses = Object.entries(STATUS_NAMES).filter(([k]) => !lostProxy || k === post.status || k === 'closed');
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>

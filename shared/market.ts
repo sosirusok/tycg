@@ -79,6 +79,10 @@ export function tagName(t: SeasonTag) { return `${t.season}시즌 ${tierName(t.t
 export function dateText(t: number) {
     return new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' });
 }
+// '2027년 4월 1일', for dates followed by a particle ('…까지').
+export function longDate(t: number) {
+    return new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric' });
+}
 
 // Trade posts quote prices in 만원 (e.g. "ㅈㄱ 35" means 350,000원).
 export function priceText(p: number | null) {
@@ -190,7 +194,9 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
 
 export function listingPrice(p: Pick<Post, 'price' | 'price_mode' | 'kind'>) {
     if (p.kind === 'exchange') return '교환 글';
-    if (p.price === null) return p.kind === 'buy' || p.kind === 'sell' ? '가격 제시' : '가격 협의';
+    // A buy post reads 'MAX 30만원' (or 'MAX 미정') in one piece; 가격 제시 is the sale's offer button.
+    if (p.kind === 'buy') return 'MAX ' + (p.price === null ? '미정' : priceText(p.price));
+    if (p.price === null) return p.kind === 'sell' ? '가격 제시' : '가격 협의';
     return priceText(p.price);
 }
 
@@ -306,26 +312,27 @@ export function rankText(ranks: readonly string[]) {
 }
 
 // Short condition list for cards, most-scanned first: owners, record, nickname, skins,
-// then the cafe flags as one token ('전비변O 영전 보멜X 미통'), then currency. Cards show
+// then the cafe flags as one token ('전비변O·영전·보멜X·미통'), then currency. Cards show
 // only the first few items, so the nickname grade and skins must come before the flags.
+// Each item is one data word with no '·' between spaced words ('2글자 S급 닉').
 export function accountSummary(d: Record<string, string>) {
     const wantedRanks = parseList(d.nicknameRanks, NICK_RANKS);
     const min = d.nicknameCharsMin, max = d.nicknameCharsMax;
-    const wantedChars = min && max ? (min === max ? `${min}글자 닉` : `${min}~${max}글자 닉`) : min ? `${min}글자 이상 닉` : max ? `${max}글자 이하 닉` : '';
+    const wantedChars = min && max ? (min === max ? `${min}글자` : `${min}~${max}글자`) : min ? `${min}글자 이상` : max ? `${max}글자 이하` : '';
+    const nick = (chars: string, rank: string) => chars || rank ? [chars, rank, '닉'].filter(Boolean).join(' ') : '';
     const skins = skinDisplay(skinTags(d.skinTags));
-    const rank = d.nicknameRank ? rankText([d.nicknameRank]) : '';
     const flags = [
         d.passwordChange === '가능' && (d.phoneChange === '가능' || d.phoneChange === '영전') ? '전비변O' : '',
         d.phoneChange === '영전' ? '영전' : '',
         d.backupEmail === '없음' ? '보멜X' : '',
         d.integrated === '미통합' ? '미통' : '',
-    ].filter(Boolean).join(' ');
+    ].filter(Boolean).join('·');
     return [
         d.ownerCount ? `${d.ownerCount}대주` : '',
         d.maxOwners ? `${d.maxOwners}대주 이하` : '',
         d.recordStatus || d.recordPreference || '',
-        wantedChars + (wantedRanks.length ? `${wantedChars ? ' · ' : '닉 '}${rankText(wantedRanks)}` : ''),
-        d.nicknameChars ? `${d.nicknameChars}글자 닉${rank ? ' · ' + rank : ''}` : rank ? `닉 ${rank}` : '',
+        nick(wantedChars, wantedRanks.length ? rankText(wantedRanks) : ''),
+        nick(d.nicknameChars ? `${d.nicknameChars}글자` : '', d.nicknameRank ? rankText([d.nicknameRank]) : ''),
         skins.length ? skins[0] + (skins.length > 1 ? ` 외 ${skins.length - 1}` : '') : '',
         flags,
         d.phantom ? `팬텀 ${d.phantom}%` : '',

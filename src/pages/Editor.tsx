@@ -10,7 +10,7 @@ import { api, errorText, imageUrl, uploadPhoto } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
-import { RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { IntegerInput, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 type Form = {
     kind: TradeKind; category: string; title: string; body: string;
@@ -81,22 +81,16 @@ function Fold({ filled, className = 'ed-more', summary, children }: { filled: bo
     return <details className={className} open={open ?? filled} onToggle={e => setOpen(e.currentTarget.open)}><summary>{summary}</summary>{children}</details>;
 }
 
-// Whole-number fields are text inputs with the number keypad (as in the board filters): only the
-// leading digits are kept (2.5 → 2, not 25), leading zeros go, and the value stops at max.
-function wholeNumber(raw: string, max: number) {
-    let v = (raw.match(/^\d*/)?.[0] ?? '').replace(/^0+(?=\d)/, '');
-    if (v && Number(v) > max) v = String(max);
-    return v;
-}
-const INTEGER = { type: 'text', inputMode: 'numeric' as const, autoComplete: 'off' };
-
 function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false, error = '', id }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean; error?: string; id?: string }) {
     const errorId = id ? id + '-error' : undefined;
     return <label className="field"><span className="field-label">{label}</span>
         <div className={unit ? 'input-unit' : undefined}>
-            <input id={id} className="input" placeholder={placeholder} value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
-                {...decimal ? { type: 'number', inputMode: 'decimal' as const, min: '0', max, step: 'any' } : INTEGER}
-                onChange={e => onChange(decimal ? e.target.value : wholeNumber(e.target.value, max))} />
+            {/* Whole numbers keep only their leading digits (2.5 leaves 2, not 25). */}
+            {decimal
+                ? <input id={id} className="input" placeholder={placeholder} value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
+                    type="number" inputMode="decimal" min="0" max={max} step="any" onChange={e => onChange(e.target.value)} />
+                : <IntegerInput id={id} className="input" placeholder={placeholder} value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
+                    max={max} onChange={onChange} />}
             {unit && <span>{unit}</span>}
         </div>
         {error ? <span className="field-error" id={errorId} role="alert">{error}</span>
@@ -154,6 +148,10 @@ export default function Editor({ id }: { id?: string }) {
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
     formRef.current = form;
+    // New posts share one draft slot, so the waiting draft of another kind is not overwritten
+    // until the member loads it or closes the banner.
+    const holding = useRef(false);
+    holding.current = banner?.mode === 'offer';
     const draftKey = id || 'new';
 
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -203,7 +201,7 @@ export default function Editor({ id }: { id?: string }) {
     }, [id, me?.id]);
 
     const persist = async (manual = false) => {
-        if (!loaded || done.current || (!dirty.current && !manual)) return true;
+        if (!loaded || done.current || (!dirty.current && !manual) || (holding.current && !manual)) return true;
         const snapshot = JSON.stringify(formRef.current);
         if (snapshot === lastSaved.current && !manual) return true;
         try {
@@ -217,7 +215,7 @@ export default function Editor({ id }: { id?: string }) {
         } catch (e) { if (manual) toast.error(errorText(e)); return false; }
     };
     // Auto-save shortly after edits, and before leaving the page.
-    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded]);
+    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, banner]);
     useEffect(() => {
         if (!loaded) return;
         setLeaveGuard(async () => { await persist(); return true; });
@@ -228,7 +226,7 @@ export default function Editor({ id }: { id?: string }) {
             setLeaveGuard(null);
             window.removeEventListener('beforeunload', warn);
             // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out.
-            if (unsaved()) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
+            if (unsaved() && !holding.current) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
         };
     }, [loaded]);
 
@@ -300,7 +298,7 @@ export default function Editor({ id }: { id?: string }) {
             const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), status: form.status, tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
             done.current = true;
             const d = await api<{ id: number }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
-            api('drafts/' + draftKey, 'DELETE').catch(() => {});
+            if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
             setLeaveGuard(null);
             toast(id ? '수정 완료' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
@@ -352,9 +350,9 @@ export default function Editor({ id }: { id?: string }) {
             </div>
             <div className="field"><span className="field-label">원하는 닉네임</span>
                 <div className="range nick-range">
-                    <div className="input-unit"><input className="input" {...INTEGER} placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} onChange={e => setDetail(k('nicknameCharsMin'), wholeNumber(e.target.value, 20))} /><span>글자</span></div>
+                    <div className="input-unit"><IntegerInput className="input" placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} max={20} onChange={v => setDetail(k('nicknameCharsMin'), v)} /><span>글자</span></div>
                     <span>~</span>
-                    <div className="input-unit"><input className="input" {...INTEGER} placeholder="최대" aria-label="닉네임 최대 글자 수" value={d[k('nicknameCharsMax')] || ''} onChange={e => setDetail(k('nicknameCharsMax'), wholeNumber(e.target.value, 20))} /><span>글자</span></div>
+                    <div className="input-unit"><IntegerInput className="input" placeholder="최대" aria-label="닉네임 최대 글자 수" value={d[k('nicknameCharsMax')] || ''} max={20} onChange={v => setDetail(k('nicknameCharsMax'), v)} /><span>글자</span></div>
                 </div>
                 <RankPicker multiple value={ranksOf(k('nicknameRanks'))} onChange={v => setDetail(k('nicknameRanks'), v.length ? JSON.stringify(v) : '')} />
                 <span className="field-hint">등급 중복 선택 가능</span>
@@ -399,6 +397,7 @@ export default function Editor({ id }: { id?: string }) {
             {banner.mode === 'loaded'
                 ? <button type="button" className="restore-action" onClick={startOver}>새로 쓰기</button>
                 : <button type="button" className="restore-action" onClick={() => loadDraft(banner.draft)}>불러오기</button>}
+            {banner.mode === 'offer' && <button type="button" className="icon-btn restore-close" aria-label="닫기" onClick={() => setBanner(null)}><X size={16} /></button>}
         </div>}
         <form className="ed-form" onSubmit={submit} key={version}>
             <fieldset disabled={busy}>
@@ -439,7 +438,7 @@ export default function Editor({ id }: { id?: string }) {
                         {id && <p className="field-hint">이전 즉거가는 취소선으로 남습니다.</p>}
                         <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />제시 받기</label>
                     </div> : <div className="ed-grid">
-                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : kind === 'proxy_request' ? '희망 가격' : '가격'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder={buying ? '가격 제시' : '협의'} />
+                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : kind === 'proxy_request' ? '희망 가격' : '가격'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder={buying ? '미정' : '협의'} />
                     </div>}
                 </Section>}
 
@@ -493,7 +492,7 @@ export default function Editor({ id }: { id?: string }) {
                 </div>
             </fieldset>
         </form>
-        <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
+        <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분 변경" description="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => setPendingKind(null)}>취소</button><button type="button" className="btn btn-danger-solid" onClick={() => { if (pendingKind) applyKind(pendingKind); }}>바꾸기</button></>} />
     </div>;
 }

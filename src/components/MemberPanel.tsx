@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
-import { dateText, type User } from '../../shared/market';
+import { dateText, longDate, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
@@ -76,9 +76,9 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             })}
         </div>
         {u.role !== 'manager' && <div className="mp-block">
-            <h4>등급 <span className="muted small">현재 {gradeInfo(u.grade).name}{u.grade_expires_at ? ` · ${dateText(u.grade_expires_at)}까지` : ''}</span></h4>
+            <h4>등급 <span className="muted small">현재 {gradeInfo(u.grade).name}{u.grade_expires_at ? ` · ${longDate(u.grade_expires_at)}까지` : ''}</span></h4>
             {active.length > 0 ? active.map(g => <div key={g.id} className="mp-row">
-                <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${dateText(g.expires_at)}까지` : '영구'}</span></span>
+                <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${longDate(g.expires_at)}까지` : '영구'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRevoke({ name: `${gradeInfo(g.grade).name} 등급`, task: () => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), done: '등급 회수 완료' })}>회수</button>
             </div>) : <p className="muted small">지급 내역 없음</p>}
             {!u.deleted_at && <div className="mp-grant">

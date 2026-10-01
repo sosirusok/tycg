@@ -12,6 +12,11 @@ export function Avatar({ name, size = '' }: { name: string; size?: '' | 'sm' | '
     return <span className={'avatar' + (size ? ' avatar-' + size : '')} aria-hidden="true">{name.slice(0, 1)}</span>;
 }
 
+// Data items separated by ' · ', each kept whole so a line breaks only between items.
+export function DataItems({ items }: { items: string[] }) {
+    return <>{items.map((item, i) => <Fragment key={i}>{i > 0 && ' · '}<span className="nowrap">{item}</span></Fragment>)}</>;
+}
+
 export function VerifiedMark({ size = 15 }: { size?: number }) {
     return <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor" /><path d="m6 10.2 2.6 2.6L14 7.4" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
@@ -81,14 +86,32 @@ export function SkeletonRows({ count = 4, height = 132 }: { count?: number; heig
     return <div className="skeleton-rows" aria-label="불러오는 중">{Array.from({ length: count }, (_, i) => <div key={i} className="skeleton" style={{ height }} />)}</div>;
 }
 
-export function Tabs<T extends string>({ items, value, onChange, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (v: T) => void; label: string }) {
-    const row = useRef<HTMLDivElement>(null);
-    const [hasMore, setHasMore] = useState(false);
-    // More tabs off to the right: the row fades out (.tabs.has-more) until it is scrolled to the end.
+// A row that scrolls sideways fades out on the right ('has-more', base.css) while part of it is
+// still off screen. Pass measure to the row's onScroll.
+export function useMoreRight<T extends HTMLElement>() {
+    const ref = useRef<T>(null);
+    const [more, setMore] = useState(false);
     const measure = useCallback(() => {
-        const box = row.current;
-        setHasMore(!!box && box.scrollLeft + box.clientWidth < box.scrollWidth - 1);
+        const box = ref.current;
+        setMore(!!box && box.scrollLeft + box.clientWidth < box.scrollWidth - 1);
     }, []);
+    useEffect(() => {
+        const box = ref.current;
+        measure();
+        // The row's width changes with the window or when a sheet opens; the web font widens the labels after first paint.
+        const observer = box && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+        if (box) observer?.observe(box);
+        let alive = true;
+        void document.fonts?.ready.then(() => { if (alive) measure(); });
+        window.addEventListener('resize', measure);
+        return () => { alive = false; observer?.disconnect(); window.removeEventListener('resize', measure); };
+    }, [measure]);
+    return { ref, more, measure };
+}
+
+export function Tabs<T extends string>({ items, value, onChange, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (v: T) => void; label: string }) {
+    // More tabs off to the right: the row fades out (.tabs.has-more) until it is scrolled to the end.
+    const { ref: row, more: hasMore, measure } = useMoreRight<HTMLDivElement>();
     // On phones the row scrolls sideways: keep the selected tab in view on mount and on every change.
     // scrollIntoView runs only while the row is on screen, so block 'nearest' never moves the page;
     // a row below the fold scrolls itself instead.
@@ -111,10 +134,6 @@ export function Tabs<T extends string>({ items, value, onChange, label }: { item
         void document.fonts?.ready.then(() => { if (alive) show(); });
         return () => { alive = false; };
     }, [value, measure]);
-    useEffect(() => {
-        window.addEventListener('resize', measure);
-        return () => window.removeEventListener('resize', measure);
-    }, [measure]);
     return <div ref={row} className={'tabs' + (hasMore ? ' has-more' : '')} role="tablist" aria-label={label} onScroll={measure}>
         {items.map(item => <button key={item.id} role="tab" type="button" className="tab" aria-selected={item.id === value} onClick={() => onChange(item.id)}>{item.label}</button>)}
     </div>;

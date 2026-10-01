@@ -59,14 +59,16 @@ function Shell() {
     // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, post, chat room).
     const inRoom = page === 'chat' && !!parts[1];
     const hideBottomNav = page === 'write' || page === 'edit' || page === 'posts' || inRoom;
-    useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
     // On phones a chat room is full screen: the global header is hidden there (pages.css).
-    useEffect(() => { document.body.classList.toggle('in-room', inRoom); }, [inRoom]);
+    // Both body classes are set while rendering, before any page's layout effect restores the scroll
+    // position against the body's bottom padding.
+    document.body.classList.toggle('no-bottom-nav', hideBottomNav);
+    document.body.classList.toggle('in-room', inRoom);
 
     // Tab title per screen. A post and a profile add their title or nickname once loaded.
     useEffect(() => {
         const kind = params.get('kind');
-        setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : '전체')
+        setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : params.get('q') ? '검색 결과' : '전체')
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
             : page === 'me' ? '내 거래'
             : page === 'manage' ? '매니저 메뉴' : '');
@@ -101,7 +103,7 @@ function Shell() {
         <Toaster position="top-center" toastOptions={{ className: 'toast' }} />
         <header className={'header' + (showApply ? ' show-apply' : '')}>
             <div className="container header-inner">
-                <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} />좀비고 거래소</Link>
+                <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} /><span className="logo-text">좀비고 거래소</span></Link>
                 <nav className="nav" aria-label="주 메뉴">
                     {TRADE_KINDS.map(kind => <Link key={kind} to={lastBoard(kind) || '/trade?kind=' + kind} aria-current={page === 'trade' && params.get('kind') === kind ? 'page' : undefined}>{KIND_NAMES[kind]}</Link>)}
                     <Link to="/guide" className="nav-guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>

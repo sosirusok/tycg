@@ -18,11 +18,12 @@ const STEPS = [
 
 // Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
 // price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
+// A cell may hold two lines (영구 and 6개월 prices, 끌올 count and gap), each its own line.
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
-const BENEFIT_ROWS: [string, (g: GradeInfo, i: number) => string][] = [
-    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`).join(' · ') : '무료'],
-    ['끌올', (g, i) => { const p = PERKS[g.id]; return i === 0 ? `하루 ${p.bumpsPerDay}번 · ${p.bumpGapHours}시간마다` : `${p.bumpsPerDay}번 · ${p.bumpGapHours}시간`; }],
+const BENEFIT_ROWS: [string, (g: GradeInfo, i: number) => string | string[]][] = [
+    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`) : '무료'],
+    ['끌올', (g, i) => { const p = PERKS[g.id]; return i === 0 ? [`하루 ${p.bumpsPerDay}번`, `${p.bumpGapHours}시간마다`] : [`${p.bumpsPerDay}번`, `${p.bumpGapHours}시간`]; }],
     ['거래중 글', g => `${PERKS[g.id].openPosts}개`],
     ['하루 새 글', g => `${PERKS[g.id].postsPerDay}개`],
     ['사진', g => `${PERKS[g.id].photos}장`],
@@ -72,12 +73,12 @@ export default function Guide() {
                     <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
                     <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
                         <th scope="row">{label}</th>
-                        {TABLE_GRADES.map((g, i) => <td key={g.id}>{cell(g, i)}</td>)}
+                        {TABLE_GRADES.map((g, i) => { const v = cell(g, i); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
                     </tr>)}</tbody>
                 </table>
             </div>
             <ul className="grade-notes">
-                <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 등급·인증 지급은 매니저만 합니다.</li>
+                <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
                 <li>채팅, 제시, 찜, 신고, 검색 필터, 인증 신청은 등급과 관계없이 같습니다.</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
@@ -88,10 +89,10 @@ export default function Guide() {
             <ul className="rules">
                 <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
                 <li>계정 거래와 대리는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
-                <li>비번, 인증번호는 글에 쓰지 마세요. 인증번호는 누구에게도 알려 주지 마세요.</li>
+                <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
-                <li>중개 거래는 신용인에게만 맡기세요. 사이트는 중개에 참여하지 않습니다.</li>
+                <li>중개 거래는 신용인에게만 맡깁니다.</li>
                 <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>

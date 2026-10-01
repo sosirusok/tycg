@@ -1,7 +1,8 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState, type InputHTMLAttributes } from 'react';
 import { X } from 'lucide-react';
 import { NICK_RANKS, SKIN_OPTIONS, TIERS, seasonsOf, tagName, type SeasonTag } from '../../shared/market';
 import { useApp } from '../app/state';
+import { useMoreRight } from './ui';
 
 // One chip row of the nine tiers; the open tier shows its season checkboxes below, e.g. 마스터 → 17 … 32시즌.
 export function SeasonPicker({ value, onChange, showPicked = true }: { value: SeasonTag[]; onChange: (v: SeasonTag[]) => void; showPicked?: boolean }) {
@@ -12,8 +13,9 @@ export function SeasonPicker({ value, onChange, showPicked = true }: { value: Se
     const tier = TIERS.find(t => t.id === open);
     const seasons = tier ? seasonsOf(tier, config.latestSeason) : [];
     const all = !!tier && value.filter(t => t.tier === tier.id).length === seasons.length;
+    const row = useMoreRight<HTMLDivElement>();
     return <div className="season-picker">
-        <div className="chip-scroll tier-chips" role="group" aria-label="티어">
+        <div ref={row.ref} className={'chip-scroll tier-chips' + (row.more ? ' has-more' : '')} role="group" aria-label="티어" onScroll={row.measure}>
             {TIERS.map(t => {
                 const count = value.filter(v => v.tier === t.id).length;
                 return <button type="button" key={t.id} className="chip chip-sm" aria-pressed={open === t.id} onClick={() => setOpen(open === t.id ? null : t.id)}>{t.name}{count ? <b>{count}</b> : null}</button>;
@@ -81,4 +83,26 @@ export function Segmented<T extends string>({ options, value, onChange, name, al
             {label ? label(option) : option}
         </label>)}
     </div>;
+}
+
+// Whole-number field: a text input with the number keypad (a number input reports '' for '2.' and
+// accepts 'e'). Only the leading digits count, so the first other character ends the number: typing
+// '2.5' leaves 2 and '1e5' leaves 1, because digits typed right after it are ignored until the member
+// deletes or replaces something. Leading zeros go and the value stays within min and max.
+type IntegerProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type' | 'min' | 'max'> & { value: string; onChange: (v: string) => void; max?: number; min?: number };
+export function IntegerInput({ value, onChange, max, min = 0, onFocus, onBlur, ...rest }: IntegerProps) {
+    const ended = useRef(false);
+    return <input {...rest} type="text" inputMode="numeric" autoComplete="off" value={value}
+        onFocus={e => { ended.current = false; onFocus?.(e); }}
+        onBlur={e => { ended.current = false; onBlur?.(e); }}
+        onChange={e => {
+            const raw = e.target.value;
+            if (ended.current && value && raw.length > value.length && raw.startsWith(value)) return;
+            const digits = raw.match(/^\d*/)?.[0] ?? '';
+            ended.current = digits.length > 0 && digits.length < raw.length;
+            let v = digits.replace(/^0+(?=\d)/, '');
+            if (v && max !== undefined && Number(v) > max) v = String(max);
+            if (v && Number(v) < min) v = '';
+            onChange(v);
+        }} />;
 }

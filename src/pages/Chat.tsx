@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowLeft, Ban, ImagePlus, LoaderCircle, Send, UserCog, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { KIND_ICONS, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
+import { KIND_ICONS, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, type Post, type TradeKind, type User } from '../../shared/market';
+import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl, uploadPhoto } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -25,6 +25,17 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 const BUYER_REPLIES = ['아직 판매중인가요?', '쿨거 가능해요', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'];
 // copy-lint-ignore-next-line
 const SELLER_REPLIES = ['네 판매중입니다', '예약 걸어둘게요', '판완됐습니다'];
+// Per kind: [the member who writes to the post, the post's author]. A sale is the default.
+const KIND_REPLIES: Partial<Record<TradeKind, [string[], string[]]>> = {
+    // copy-lint-ignore-next-line
+    buy: [['아직 구하시나요?', '쿨거 가능해요', '이중창 인증 가능해요', '전번·계좌 인증 됩니다'], ['네 아직 구합니다', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?']],
+    // copy-lint-ignore-next-line
+    exchange: [['아직 교환하시나요?', '쿨거 가능해요', '이중창 인증 가능할까요?'], ['네 교환 가능합니다', '예약 걸어둘게요', '이중창 인증 가능할까요?']],
+    // copy-lint-ignore-next-line
+    proxy_request: [['아직 구하시나요?', '바로 진행 가능해요', '경력 보내드릴게요'], ['네 아직 구합니다', '가격 알려주세요', '경력 있으신가요?']],
+    // copy-lint-ignore-next-line
+    proxy_offer: [['지금 진행 가능한가요?', '가격 알려주세요', '경력 있으신가요?'], ['네 진행 가능합니다', '예약 걸어둘게요']],
+};
 const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일치', '거래내역 부족'];
 
 function toListing(p: Post): Listing {
@@ -32,7 +43,7 @@ function toListing(p: Post): Listing {
 }
 // The price as the cards show it: 'MAX 30만원' for a buy post, 즉거가 (and 현젯) for a sale.
 function listingLine(l: Listing) {
-    const price = l.kind === 'buy' && l.price !== null ? 'MAX ' + priceText(l.price) : listingPrice({ kind: l.kind as Post['kind'], price: l.price, price_mode: l.price_mode });
+    const price = listingPrice({ kind: l.kind as Post['kind'], price: l.price, price_mode: l.price_mode });
     return [price, l.kind === 'sell' && l.currentOffer ? '현젯 ' + priceText(l.currentOffer) : '', STATUS_NAMES[l.status] || ''].filter(Boolean).join(' · ');
 }
 
@@ -276,10 +287,11 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     let prevDay = '';
     const lastMine = [...messages].reverse().find(m => m.sender_id === me.id);
     const ownListing = !!listing && listing.author_id === me.id;
-    // Quick replies: a chat about a sale before my first message (never in an application chat),
-    // hidden as soon as the composer has text.
-    const quick = loaded && !!listing && listing.kind === 'sell' && !apps.length && !text && !blocked && !partner?.deleted
-        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? (ownListing ? SELLER_REPLIES : BUYER_REPLIES) : [];
+    // Quick replies: any trade chat before my first text message (never in an application chat or a
+    // chat with the manager that is not about a post), hidden as soon as the composer has text.
+    const replySet = listing && isTradeKind(listing.kind) ? KIND_REPLIES[listing.kind] : undefined;
+    const quick = loaded && !apps.length && !text && !blocked && !partner?.deleted && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
+        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? (replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES) : [];
     const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
 
     return <section className={'chat-room' + (managerView ? ' with-panel' : '')} aria-label="대화">
@@ -374,7 +386,7 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction, next }:
     if (!app) return <div className="sys-msg">{fallback}</div>;
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
-        <div className="row"><CIcon name={app.kind === 'badge' ? 'check-mark-button' : 'crown'} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
+        <div className="row"><CIcon name={app.kind === 'badge' ? BADGES.find(b => b.id === app.target)?.icon || 'identification-card' : gradeInfo(app.target).icon} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <div className="chip-row" role="group" aria-label="반려 사유 선택">{REJECT_NOTES.map(n => <button type="button" key={n} className="chip chip-sm" aria-pressed={note === n} onClick={() => setNote(n)}>{n}</button>)}</div>

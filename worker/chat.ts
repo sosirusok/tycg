@@ -91,13 +91,15 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         if (filter && filter !== 'applications') fail(400, '채팅 목록 조건을 확인해 주세요.');
         if (filter && !isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
         // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
-        // The row also names the post the chat is about (title and first photo) while the viewer can see it.
+        // The row also names the post the chat is about (title and first photo) while the viewer can see it,
+        // by the same rule as visiblePost: not hidden, and a 대리(진행) post only while its author holds 대리 인증.
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
             (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL AND type!='listing') AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications,
             lp.title AS last_post_title,json_extract(lp.images,'$[0]') AS last_post_thumb
             FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
-            LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.hidden=0 OR lp.author_id=? OR ?='manager')
+            LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.author_id=? OR ?='manager' OR (lp.hidden=0 AND (lp.kind!='proxy_offer'
+                OR EXISTS(SELECT 1 FROM users au WHERE au.id=lp.author_id AND au.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=lp.author_id AND b.badge='proxy'))))
             WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)
             ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=c.id AND a.status='pending')" : ''} ORDER BY c.updated_at DESC LIMIT 100`)
             .bind(u.id, u.id, u.id, u.role, u.id, u.id).all();

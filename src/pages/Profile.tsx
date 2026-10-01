@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, type Post, type User } from '../../shared/market';
+import { dateText, longDate, type Post, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -27,6 +27,8 @@ export default function ProfilePage({ id }: { id?: string }) {
     const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
     const [postsVersion, setPostsVersion] = useState(0);
+    // Counts list resets (tab switch, profile save), so a '더 보기' page for an old list is dropped.
+    const listGen = useRef(0);
     const [account, setAccount] = useState<'' | 'password' | 'withdraw'>('');
     const mine = me?.id === id;
 
@@ -38,6 +40,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const postsPage = (n: number) => api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: String(PAGE_SIZE), page: String(n), ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }));
     useEffect(() => {
         let alive = true;
+        listGen.current++;
         setPosts(null); setPage(1);
         postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); } }).catch(() => { if (alive) setPosts([]); });
         return () => { alive = false; };
@@ -88,14 +91,16 @@ export default function ProfilePage({ id }: { id?: string }) {
     async function more() {
         if (loadingMore || !posts) return;
         setLoadingMore(true);
+        const gen = listGen.current;
         try {
             const d = await postsPage(page + 1);
+            if (gen !== listGen.current) return;
             const seen = new Set(posts.map(p => p.id));
             setPosts([...posts, ...d.posts.filter(p => !seen.has(p.id))]);
             // An empty page means the list shrank meanwhile: stop offering more.
             setTotal(d.posts.length ? d.total : posts.length);
             setPage(page + 1);
-        } catch (e) { toast.error(errorText(e)); }
+        } catch (e) { if (gen === listGen.current) toast.error(errorText(e)); }
         finally { setLoadingMore(false); }
     }
     const grade = gradeInfo(user.grade);
@@ -141,9 +146,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
                     <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
                     {/* The end date of a 6-month grade reaches only the member and the manager. */}
-                    {user.grade_expires_at && <p className="muted small mt-8">{dateText(user.grade_expires_at)}까지</p>}
+                    {user.grade_expires_at && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
                     {mine && usageLine && <p className="grade-usage">{usageLine}</p>}
-                    {mine && nextGrade && <Link to="/guide#grade" className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}<ChevronRight size={16} /></Link>}
+                    {/* One action on the card (등급 신청); the next grade is a plain data line. */}
+                    {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
                 </>}
             </div>
         </section>

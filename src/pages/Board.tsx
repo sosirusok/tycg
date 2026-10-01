@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import {
     ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
@@ -9,7 +9,7 @@ import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/rou
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
-import { RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { IntegerInput, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
 
@@ -64,25 +64,17 @@ function readTags(raw: string | null): SeasonTag[] {
 }
 
 // Number field that commits after the user stops typing (or on Enter / blur). Integer fields are
-// text inputs with a numeric keypad: a number input reports '' for '2.' and accepts 'e', so they keep
-// only the leading digits and stay within min and max.
+// IntegerInput (leading digits only, within min and max).
 function LazyNumber({ value, onCommit, placeholder, unit, max, min = 0, integer = false, step = '1', label }: { value: string; onCommit: (v: string) => void; placeholder: string; unit?: string; max?: number; min?: number; integer?: boolean; step?: string; label: string }) {
     const [draft, setDraft] = useState(value);
     const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
     useEffect(() => { setDraft(value); }, [value]);
     const commit = (v: string) => { clearTimeout(timer.current); if (v !== value) onCommit(v); };
-    const clean = (raw: string) => {
-        if (!integer) return raw;
-        let v = (raw.match(/^\d*/)?.[0] ?? '').replace(/^0+(?=\d)/, '');
-        if (v && max !== undefined && Number(v) > max) v = String(max);
-        if (v && Number(v) < min) v = '';
-        return v;
-    };
+    const change = (v: string) => { setDraft(v); clearTimeout(timer.current); timer.current = setTimeout(() => commit(v), 700); };
+    const common = { className: 'input', placeholder, 'aria-label': label, onBlur: () => commit(draft), onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') commit(draft); } };
     return <div className={unit ? 'input-unit' : undefined}>
-        <input className="input" placeholder={placeholder} aria-label={label} value={draft} autoComplete="off"
-            {...integer ? { type: 'text', inputMode: 'numeric' as const } : { type: 'number', inputMode: 'decimal' as const, min: '0', max, step }}
-            onChange={e => { const v = clean(e.target.value); setDraft(v); clearTimeout(timer.current); timer.current = setTimeout(() => commit(v), 700); }}
-            onBlur={() => commit(draft)} onKeyDown={e => { if (e.key === 'Enter') commit(draft); }} />
+        {integer ? <IntegerInput {...common} value={draft} onChange={change} max={max} min={min} />
+            : <input {...common} type="number" inputMode="decimal" min="0" max={max} step={step} autoComplete="off" value={draft} onChange={e => change(e.target.value)} />}
         {unit && <span>{unit}</span>}
     </div>;
 }
@@ -158,7 +150,8 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
             </div>
         </Group>}
         <Group title="작성자 인증">
-            <Segmented name="작성자 인증" options={BADGE_FILTERS} label={v => BADGE_FILTER_NAMES[v]} value={params.get('badge') || ''} onChange={v => update({ badge: v })} />
+            {/* 대리(진행) lists only 대리 인증 holders already, so that option would filter nothing there. */}
+            <Segmented name="작성자 인증" options={ctx.kind === 'proxy_offer' ? BADGE_FILTERS.filter(b => b !== 'proxy') : BADGE_FILTERS} label={v => BADGE_FILTER_NAMES[v]} value={params.get('badge') || ''} onChange={v => update({ badge: v })} />
         </Group>
     </>;
 }
@@ -170,7 +163,8 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     const tags = readTags(params.get('tags'));
     for (const tier of TIERS) {
         const seasons = tags.filter(t => t.tier === tier.id).map(t => t.season).sort((a, b) => a - b);
-        if (seasons.length) chips.push({ key: 'tier-' + tier.id, label: `${tier.name} ${seasons.join(', ')}시즌`, clear: () => { const rest = tags.filter(t => t.tier !== tier.id); update({ tags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
+        // Season first, as tagName writes it everywhere else ('29시즌 마스터', '29, 30시즌 마스터').
+        if (seasons.length) chips.push({ key: 'tier-' + tier.id, label: seasons.length === 1 ? tagName({ tier: tier.id, season: seasons[0] }) : `${seasons.join(', ')}시즌 ${tier.name}`, clear: () => { const rest = tags.filter(t => t.tier !== tier.id); update({ tags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
     }
     for (const skin of skinTags(params.get('skinTags') || '')) chips.push({ key: 'skin-' + skin, label: skin, clear: () => { const rest = skinTags(params.get('skinTags') || '').filter(v => v !== skin); update({ skinTags: rest.length ? JSON.stringify(rest) : '' }); } });
     const wantedTags = readTags(params.get('wantedTags'));

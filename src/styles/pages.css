@@ -53,6 +53,9 @@
 .filter-group .field-hint { margin-top: 8px; }
 .filter-group .choice-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
 .skin-chips { gap: 6px; }
+/* The desktop panel is too narrow for the nine tiers on one row, so they wrap there; the phone
+   sheet and the editor keep the sideways row. */
+.filter-panel .tier-chips { flex-wrap: wrap; overflow: visible; }
 .filter-section { margin-top: 20px; padding-bottom: 2px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 700; }
 .filter-section + .filter-group { padding-top: 10px; }
 .filter-group .choice { min-height: 38px; padding: 0 10px; font-size: var(--fs-13); }
@@ -70,7 +73,7 @@
 .list-tools { display: flex; align-items: center; gap: 16px; }
 .list-tools .switch { color: var(--ink-2); font-weight: 500; white-space: nowrap; }
 .empty-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
-.list-meta .select { width: auto; height: 36px; border: 0; padding-right: 30px; background-position: right 6px center; font-size: var(--fs-14); font-weight: 600; color: var(--ink-2); }
+.list-meta .select { width: auto; height: 36px; border: 0; padding-right: 30px; background-position: right 12px center, right 6px center; font-size: var(--fs-14); font-weight: 600; color: var(--ink-2); }
 .active-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .active-filters button { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 12px; border-radius: var(--r-pill); font-size: var(--fs-13); font-weight: 600; }
 .active-filters .clear { background: none; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; }
@@ -216,6 +219,7 @@
 .restore { display: flex; align-items: center; gap: 6px; margin-top: 16px; padding: 12px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); color: var(--ink-2); }
 .restore-action { color: var(--brand); font-weight: 600; white-space: nowrap; }
 .restore-action:hover { text-decoration: underline; }
+.restore-close { width: 28px; height: 28px; margin: -4px -8px -4px auto; }
 .photo-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
 .photo, .photo-add { position: relative; aspect-ratio: 1; border-radius: var(--r-8); overflow: hidden; }
 .photo { background: var(--fill); border: 1px solid var(--line); }
@@ -316,7 +320,8 @@
 .event-card strong { display: block; color: var(--ink); font-size: var(--fs-15); }
 .event-amount { font-size: var(--fs-20) !important; font-weight: 700; }
 .event-status { justify-self: start; padding: 2px 8px; border-radius: var(--r-4); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
-.event-status.st-approved { background: var(--brand); color: var(--white); }
+/* Status labels use ink, never the brand (brand solid is the selected state only). */
+.event-status.st-approved { background: var(--ink-2); color: var(--white); }
 .listing-card { display: flex; align-items: center; gap: 12px; }
 .listing-card:hover strong { text-decoration: underline; text-underline-offset: 3px; }
 .composer { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
@@ -357,6 +362,8 @@
   .chat-shell.has-room { height: 100dvh; }
   .chat-shell.has-room .composer { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .chat-shell.has-room .chat-list { display: none; }
+  /* The list fills the screen, so it has no divider on its right. */
+  .chat-list { border-right: 0; }
   .chat-shell:not(.has-room) .chat-room { display: none; }
   .room-back { display: inline-grid; }
   .room-scroll { padding: 12px; }
@@ -389,9 +396,7 @@
 .grade-big { display: flex; align-items: center; gap: 10px; }
 .grade-big strong { font-size: var(--fs-20); color: var(--ink); }
 .grade-usage { margin-top: 12px; color: var(--ink-2); font-size: var(--fs-14); }
-.grade-next { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
-.grade-next svg { flex: none; color: var(--ink-3); }
-.grade-next:hover { color: var(--ink); }
+.grade-next { margin-top: 6px; color: var(--ink-3); font-size: var(--fs-13); }
 @media (max-width: 640px) {
   .profile-head { flex-wrap: wrap; gap: 14px; }
   .profile-actions { width: 100%; justify-content: flex-start; }
@@ -465,17 +470,23 @@
 /* Grade benefits: one table built from PERKS. It scrolls sideways inside its box if a phone is too narrow. */
 #grade { scroll-margin-top: calc(var(--header-h) + 16px); }
 .table-scroll { overflow-x: auto; }
-.grade-benefits { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-14); }
+/* Words wrap only at spaces (body keeps keep-all; overflow-wrap normal stops the mid-word fallback),
+   so a cell never splits '6시간마다' or '3만원'; a very narrow phone scrolls the table instead. */
+.grade-benefits { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-14); overflow-wrap: normal; }
+.grade-benefits .cell-line { display: block; }
 .grade-benefits thead th:first-child { width: 120px; }
 .grade-benefits th, .grade-benefits td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .grade-benefits thead th { border-bottom-color: var(--line-2); color: var(--ink); font-weight: 700; white-space: nowrap; }
 .grade-benefits tbody th { color: var(--ink-3); font-weight: 500; white-space: nowrap; }
 .grade-benefits td { color: var(--ink); font-weight: 600; }
 .grade-notes { display: grid; gap: 6px; margin: 16px 0 0; padding-left: 20px; color: var(--ink-3); font-size: var(--fs-14); }
+/* Phones: columns size to their content (the 일반 column needs the least) and the text is 12px, so
+   '6개월 3만원' and '홈 추천 매물' stay on one line at 390. */
 @media (max-width: 640px) {
-  .grade-benefits thead th:first-child { width: 68px; }
-  .grade-benefits th, .grade-benefits td { padding: 10px 6px; font-size: var(--fs-13); }
-  .grade-benefits tbody th { white-space: normal; }
+  .grade-benefits { table-layout: auto; }
+  .grade-benefits thead th:first-child { width: auto; }
+  .grade-benefits th, .grade-benefits td { padding: 10px 4px; font-size: var(--fs-12); }
+  .grade-benefits th:first-child { padding-left: 0; }
 }
 .rules { display: grid; gap: 10px; margin: 16px 0 0; padding-left: 20px; color: var(--ink-2); }
 .rules a { text-decoration: underline; text-underline-offset: 3px; }

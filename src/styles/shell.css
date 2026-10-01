@@ -43,11 +43,16 @@
   .header-apply { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: var(--fs-13); }
   .header:not(.show-apply) .header-apply { display: none; }
 }
-/* Very narrow phones: the apply button is the shield icon alone (its aria-label keeps the full name). */
+/* Narrow phones (360, most Galaxy S and A models): the apply label always stays (N2). The header
+   tightens and the wordmark gets smaller; below 340 the zombie icon alone stands for it on the pages
+   that show the apply button (the link keeps its aria-label '좀비고 거래소 홈'). */
 @media (max-width: 360px) {
-  .account-name { display: none; }
-  .header-apply { width: 34px; padding: 0; justify-content: center; }
-  .header-apply .label-long, .header-apply .label-short { display: none; }
+  .header-inner { gap: 8px; }
+  .logo { gap: 6px; font-size: var(--fs-16); }
+  .header-apply { gap: 4px; padding: 0 8px; }
+}
+@media (max-width: 340px) {
+  .header.show-apply .logo-text { display: none; }
 }
 
 /* Menus (Radix dropdown) */
@@ -169,7 +174,6 @@
 .grade-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .grade-row-name strong { color: var(--ink); font-size: var(--fs-15); }
 .grade-row-perks { color: var(--ink-3); font-size: var(--fs-13); }
-.apply-note { color: var(--ink-3); font-size: var(--fs-13); line-height: 1.6; }
 .apply-link { color: var(--brand); font-weight: 600; white-space: nowrap; }
 .apply-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .grade-row-plans { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }

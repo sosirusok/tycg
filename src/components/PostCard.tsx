@@ -7,7 +7,7 @@ import {
 import { Link, navigate } from '../lib/router';
 import { api, errorText, imageUrl } from '../lib/api';
 import { useApp } from '../app/state';
-import { CIcon, NameLine } from './ui';
+import { CIcon, DataItems, NameLine } from './ui';
 
 export function postSummary(post: Post) {
     const d = post.details;
@@ -18,15 +18,20 @@ export function postSummary(post: Post) {
     return [];
 }
 
-// What an exchange post wants in return, in the same short form as the offered side.
-export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags'>) {
+// What an exchange post wants in return, in the same short form as the offered side:
+// the ladder seasons and the other conditions, kept apart so the detail page can show them on two lines.
+export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags'>): [string[], string[]] {
     const d = post.details;
-    if (d.wantedCategory !== 'account') return [categoryName(d.wantedCategory || 'account')];
+    if (d.wantedCategory !== 'account') return [[], [categoryName(d.wantedCategory || 'account')]];
     const unprefixed: Record<string, string> = {};
     for (const [k, v] of Object.entries(d)) if (k.startsWith('wanted') && k !== 'wantedCategory') unprefixed[k[6].toLowerCase() + k.slice(7)] = v;
     const tags = post.wanted_tags || [];
-    return [...tags.slice(0, 2).map(tagName), ...(tags.length > 2 ? [`외 ${tags.length - 2}개 시즌`] : []), ...accountSummary(unprefixed)];
+    return [[...tags.slice(0, 2).map(tagName), ...(tags.length > 2 ? [`외 ${tags.length - 2}개 시즌`] : [])], accountSummary(unprefixed)];
 }
+
+// Cards show the first few data items of a spec line; the post itself lists everything.
+const CARD_ITEMS = 4;
+
 
 // The category, or for an exchange post what is traded for what ('계정에서 클랜 구함').
 function subjectLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
@@ -42,22 +47,22 @@ export function tradeLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
 // Exchange posts have no price, so the slot shows what the author wants in return.
 export function PriceLine({ post, large = false }: { post: Post; large?: boolean }) {
     if (post.kind === 'exchange') {
-        const wanted = wantedSummary(post);
+        const [ladder, conditions] = wantedSummary(post);
+        const lines = large ? [ladder, conditions].filter(l => l.length) : [[...ladder, ...conditions].slice(0, CARD_ITEMS)].filter(l => l.length);
         return <div className={'price price-exchange' + (large ? ' price-lg' : '')}>
             <span className="price-label">원하는 {categoryName(post.details.wantedCategory || 'account')}</span>
-            <span className="price-want">{wanted.length > 1 || post.details.wantedCategory !== 'account' ? wanted.join(' · ') : '본문 참고'}</span>
+            {lines.length ? lines.map((line, i) => <span key={i} className="price-want"><DataItems items={line} /></span>) : <span className="price-want">내용 참고</span>}
         </div>;
     }
     const all = post.kind === 'sell' ? (post.price_history || []).filter(h => h.price !== post.price) : [];
     const history = large ? all : all.slice(-2);
     const offer = post.kind === 'sell' && post.details.currentOffer ? Number(post.details.currentOffer) : null;
-    // A buy post reads 'MAX 30만원' in one piece.
-    const maxLine = post.kind === 'buy' && post.price !== null;
+    // A buy post reads 'MAX 30만원' in one piece, so it has no separate label.
     return <div className={'price' + (large ? ' price-lg' : '')}>
-        {!maxLine && <span className="price-label">{priceLabel(post.kind)}</span>}
+        {post.kind !== 'buy' && <span className="price-label">{priceLabel(post.kind)}</span>}
         <span className="price-values">
             {history.map((h, i) => <del key={i} title={new Date(h.changed_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' 변경 전'}>{priceText(h.price)}</del>)}
-            <strong>{maxLine ? `${priceLabel('buy')} ${priceText(post.price)}` : listingPrice(post)}</strong>
+            <strong>{listingPrice(post)}</strong>
         </span>
         {offer !== null && <span className="price-offer">현젯 <b>{priceText(offer)}</b></span>}
     </div>;
@@ -108,7 +113,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">
                 {tags.slice(0, 3).map(t => <span className="tag" key={t.tier + t.season}>{tagName(t)}</span>)}
                 {tags.length > 3 && <span className="tag">+{tags.length - 3}</span>}
-                {summary.length > 0 && <span className="spec">{summary.slice(0, 5).join(' · ')}</span>}
+                {summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, CARD_ITEMS)} /></span>}
             </div>}
             <div className="post-card-bottom">
                 <PriceLine post={post} />
@@ -131,7 +136,7 @@ export function MiniCard({ post }: { post: Post }) {
     return <Link to={'/posts/' + post.id} className="mini-card">
         <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span></div>
         <h3>{post.title}</h3>
-        {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec">{summary.slice(0, 2).join(' · ')}</span>}</div>}
+        {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
         <PriceLine post={post} />
         <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /><span className="muted small nowrap">{postTime(post)}</span></div>
     </Link>;
