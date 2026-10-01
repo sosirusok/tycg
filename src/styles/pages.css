@@ -275,7 +275,8 @@
 
 /* chat */
 .chat-page { padding-top: 24px; padding-bottom: 24px; }
-.chat-shell { display: grid; grid-template-columns: 340px minmax(0, 1fr); height: calc(100dvh - var(--header-h) - 48px); min-height: 520px; border: 1px solid var(--line); border-radius: var(--r-12); overflow: hidden; background: var(--white); }
+/* 360px fits a five-character nickname with a grade chip and two verification names next to the time. */
+.chat-shell { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: calc(100dvh - var(--header-h) - 48px); min-height: 520px; border: 1px solid var(--line); border-radius: var(--r-12); overflow: hidden; background: var(--white); }
 .chat-list { border-right: 1px solid var(--line); overflow-y: auto; }
 .chat-shell.is-empty { grid-template-columns: 1fr; }
 .chat-shell.is-empty .chat-list { border-right: 0; }
