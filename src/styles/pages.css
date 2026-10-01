@@ -198,6 +198,12 @@
 .ed-more summary::after { content: ''; margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; }
 .ed-more[open] summary::after { transform: rotate(225deg); }
 .ed-more[open] { padding-bottom: 16px; }
+.ed-fold > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.ed-fold > summary::-webkit-details-marker { display: none; }
+.ed-fold > summary h2 { font-size: var(--fs-18); font-weight: 700; }
+.ed-fold > summary::after { content: ''; margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; }
+.ed-fold[open] > summary::after { transform: rotate(225deg); }
+.ed-form .ed-section:last-of-type { border-bottom: 0; }
 .kind-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 .kind-card { position: relative; display: grid; justify-items: center; align-content: center; gap: 8px; min-height: 104px; padding: 12px 6px; border: 1px solid var(--line); border-radius: var(--r-12); cursor: pointer; text-align: center; font-size: var(--fs-14); font-weight: 600; color: var(--ink-2); }
 .kind-card input { position: absolute; opacity: 0; pointer-events: none; }
@@ -207,7 +213,9 @@
 .kind-card small { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
 .kind-card.is-locked .cicon { opacity: .5; }
 .nick-range { max-width: 360px; }
-.restore { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 20px; padding: 14px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); }
+.restore { display: flex; align-items: center; gap: 6px; margin-top: 16px; padding: 12px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); color: var(--ink-2); }
+.restore-action { color: var(--brand); font-weight: 600; white-space: nowrap; }
+.restore-action:hover { text-decoration: underline; }
 .photo-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
 .photo, .photo-add { position: relative; aspect-ratio: 1; border-radius: var(--r-8); overflow: hidden; }
 .photo { background: var(--fill); border: 1px solid var(--line); }
@@ -224,8 +232,17 @@
 @media (max-width: 960px) { .ed-bar { padding-bottom: calc(12px + env(safe-area-inset-bottom)); } }
 @media (max-width: 640px) {
   .ed-grid { grid-template-columns: 1fr; }
-  .kind-cards { grid-template-columns: repeat(3, 1fr); }
-  .kind-card { min-height: 92px; font-size: var(--fs-13); }
+  .ed-grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .kind-cards { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .kind-card { min-height: 76px; padding: 8px 2px; font-size: var(--fs-12); }
+  .kind-card .cicon { width: 28px; height: 28px; }
+  /* Five cards share one row: the lock note becomes a corner lock, its words stay for screen readers. */
+  .kind-card small { position: absolute; top: 6px; right: 6px; }
+  .kind-card small span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ed-grid-3 { gap: 8px; }
+  .ed-grid-3 .input { padding-left: 10px; padding-right: 10px; }
+  .ed-grid-3 .input-unit .input { padding-right: 28px; }
+  .ed-grid-3 .input-unit > span { right: 10px; }
   .photo-grid { grid-template-columns: repeat(3, 1fr); }
   .ed-section { padding: 26px 0; }
 }

@@ -149,8 +149,9 @@ function Shell() {
                     : <NotFound />}
             </Suspense>
         </main>
-        {/* On phones a post ends at its fixed bar, so the footer is left out there (pages.css). */}
-        {page !== 'chat' && <footer className={'footer' + (page === 'posts' ? ' footer-post' : '')}>
+        {/* On phones a post ends at its fixed bar, so the footer is left out there (pages.css). The write
+            form ends at its own sticky bar, so it has no footer either. */}
+        {page !== 'chat' && page !== 'write' && page !== 'edit' && <footer className={'footer' + (page === 'posts' ? ' footer-post' : '')}>
             <div className="container footer-inner">
                 <div><strong>좀비고 거래소</strong>게임사와 무관한 유저 거래 커뮤니티입니다. 거래 책임은 거래 당사자에게 있습니다.</div>
                 <div className="footer-links"><Link to="/guide">공지</Link><button type="button" onClick={() => openApply()}>인증/등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
