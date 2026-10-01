@@ -1,5 +1,5 @@
 import type { User } from '../shared/market';
-import { db, fail, requireUser, json, body, limit, memberColumns, withMember, isManager, ApiError, WITHDRAWN, WITHDRAWN_NAME } from './http';
+import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 
 export async function blocked(a: string, b: string) {
@@ -69,10 +69,12 @@ async function chatListing(conversationId: string, u: User) {
 }
 
 function partner(row: any) {
-    const { deleted_at, ...rest } = row;
+    const { deleted_at, suspended_until, ...rest } = row;
     const m: Record<string, unknown> = withMember(rest);
     delete m.grade_expires_at;
     if (deleted_at) { m.nickname = WITHDRAWN_NAME; m.deleted = true; delete m.last_seen_at; }
+    // The room shows '이용 제한 회원입니다' over a partner under 이용 정지 (the end date stays private).
+    else if (isSuspended(suspended_until)) m.suspended = true;
     return m;
 }
 
@@ -122,7 +124,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
         // The room header also shows the partner's '최근 접속' (last_seen_at); the chat list leaves it out.
-        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
+        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,u.suspended_until,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
         return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b), listing: await chatListing(c.id, u) } });
     }
     if (p[1] && p[2] === 'messages') {
@@ -143,8 +145,11 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             });
         }
         if (method === 'POST') {
+            const partnerId = c.user_a === u.id ? c.user_b : c.user_a;
+            // A member under 이용 정지 writes only to the manager (to appeal).
+            if (partnerId !== MANAGER_ID) requireActive(u);
             // Nobody can write to a member who left; their side of the chat stays readable.
-            if ((await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(c.user_a === u.id ? c.user_b : c.user_a).first<{ deleted_at: number | null }>())?.deleted_at) fail(404, WITHDRAWN);
+            if ((await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(partnerId).first<{ deleted_at: number | null }>())?.deleted_at) fail(404, WITHDRAWN);
             if (await blocked(c.user_a, c.user_b)) fail(403, '차단된 회원입니다.');
             await limit('message:' + u.id, 60, 60000);
             const b = await body(req);
@@ -163,7 +168,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             let post: any = null;
             if (b.postId !== undefined && b.postId !== null) {
                 post = await visiblePost(b.postId, u);
-                if (post.author_id !== (c.user_a === u.id ? c.user_b : c.user_a)) fail(400, '게시글 작성자를 확인해 주세요.');
+                if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
             }
             const now = Date.now(), ref = post ? String(post.id) : '';
             const r = await db().batch([

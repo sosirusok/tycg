@@ -1,8 +1,23 @@
-import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, MANAGER_ID } from './http';
+import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import { REPORT_REASONS } from '../shared/market';
-import { decorate, endOffersStatements, postSelect } from './posts';
+import { decorate, endOffersStatements, parse, postSelect } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
+
+// One 신고 row: the reporter's name line, and for a member report the reported member's (탈퇴회원 once
+// they left, with whether they are under 이용 정지 now).
+function reportRow(row: any) {
+    const { target_deleted_at, target_suspended_until, ...rest } = row;
+    const out: Record<string, any> = withMember(withMember(rest), 'target_');
+    if (!out.target_user_id) {
+        for (const key of ['target_nickname', 'target_role', 'target_grade', 'target_grade_expires_at', 'target_badges']) delete out[key];
+        return out;
+    }
+    delete out.target_grade_expires_at;
+    if (target_deleted_at) { out.target_nickname = WITHDRAWN_NAME; out.target_deleted = true; }
+    out.target_suspended = isSuspended(target_suspended_until);
+    return out;
+}
 
 // Every /api/manage/* route is manager-only: requireManager (role 'manager') runs before any
 // route below or in manageMembers. There is no moderator role, and a member's grade, including
@@ -12,12 +27,22 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     requireManager(u);
     if (!p[1] && method === 'GET') {
         const r = await db().batch([
-            db().prepare(`SELECT r.*,p.title,p.hidden,u.nickname,${memberColumns('u')} FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id ORDER BY r.created_at DESC LIMIT 100`),
+            // A member report (WP22) also names the reported member (target_*) and the chat it came from.
+            db().prepare(`SELECT r.*,p.title,p.hidden,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
+                FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id LEFT JOIN users t ON t.id=r.target_user_id ORDER BY r.created_at DESC LIMIT 100`),
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
         ]);
-        return json({ reports: r[0].results.map(row => withMember(row as any)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n });
+        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n });
+    }
+    // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
+    if (p[1] === 'reports' && p[2] && p[3] === 'messages' && !p[4] && method === 'GET') {
+        const report = await db().prepare('SELECT conversation_id FROM reports WHERE id=?').bind(p[2]).first<{ conversation_id: string | null }>();
+        if (!report?.conversation_id) fail(404, '신고된 채팅이 없습니다.');
+        const r = await db().prepare(`SELECT m.id,m.sender_id,m.body,m.type,m.attachments,m.created_at,s.nickname,s.deleted_at FROM messages m JOIN users s ON s.id=m.sender_id
+            WHERE m.conversation_id=? ORDER BY m.id DESC LIMIT 200`).bind(report.conversation_id).all<any>();
+        return json({ messages: r.results.reverse().map(({ deleted_at, attachments, ...m }) => ({ ...m, nickname: deleted_at ? WITHDRAWN_NAME : m.nickname, photos: parse(attachments, []).length })) });
     }
     // Hiding keeps updated_at, stores an optional report reason for the author, and ends the post's
     // open offers. Unhiding clears the reason.

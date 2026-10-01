@@ -304,6 +304,8 @@
 .room-listing-meta { overflow: hidden; color: var(--ink-3); font-size: var(--fs-13); white-space: nowrap; text-overflow: ellipsis; }
 .room-listing-actions { display: flex; flex: none; gap: 6px; }
 .room-listing .btn { flex: none; }
+/* '이용 제한 회원입니다.' under the header when the partner is under 이용 정지. */
+.room-notice { flex: none; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--fill); color: var(--ink-2); font-size: var(--fs-13); text-align: center; }
 .room-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 /* The partner's name line with '최근 접속' under it. */
 .room-who-text { display: grid; min-width: 0; }
@@ -366,6 +368,10 @@
 .mp-app { display: grid; gap: 8px; padding: 8px 0; font-size: var(--fs-14); color: var(--ink); font-weight: 600; }
 .mp-grant { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 8px; }
 .mp-grant .select { height: 38px; font-size: var(--fs-14); }
+/* 이용 정지: period chips, reason chips, the reason and the button, one per row. */
+.mp-suspend { display: grid; gap: 8px; margin-top: 2px; }
+.mp-suspend .input { height: 38px; font-size: var(--fs-14); }
+.mp-suspend .btn { justify-self: start; }
 .mp-temp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-20); letter-spacing: .08em; }
 @media (max-width: 1200px) {
   .chat-room.with-panel { grid-template-columns: minmax(0, 1fr); }
@@ -477,6 +483,10 @@
 
 /* manage */
 .settings-form { display: grid; gap: 28px; max-width: 560px; }
+/* 신고된 채팅: one line per message, who and when above it; the reported member's lines are bold. */
+.report-chat { display: grid; margin: 0; padding: 0; list-style: none; max-height: 60vh; overflow-y: auto; }
+.report-chat li { display: grid; gap: 2px; padding: 10px 2px; border-bottom: 1px solid var(--line); font-size: var(--fs-14); white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-chat li.is-target > span:last-child { color: var(--ink); font-weight: 700; }
 
 /* guide */
 .notice-acc { margin: 16px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }

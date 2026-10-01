@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
+import { Ban, ChevronRight, Flag, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, type Post, type User } from '../../shared/market';
+import { dateText, longDate, suspendEndText, SUSPEND_FOREVER, type Post, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -10,11 +10,13 @@ import { setPageTitle, useApp } from '../app/state';
 import { gradeBenefits } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
+import { MemberReportModal } from '../components/MemberReport';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
-type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null };
+// suspended: under 이용 정지 now; suspended_until (until when) reaches only the member and the manager.
+type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
 type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
 const PAGE_SIZE = 20;
@@ -30,7 +32,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const [postsVersion, setPostsVersion] = useState(0);
     // Counts list resets (tab switch, profile save), so a '더 보기' page for an old list is dropped.
     const listGen = useRef(0);
-    const [account, setAccount] = useState<'' | 'password' | 'withdraw'>('');
+    const [account, setAccount] = useState<'' | 'password' | 'withdraw'>(''), [reporting, setReporting] = useState(false);
     const mine = me?.id === id;
 
     useEffect(() => {
@@ -116,6 +118,8 @@ export default function ProfilePage({ id }: { id?: string }) {
             <Avatar name={user.nickname} size="lg" />
             <div className="grow">
                 <NameLine nickname={user.nickname} grade={user.grade} role={user.role} badges={user.badges} size="lg" />
+                {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
+                {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${user.suspended_until >= SUSPEND_FOREVER ? '영구' : '~' + suspendEndText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount} · 거래완료 {user.closedCount}</p>
                 {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
@@ -127,6 +131,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                     : <>
                         <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
                         {user.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" aria-pressed={!!user.blocked} disabled={blockBusy} onClick={block}><Ban size={15} />{user.blocked ? '차단 해제' : '차단'}</button>}
+                        {user.role !== 'manager' && me?.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(() => setReporting(true))}><Flag size={15} />신고</button>}
                     </>}
             </div>
         </section>
@@ -183,6 +188,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 </div>
             </div>
         </Modal>
+        {!mine && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={user.id} nickname={user.nickname} />}
         <PasswordModal open={account === 'password'} onClose={() => setAccount('')} />
         <WithdrawModal open={account === 'withdraw'} onClose={() => setAccount('')} onDone={() => { setAccount(''); setMe(null); void navigate('/'); toast('탈퇴 완료'); }} />
     </div>;

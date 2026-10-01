@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
-import { dateText, longDate, type User } from '../../shared/market';
+import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, SUSPEND_FOREVER, dateText, longDate, suspendDaysLabel, suspendEndText, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
 
 type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null };
 type Revoke = { name: string; description?: string; task: () => Promise<unknown>; done: string };
-type Detail = { user: User & { username: string; deleted_at?: number | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[] };
+type Sanction = { id: number; days: number | null; reason: string; created_at: number };
+type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[] };
+// Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
+const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 
 // Manager tools for one member: verification switches, grade grants, applications.
 // `version` reloads the panel after changes made elsewhere (e.g. the chat's application card).
@@ -20,6 +23,8 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
     const [resetting, setResetting] = useState(false), [temp, setTemp] = useState('');
     // Turning a badge off or taking back a grade asks first.
     const [revoke, setRevoke] = useState<Revoke | null>(null);
+    // 이용 정지: the period chip and reason, then a confirm (days null: 정지 해제).
+    const [suspendDays, setSuspendDays] = useState<number>(7), [suspendReason, setSuspendReason] = useState(''), [suspending, setSuspending] = useState<{ days: number | null } | null>(null);
     const load = useCallback(() => api<Detail>('manage/users/' + userId).then(setData).catch(e => setError(errorText(e))), [userId]);
     useEffect(() => { void load(); }, [load, version]);
     const plans = gradeInfo(grade).plans;
@@ -27,7 +32,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     const run = async (task: () => Promise<unknown>, message: string) => {
         setBusy(true);
-        try { await task(); toast(message); setRevoke(null); await load(); onChange?.(); }
+        try { await task(); toast(message); setRevoke(null); setSuspending(null); await load(); onChange?.(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     };
@@ -46,6 +51,9 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
     const u = data.user, now = Date.now();
     const active = data.grants.filter(g => g.expires_at === null || g.expires_at > now);
     const pending = data.applications.filter(a => a.status === 'pending');
+    const suspendedUntil = u.suspended_until && u.suspended_until > now ? u.suspended_until : null;
+    const suspendEnd = (t: number) => t >= SUSPEND_FOREVER ? '영구' : suspendEndText(t) + '까지';
+    const suspend = (days: number | null) => () => api(`manage/users/${u.id}/suspend`, 'POST', { days, reason: days === null ? '' : suspendReason.trim() }).then(() => { if (days !== null) setSuspendReason(''); });
 
     return <div className="member-panel">
         <div className="mp-head">
@@ -91,12 +99,32 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>지난 신청</h4>
             {data.applications.filter(a => a.status !== 'pending').slice(0, 8).map(a => <div key={a.id} className="mp-row small"><span className="grow">{applicationTitle(a)}</span><span className="muted">{APPLICATION_STATUS_NAMES[a.status]}</span></div>)}
         </div>}
+        {u.role !== 'manager' && (!u.deleted_at || suspendedUntil) && <div className="mp-block">
+            <h4>이용 정지{suspendedUntil && <span className="muted small"> {suspendEnd(suspendedUntil)}</span>}</h4>
+            {suspendedUntil ? <div className="mp-row">
+                <span className="grow">{u.suspend_reason ? `사유: ${u.suspend_reason}` : '이용 정지 중'}</span>
+                <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setSuspending({ days: null })}>정지 해제</button>
+            </div> : <div className="mp-suspend">
+                <div className="chip-row" role="group" aria-label="정지 기간">{SUSPEND_DAYS.map(d => <button type="button" key={d} className="chip chip-sm" aria-pressed={suspendDays === d} onClick={() => setSuspendDays(d)}>{suspendDaysLabel(d)}</button>)}</div>
+                <div className="chip-row" role="group" aria-label="정지 사유 선택">{SUSPEND_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={suspendReason === r} onClick={() => setSuspendReason(r)}>{r}</button>)}</div>
+                <input className="input" value={suspendReason} onChange={e => setSuspendReason(e.target.value)} maxLength={100} placeholder="정지 사유" aria-label="정지 사유" />
+                <button type="button" className="btn btn-dark btn-sm" disabled={busy || suspendReason.trim().length < 2} onClick={() => setSuspending({ days: suspendDays })}>이용 정지</button>
+            </div>}
+            {(data.sanctions || []).slice(0, 5).map(x => <div key={x.id} className="mp-row small"><span className="grow">{x.days === null ? '정지 해제' : `이용 정지 ${suspendDaysLabel(x.days)}`}{x.reason && <span className="muted"> · {x.reason}</span>}</span><span className="muted">{dateText(x.created_at)}</span></div>)}
+        </div>}
         {u.role !== 'manager' && !u.deleted_at && <div className="mp-block">
             <h4>계정</h4>
             <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
         </div>}
         <Modal open={!!revoke} onClose={() => { if (!busy) setRevoke(null); }} title={revoke ? `${u.nickname}님 ${revoke.name} 회수` : ''} description={revoke?.description}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRevoke(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (revoke) void run(revoke.task, revoke.done); }}>회수</button></>}>
+            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+        </Modal>
+        <Modal open={!!suspending} onClose={() => { if (!busy) setSuspending(null); }} title={suspending?.days === null ? `${u.nickname}님 이용 정지 해제` : `${u.nickname}님 이용 정지 ${suspendDaysLabel(suspending?.days ?? 0)}`}
+            description={suspending && suspending.days !== null ? `사유: ${suspendReason.trim()}` : undefined}
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setSuspending(null)}>취소</button>{suspending?.days === null
+                ? <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(suspend(null), '이용 정지 해제')}>해제</button>
+                : <button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (suspending) void run(suspend(suspending.days), '이용 정지 완료'); }}>정지</button>}</>}>
             <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
         </Modal>
         <Modal open={resetting} onClose={() => { if (!busy) setResetting(false); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."

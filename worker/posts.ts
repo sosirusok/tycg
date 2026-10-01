@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember, setting, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
@@ -307,7 +307,12 @@ async function listPosts(req: Request, url: URL) {
     const u = await currentUser(req), s = url.searchParams, where: string[] = [], values: any[] = [];
     const author = s.get('author');
     // Authors see their own hidden posts in their own list; nobody else sees hidden posts in a list.
-    if (!u || author !== u.id) where.push('p.hidden=0');
+    // A member under 이용 정지 is left out the same way (boards, search, 찜, profile lists and both
+    // promotion boxes, which share this clause) until the suspension ends.
+    if (!u || author !== u.id) {
+        where.push('p.hidden=0', '(u.suspended_until IS NULL OR u.suspended_until<=?)');
+        values.push(Date.now());
+    }
     for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'reserved', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
@@ -642,6 +647,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
     }
+    // 이용 정지 stops writing, 끌올, 상단 노출 and price changes; closing or deleting a post still works.
+    if ((p[2] === 'bump' && method === 'POST') || (p[2] === 'feature' && method === 'PUT') || (p[2] === 'price' && method === 'PATCH') || (!p[2] && (method === 'POST' || method === 'PUT'))) requireActive(u);
     if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
     if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
     if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);

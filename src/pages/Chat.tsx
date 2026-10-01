@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, Ban, ImagePlus, LoaderCircle, Send, UserCog, X } from 'lucide-react';
+import { ArrowLeft, ImagePlus, LoaderCircle, MoreHorizontal, Send, UserCog, X } from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, type Post, type TradeKind, type User } from '../../shared/market';
+import { KIND_ICONS, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, suspendEndText, SUSPEND_FOREVER, type Post, type TradeKind, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, uploadPhoto } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
@@ -10,11 +11,12 @@ import { useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
+import { MemberReportModal } from '../components/MemberReport';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
-type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null };
+type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // The post the chat is about, pinned under the room header.
 type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
 type ChatFilter = 'all' | 'applications';
@@ -121,7 +123,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const [messages, setMessages] = useState<Message[]>([]), [offers, setOffers] = useState<Offer[]>([]), [apps, setApps] = useState<Application[]>([]);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
     const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
-    const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false);
+    const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false), [reporting, setReporting] = useState(false);
     // After the manager decides an application here: the next chat with a waiting one (null: none left).
     const [decided, setDecided] = useState(''), [nextApp, setNextApp] = useState<string | null | undefined>(undefined);
     // Opened from a post's 채팅하기 (/chat/:id?post=N): the first message carries that post, so the
@@ -265,8 +267,10 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         catch (err) { toast.error(errorText(err)); }
         finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
     }
+    // A member under 이용 정지 writes only to the manager; elsewhere the composer says until when.
+    const suspendedUntil = me.suspended_until && me.suspended_until > Date.now() && partner && partner.role !== 'manager' ? me.suspended_until : null;
     // A pasted screenshot or a photo dropped on the room goes up like one picked from the album.
-    const closed = blocked || !!partner?.deleted;
+    const closed = blocked || !!partner?.deleted || !!suspendedUntil;
     function onPaste(e: ClipboardEvent<HTMLFormElement>) {
         const files = imageFiles(e.clipboardData.files);
         if (!files.length || closed) return;
@@ -346,8 +350,18 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                     </span></Link> : <span className="grow" />}
                 <span className="grow" />
                 {managerView && <button type="button" className="btn btn-line btn-sm room-panel-btn" onClick={() => setPanel(true)}><UserCog size={16} />회원 관리</button>}
-                {partner && partner.role !== 'manager' && !partner.deleted && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}
+                {/* 신고 (members only; the manager has 회원 관리) and 차단. */}
+                {partner && partner.role !== 'manager' && (me.role !== 'manager' || !partner.deleted) && <DropdownMenu.Root modal={false}>
+                    <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                        <DropdownMenu.Content className="menu" align="end" sideOffset={6}>
+                            {me.role !== 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => setReporting(true)}>신고</DropdownMenu.Item>}
+                            {!partner.deleted && <DropdownMenu.Item className="menu-item" onSelect={() => void toggleBlock()}>{blocked ? '차단 해제' : '차단'}</DropdownMenu.Item>}
+                        </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                </DropdownMenu.Root>}
             </header>
+            {partner?.suspended && <p className="room-notice">이용 제한 회원입니다.</p>}
             {listing && <div className="room-listing">
                 <Link to={'/posts/' + listing.id} className="room-listing-thumb" tabIndex={-1} aria-hidden="true">{listing.thumb ? <img src={imageUrl(listing.thumb)} alt="" /> : <CIcon name={listingIcon} size={24} />}</Link>
                 <span className="room-listing-main">
@@ -387,7 +401,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             </div>
             <form className="composer" onSubmit={send} onPaste={onPaste}>
                 {partner?.deleted ? <p className="muted small composer-blocked">탈퇴한 회원입니다.</p>
-                    : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p> : <>
+                    : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p>
+                    : suspendedUntil ? <p className="muted small composer-blocked">이용 정지 중입니다. ({suspendedUntil >= SUSPEND_FOREVER ? '영구 정지' : suspendEndText(suspendedUntil) + '까지'})</p> : <>
                     {quick.length > 0 && <div className="chip-scroll quick-replies" role="group" aria-label="빠른 답장">{quick.map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}</div>}
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
@@ -399,6 +414,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 </>}
             </form>
         </div>
+        {partner && me.role !== 'manager' && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={partner.id} nickname={partner.nickname} conversationId={id} />}
         {managerView && partner && <>
             <aside className="room-panel"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></aside>
             <Modal open={panel} onClose={() => setPanel(false)} title="회원 관리"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></Modal>

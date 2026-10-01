@@ -1,11 +1,11 @@
-import { db, fail, requireUser, json, body, limit, initManager, isManager, memberColumns, withMember, setting, random, storedHash, MANAGER_ID, WITHDRAWN } from './http';
+import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, MANAGER_ID, WITHDRAWN } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import {
     PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId,
 } from '../shared/membership';
-import type { User } from '../shared/market';
+import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
 
 export async function siteConfig() {
     await initManager();
@@ -110,6 +110,7 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
     }
     if (!p[1] && method === 'POST') {
         if (isManager(u)) fail(400, '매니저 계정은 신청할 수 없습니다.');
+        requireActive(u);
         await limit('apply:' + u.id, 30, 3600000);
         const b = await body(req);
         const kind: ApplicationKind = b.kind === 'grade' ? 'grade' : 'badge';
@@ -211,19 +212,44 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         if (q) { where.push('(instr(lower(u.nickname),lower(?))>0 OR instr(lower(u.username),lower(?))>0)'); values.push(q, q); }
         if (filter === 'badged') where.push('EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id)');
         if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000))");
-        const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
-        return json({ users: r.results.map(row => withMember(row as any)) });
+        const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,u.suspended_until,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
+        return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
-            const [grants, badges, apps] = await db().batch([
+            const [grants, badges, apps, sanctions] = await db().batch([
                 db().prepare('SELECT * FROM user_grades WHERE user_id=? ORDER BY granted_at DESC').bind(p[2]),
                 db().prepare('SELECT * FROM user_badges WHERE user_id=?').bind(p[2]),
                 db().prepare('SELECT * FROM applications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(p[2]),
+                db().prepare('SELECT id,days,reason,created_at FROM sanctions WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 20').bind(p[2]),
             ]);
-            return json({ user: withMember(target), grants: grants.results, badges: badges.results, applications: apps.results });
+            // A suspension that has ended reads as none.
+            const user = withMember(target);
+            if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
+            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results });
+        }
+        // 이용 정지 {days: 3|7|30|0 (영구) | null (해제), reason}. The manager is never suspended. The member
+        // hears about it in their chat with the manager, best-effort: a member who blocked the manager
+        // (ensureChat then throws 403) or left is still suspended or cleared.
+        if (p[3] === 'suspend' && !p[4] && method === 'POST') {
+            requireManager(u);
+            const b = await body(req);
+            const days: number | null = b.days === null ? null : (SUSPEND_DAYS as readonly unknown[]).includes(b.days) ? b.days : fail(400, '정지 기간을 확인해 주세요.');
+            if (target.role === 'manager') fail(400, '매니저 계정은 정지할 수 없습니다.');
+            if (days !== null && target.deleted_at) fail(400, WITHDRAWN);
+            if (days === null && !isSuspended(target.suspended_until)) fail(409, '이용 정지 중인 회원이 아닙니다.');
+            const reason = days === null ? (typeof b.reason === 'string' ? b.reason.trim().slice(0, 100) : '') : textField(b.reason, 2, 100, '정지 사유');
+            const now = Date.now(), until = days === null ? null : days === 0 ? SUSPEND_FOREVER : now + days * 86400000;
+            await db().batch([
+                db().prepare('UPDATE users SET suspended_until=?,suspend_reason=? WHERE id=?').bind(until, days === null ? '' : reason, target.id),
+                db().prepare('INSERT INTO sanctions(user_id,days,reason,by_id,created_at) VALUES(?,?,?,?,?)').bind(target.id, days, reason, u.id, now),
+            ]);
+            const text = days === null ? '이용 정지 해제' : `이용 정지 ${suspendDaysLabel(days)} · 사유: ${reason}`;
+            try { await db().batch(messageStatements(await ensureChat(MANAGER_ID, target.id), MANAGER_ID, text, 'system')); }
+            catch (e) { console.warn('Suspension notice not sent', e instanceof Error ? e.message : 'unknown'); }
+            return json({ ok: true, suspended_until: until });
         }
         if (p[3] === 'badges' && method === 'POST') {
             assertBadgeGranter(u);

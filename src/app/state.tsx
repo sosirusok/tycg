@@ -32,7 +32,7 @@ type AppState = {
 };
 
 const Ctx = createContext<AppState>(null!);
-const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.badges]);
+const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.badges, u.suspended_until]);
 export const useApp = () => useContext(Ctx);
 
 // The tab title: '(2) 판매 · 좀비고 거래소' while two chats are unread.

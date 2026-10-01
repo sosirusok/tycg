@@ -28,6 +28,8 @@ export type User = {
     grade: GradeId;
     grade_expires_at: number | null;
     badges: BadgeId[];
+    // The session user's own 이용 정지 end (WP22); other members' profiles carry only `suspended`.
+    suspended_until?: number | null;
 };
 
 export type TradeKind = 'buy' | 'sell' | 'exchange' | 'proxy_request' | 'proxy_offer';
@@ -262,6 +264,21 @@ export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '�
 export function nickTypesText(types: readonly string[]) { return types.join('/'); }
 
 export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;
+// A report about a member (from the chat header or the profile) adds the cafe words 젯취·거파 and 잠수.
+export const MEMBER_REPORT_REASONS = ['사기·먹튀', '젯취·거파', '잠수', '대주수·전적 속임', '욕설·비방', '기타'] as const;
+
+// 이용 정지: 3, 7 or 30 days, or 0 for 영구. 영구 is stored as this far-future time, which is past
+// the largest Date, so it is never formatted as a date.
+export const SUSPEND_DAYS = [3, 7, 30, 0] as const;
+export const SUSPEND_FOREVER = 9e15;
+export const suspendDaysLabel = (days: number) => days ? days + '일' : '영구';
+// When a suspension ends: '10월 8일 15:40' on the Korean clock (rounded up to the minute, so it is
+// never early), or '영구'.
+export function suspendEndText(until: number) {
+    if (until >= SUSPEND_FOREVER) return '영구';
+    const d = new Date(Math.ceil(until / 60000) * 60000 + 9 * 3600000);
+    return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
 
 // Stored values never change; `labels` only gives some of them the cafe word on screen.
 export const ACCOUNT_CHOICES: Record<string, { label: string; options: readonly string[]; legacy?: readonly string[]; labels?: Record<string, string> }> = {

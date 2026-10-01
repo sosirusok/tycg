@@ -1,5 +1,5 @@
-import { db, fail, requireUser, json, body, limit, textField, memberColumns, withMember } from './http';
-import { priceText } from '../shared/market';
+import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
+import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
 import { amount, parse, visiblePost, OFFERS_ENDED_TEXT } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 
@@ -68,7 +68,9 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
     if (p[0] === 'reports' && method === 'POST') {
         const u = await requireUser(req);
         await limit('report:' + u.id, 8, 3600000);
-        const b = await body(req), post = await visiblePost(b.postId, u), reason = textField(b.reason, 2, 50, '신고 사유'), detail = textField(b.details, 1, 1000, '신고 설명');
+        const b = await body(req);
+        if (b.postId === undefined && b.userId !== undefined) return reportMember(u, b);
+        const post = await visiblePost(b.postId, u), reason = textField(b.reason, 2, 50, '신고 사유'), detail = textField(b.details, 1, 1000, '신고 설명');
         if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
         await db().prepare('INSERT INTO reports(post_id,reporter_id,reason,details,created_at) VALUES(?,?,?,?,?)').bind(post.id, u.id, reason, detail, Date.now()).run();
         return json({ ok: true });
@@ -81,6 +83,29 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
     return null;
 }
 
+// 신고 of a member from the chat header or their profile: {userId, conversationId?, reason, details}.
+// A report naming a chat must come from one of its two members about the other one, so the manager
+// can read that chat as the evidence. One waiting report per reporter and member.
+async function reportMember(u: User, b: any) {
+    if (typeof b.userId !== 'string' || b.userId === u.id) fail(400, '회원을 확인해 주세요.');
+    const target = await db().prepare('SELECT id,role FROM users WHERE id=?').bind(b.userId).first<{ id: string; role: string }>();
+    if (!target) fail(404, '회원을 찾을 수 없습니다.');
+    if (target.role === 'manager') fail(400, '매니저는 신고할 수 없습니다.');
+    if (!(MEMBER_REPORT_REASONS as readonly unknown[]).includes(b.reason)) fail(400, '신고 사유를 확인해 주세요.');
+    const detail = textField(b.details, 1, 1000, '신고 설명');
+    let conversationId: string | null = null;
+    if (b.conversationId !== undefined && b.conversationId !== null) {
+        const c = typeof b.conversationId === 'string' ? await db().prepare('SELECT user_a,user_b FROM conversations WHERE id=?').bind(b.conversationId).first<{ user_a: string; user_b: string }>() : null;
+        if (!c || !((c.user_a === u.id && c.user_b === target.id) || (c.user_b === u.id && c.user_a === target.id))) fail(403, '신고할 채팅을 확인해 주세요.');
+        conversationId = b.conversationId;
+    }
+    // The duplicate check is repeated inside the insert, so two taps at once file one report.
+    const r = await db().prepare("INSERT INTO reports(post_id,target_user_id,conversation_id,reporter_id,reason,details,created_at) SELECT NULL,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM reports WHERE target_user_id=? AND reporter_id=? AND status='pending')")
+        .bind(target.id, conversationId, u.id, b.reason, detail, Date.now(), target.id, u.id).run();
+    if (!r.meta.changes) fail(409, '이미 신고한 회원입니다.');
+    return json({ ok: true }, 201);
+}
+
 async function offersHandler(req: Request, p: string[]) {
     const method = req.method, u = await requireUser(req);
     if (method === 'GET') {
@@ -88,6 +113,7 @@ async function offersHandler(req: Request, p: string[]) {
         return json({ offers: r.results.map(row => publicMember(publicMember(row, 'sender_'), 'recipient_')) });
     }
     if (method === 'POST' && !p[1]) {
+        requireActive(u);
         await limit('offer:' + u.id, 20, 600000);
         const b = await body(req), post = await visiblePost(b.postId, u);
         if (post.kind !== 'sell') fail(400, '판매 글에만 제시할 수 있습니다.');

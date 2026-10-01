@@ -12,7 +12,10 @@ import { PostCard } from '../components/PostCard';
 
 type TabId = 'applications' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; badges: string[] };
-type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; badges: string[]; reason: string; details: string; status: string; created_at: number };
+type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; badges: string[]; reason: string; details: string; status: string; created_at: number;
+    // A member report: the reported member and the chat it came from.
+    target_user_id: string | null; conversation_id: string | null; target_nickname?: string; target_role?: string; target_grade?: string; target_badges?: string[]; target_deleted?: boolean; target_suspended?: boolean };
+type EvidenceMessage = { id: number; sender_id: string; nickname: string; body: string; type: string; photos: number; created_at: number };
 type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
@@ -75,7 +78,7 @@ function Applications({ onChange }: { onChange: () => void }) {
 }
 
 function Members() {
-    const [q, setQ] = useState(''), [filter, setFilter] = useState(''), [users, setUsers] = useState<(User & { username: string; postCount: number })[] | null>(null), [member, setMember] = useState<string | null>(null);
+    const [q, setQ] = useState(''), [filter, setFilter] = useState(''), [users, setUsers] = useState<(User & { username: string; postCount: number; suspended?: boolean })[] | null>(null), [member, setMember] = useState<string | null>(null);
     const [applied, setApplied] = useState('');
     const load = useCallback(() => api<{ users: any[] }>('manage/users?' + new URLSearchParams({ q: applied, filter })).then(d => setUsers(d.users)).catch(e => toast.error(errorText(e))), [applied, filter]);
     useEffect(() => { void load(); }, [load]);
@@ -84,7 +87,7 @@ function Members() {
         <form className="search-input" onSubmit={submit} role="search"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="닉네임 또는 아이디" aria-label="회원 검색" /></form>
         <div className="chip-row mt-12">{[['', '전체'], ['badged', '인증 보유'], ['graded', '등급 보유']].map(([id, label]) => <button type="button" key={id} className="chip chip-sm" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}</div>
         <div className="mt-16">{users === null ? <SkeletonRows count={4} height={60} /> : users.length ? <ul className="simple-list">{users.map(u => <li key={u.id}>
-            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}</span></span>
+            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.suspended && ' · 이용 정지 중'}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
         </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
@@ -92,17 +95,40 @@ function Members() {
 }
 
 function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
+    const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null);
     if (!reports) return <SkeletonRows />;
     if (!reports.length) return <EmptyState title="접수된 신고가 없습니다" />;
     const act = async (task: Promise<unknown>, message: string) => { try { await task; toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } };
-    return <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
-        <span className="grow">
-            <strong>{r.reason}</strong>
-            <span className="small">{r.details}</span>
-            <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</span>
-        </span>
-        {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
-        <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+    return <>
+        <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
+            <span className="grow">
+                <strong>{r.reason}</strong>
+                <span className="small">{r.details}</span>
+                {/* A member report names the member (profile link); a post report names the post. */}
+                {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
+                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
+            </span>
+            {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
+            {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
+            {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
+            <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+        </li>)}</ul>
+        <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={onChange} />}</Modal>
+        <Modal open={!!evidence} onClose={() => setEvidence(null)} title="신고된 채팅" wide>{evidence && <ReportChat report={evidence} />}</Modal>
+    </>;
+}
+
+// The chat a member report came from, read-only: who wrote each line and when. The reported member's lines are bold.
+function ReportChat({ report }: { report: Report }) {
+    const [messages, setMessages] = useState<EvidenceMessage[] | null>(null), [error, setError] = useState('');
+    useEffect(() => { api<{ messages: EvidenceMessage[] }>(`manage/reports/${report.id}/messages`).then(d => setMessages(d.messages)).catch(e => setError(errorText(e))); }, [report.id]);
+    if (error) return <p className="muted">{error}</p>;
+    if (!messages) return <SkeletonRows count={3} height={48} />;
+    if (!messages.length) return <EmptyState title="메시지가 없습니다" />;
+    const text = (m: EvidenceMessage) => m.type === 'offer' ? '가격 제시' : m.type === 'listing' ? `문의한 글: ${m.body}` : [m.body, m.photos ? `사진 ${m.photos}장` : ''].filter(Boolean).join(' · ');
+    return <ul className="report-chat">{messages.map(m => <li key={m.id} className={m.sender_id === report.target_user_id ? 'is-target' : ''}>
+        <span className="muted small">{m.nickname} · {dateText(m.created_at)} {new Date(m.created_at).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' })}</span>
+        <span className={m.type === 'system' ? 'muted' : ''}>{text(m)}</span>
     </li>)}</ul>;
 }
 

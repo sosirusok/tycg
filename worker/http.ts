@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import type { User } from '../shared/market';
+import { SUSPEND_FOREVER, suspendEndText, type User } from '../shared/market';
 import { BADGES, type BadgeId } from '../shared/membership';
 
 export const MANAGER_ID = 'manager';
@@ -124,7 +124,7 @@ export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
     const { session_expires_at, last_seen_at, ...user } = row;
@@ -148,6 +148,14 @@ export const isManager = (u: User | null | undefined) => u?.role === 'manager';
 
 export function requireManager(u: User) {
     if (!isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
+}
+
+// 이용 정지 (WP22): a suspended member can still sign in, read, close or delete their posts, and write
+// to the manager's chat to appeal, but cannot write posts, 끌올, 상단 노출, change prices, send 제시,
+// apply or write to other members until suspended_until passes.
+export const isSuspended = (until: number | null | undefined, now = Date.now()) => typeof until === 'number' && until > now;
+export function requireActive(u: User) {
+    if (isSuspended(u.suspended_until)) fail(403, `이용 정지 중입니다. (${u.suspended_until! >= SUSPEND_FOREVER ? '영구 정지' : suspendEndText(u.suspended_until!) + '까지'})`);
 }
 
 export function json(d: unknown, status = 200, h: Record<string, string> = {}) {
