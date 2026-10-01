@@ -439,7 +439,26 @@ async function listPosts(req: Request, url: URL) {
     ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
     const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
-    return json({ posts: await decorate(r[1].results, u), total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+    const posts = await decorate(r[1].results, u);
+    // The author's own list (내 글) also shows how many members saved each post and started a chat from it.
+    if (u && author === u.id && !scope) await addOwnCounts(posts);
+    return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+}
+
+// fav_count: favorites of the post. chat_count: chats opened from the post (a 'listing' message
+// carries the post id in reference_id). One grouped read each for the whole page.
+async function addOwnCounts(posts: any[]) {
+    if (!posts.length) return;
+    const ids = JSON.stringify(posts.map(p => p.id));
+    const [favs, chats] = await db().batch([
+        db().prepare('SELECT post_id AS id,COUNT(*) AS n FROM favorites WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id').bind(ids),
+        db().prepare("SELECT CAST(reference_id AS INTEGER) AS id,COUNT(DISTINCT conversation_id) AS n FROM messages WHERE type='listing' AND reference_id IN (SELECT CAST(value AS TEXT) FROM json_each(?)) GROUP BY reference_id").bind(ids),
+    ]);
+    const count = (rows: any[], id: number) => Number(rows.find(row => Number(row.id) === id)?.n) || 0;
+    for (const p of posts) {
+        p.fav_count = count(favs.results, p.id);
+        p.chat_count = count(chats.results, p.id);
+    }
 }
 
 // 끌올: moves an open post to the top of 최신순. The gap per post and the daily count (all of the

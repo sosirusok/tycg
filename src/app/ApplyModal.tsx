@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { APPLICATION_STATUS_NAMES, BADGES, GRADES, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { Link, navigate } from '../lib/router';
 import { CIcon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
 import { useApp } from './state';
 
@@ -14,6 +14,15 @@ export const chatDraftKey = (chatId: string) => 'chat-draft:' + chatId;
 export const CHAT_DRAFT_EVENT = 'zg:chat-draft';
 
 const won = (n: number) => n.toLocaleString('ko-KR') + '원';
+
+// What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces).
+// The apply modal lists them; the profile's next grade line shows the first one.
+export function gradeBenefits(id: string): string[] {
+    if (id === 'plus') return [`끌올 하루 ${PERKS.plus.bumpsPerDay}번`, `거래중 글 ${PERKS.plus.openPosts}개`, `사진 ${PERKS.plus.photos}장`];
+    if (id === 'premium') return [`게시판 상단 ${PERKS.premium.boardSlots}자리`, `끌올 하루 ${PERKS.premium.bumpsPerDay}번`, `사진 ${PERKS.premium.photos}장`];
+    if (id === 'elite') return ['홈 추천 매물', `상단 ${PERKS.elite.boardSlots}자리`, `끌올 하루 ${PERKS.elite.bumpsPerDay}번`];
+    return [];
+}
 
 export function ApplyModal() {
     const { apply, closeApply, me, config, requireLogin, refreshUnread } = useApp();
@@ -114,10 +123,13 @@ export function ApplyModal() {
             <p className="apply-intro">입금 확인 후 매니저가 지급합니다.</p>
             <div className="grade-table" role="radiogroup" aria-label="등급과 기간">
                 {GRADES.map(g => {
-                    const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id;
+                    const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id, benefits = gradeBenefits(g.id);
                     return <div key={g.id} className={'grade-row' + (current ? ' is-current' : '')}>
                         <CIcon name={g.icon} size={32} />
-                        <div className="grade-row-name"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</div>
+                        <div className="grade-row-name">
+                            <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
+                            {benefits.length > 0 && <span className="grade-row-perks">{benefits.join(' · ')}</span>}
+                        </div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {
                                 // Lower grades cannot be bought, nor a grade held permanently (or below it).
@@ -133,6 +145,11 @@ export function ApplyModal() {
                     </div>;
                 })}
             </div>
+            <p className="apply-note">입금 확인 후 바로 적용. 6개월 등급이 끝나도 올린 글과 사진은 그대로 남습니다. <Link to="/guide#grade" className="apply-link" onClick={e => {
+                closeApply();
+                // Already on the guide: the address does not change, so scroll to the table here.
+                if (location.pathname === '/guide') { e.preventDefault(); history.replaceState(history.state, '', '/guide#grade'); setTimeout(() => document.getElementById('grade')?.scrollIntoView({ block: 'start' }), 50); }
+            }}>혜택 전체 보기</Link></p>
             <div className="pay-box">
                 <strong>입금 안내</strong>
                 <p>{config.paymentNotice || '입금 계좌는 신청 후 채팅으로 안내합니다.'}</p>

@@ -1,13 +1,13 @@
 import { Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    KIND_NAMES, STATUS_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, tagName,
+    KIND_ICONS, KIND_NAMES, STATUS_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, tagName,
     type Post, type SeasonTag,
 } from '../../shared/market';
 import { Link, navigate } from '../lib/router';
 import { api, errorText, imageUrl } from '../lib/api';
 import { useApp } from '../app/state';
-import { NameLine } from './ui';
+import { CIcon, NameLine } from './ui';
 
 export function postSummary(post: Post) {
     const d = post.details;
@@ -75,7 +75,8 @@ export function postTime(p: Pick<Post, 'created_at' | 'bumped_at'>) {
 
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of
 // one board passes false. hideAuthor drops the author line on a member's own profile lists.
-export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean }) {
+// promoted is the board's '프리미엄 매물' box: a brand outline, no fill.
+export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, promoted = false }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; promoted?: boolean }) {
     const { me, requireLogin } = useApp();
     const href = '/posts/' + post.id;
     const tags = orderedTags(post.tags, highlight);
@@ -95,7 +96,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
     </button>;
     // Flat row: text on the left, the photo on the right. The heart sits on the photo's corner,
     // or in the row's top-right corner when there is no photo.
-    return <article className={'post-card' + (post.status === 'closed' ? ' is-closed' : '') + (thumb ? ' has-thumb' : '')}>
+    return <article className={'post-card' + (post.status === 'closed' ? ' is-closed' : '') + (thumb ? ' has-thumb' : '') + (promoted ? ' is-promoted' : '')}>
         <div className="post-card-body" onClick={e => { if (!(e.target as HTMLElement).closest('a,button')) void navigate(href); }}>
             <div className="post-card-meta">
                 <span className="post-card-kind">{showKind ? `[${KIND_NAMES[post.kind]}] ${subjectLabel(post)}` : subjectLabel(post)}</span>
@@ -121,4 +122,17 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             {fav}
         </div> : fav}
     </article>;
+}
+
+// Card for the home shelves (a horizontal row that scrolls sideways).
+export function MiniCard({ post }: { post: Post }) {
+    const summary = postSummary(post);
+    const tags = post.tags.slice(0, 2).map(tagName);
+    return <Link to={'/posts/' + post.id} className="mini-card">
+        <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span></div>
+        <h3>{post.title}</h3>
+        {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec">{summary.slice(0, 2).join(' · ')}</span>}</div>}
+        <PriceLine post={post} />
+        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /><span className="muted small nowrap">{postTime(post)}</span></div>
+    </Link>;
 }

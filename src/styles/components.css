@@ -26,6 +26,9 @@
 .post-card-side .post-card-fav:hover { background: var(--white); color: var(--ink); }
 .post-card-side .post-card-fav.on { color: var(--brand); }
 .status-hidden { border: 1px solid var(--line-2); color: var(--ink-2); }
+/* Board '프리미엄 매물' box: a brand outline and no fill (the brand color is never tinted). */
+.post-card.is-promoted { border: 1px solid var(--brand); border-radius: var(--r-12); margin-bottom: 8px; padding: 16px; }
+.post-card.is-promoted > .post-card-fav { top: 8px; right: 8px; }
 @media (max-width: 640px) {
   .post-card { padding: 12px 0; gap: 12px; }
   .post-card-body { gap: 4px; }
@@ -41,6 +44,7 @@
   .post-card .price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; }
   .post-card .price-values strong { font-size: var(--fs-16); line-height: 20px; }
   .post-card-side .post-card-fav { width: 26px; height: 26px; }
+  .post-card.is-promoted { padding: 12px; }
 }
 
 /* Price */
@@ -58,14 +62,16 @@
 .price-lg .price-values strong { font-size: var(--fs-28); letter-spacing: -0.8px; }
 .price-lg .price-offer { font-size: var(--fs-15); margin-top: 4px; }
 
-/* Grid card (home sections) */
-.card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 960px) { .card-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 640px) { .card-grid { grid-template-columns: 1fr; } }
-.mini-card { display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); transition: box-shadow .15s, border-color .15s; }
+/* Home shelves: one row of cards that scrolls sideways and snaps to a card. A column is at least
+   260px and at most a third of the row, so a shelf with one or two posts does not stretch them. */
+.card-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, calc((100% - 32px) / 3)); gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.card-grid::-webkit-scrollbar { display: none; }
+@media (max-width: 640px) { .card-grid { grid-auto-columns: 78%; gap: 12px; } }
+.mini-card { display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 20px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); scroll-snap-align: start; transition: box-shadow .15s, border-color .15s; }
 /* A grid cell may shrink below its one-line name row, which then ellipsizes. */
 .card-grid > * { min-width: 0; }
-.mini-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-card); }
+/* No hover shadow: the scrolling row would clip it. */
+.mini-card:hover { border-color: var(--line-2); }
 .mini-card .post-card-meta { padding-right: 0; }
 .mini-card h3 { font-size: var(--fs-16); font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mini-card .price { margin-top: auto; }

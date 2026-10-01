@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
-import { dateText } from '../../shared/market';
-import { BADGES, GRADES } from '../../shared/membership';
+import { dateText, priceText } from '../../shared/market';
+import { BADGES, GRADES, PERKS, type GradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
 
 type Notice = { id: number; title: string; body: string; created_at: number };
 
-// Row text is the final 거래 순서 wording (WP18 later restyles the list itself).
 const STEPS = [
     ['문의', '채팅하기로 문의. 판매 글은 제시도 가능.'],
     ['인증 확인', '닉네임 옆 인증 표시 확인. 필요하면 계좌·이중창 인증 요청.'],
@@ -17,12 +16,33 @@ const STEPS = [
     ['거래완료', '글을 거래완료로 변경.'],
 ] as const;
 
+// Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
+// price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
+const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
+const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
+const BENEFIT_ROWS: [string, (g: GradeInfo, i: number) => string][] = [
+    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`).join(' · ') : '무료'],
+    ['끌올', (g, i) => { const p = PERKS[g.id]; return i === 0 ? `하루 ${p.bumpsPerDay}번 · ${p.bumpGapHours}시간마다` : `${p.bumpsPerDay}번 · ${p.bumpGapHours}시간`; }],
+    ['거래중 글', g => `${PERKS[g.id].openPosts}개`],
+    ['하루 새 글', g => `${PERKS[g.id].postsPerDay}개`],
+    ['사진', g => `${PERKS[g.id].photos}장`],
+    ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
+    ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
+    ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+];
+
 export default function Guide() {
     const { openApply, config } = useApp();
     const [notices, setNotices] = useState<Notice[] | null>(null);
     const [open, setOpen] = useState<number | null>(() => Number(location.hash.replace('#notice-', '')) || null);
     useEffect(() => { api<{ notices: Notice[] }>('notices').then(d => setNotices(d.notices)).catch(() => setNotices([])); }, []);
-    useEffect(() => { if (notices && location.hash.startsWith('#notice-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' }); }, [notices]);
+    // The notices above change the page height when they load, so a #notice-… or #grade link
+    // scrolls once they are in.
+    useEffect(() => {
+        if (!notices) return;
+        if (location.hash.startsWith('#notice-')) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' });
+        else if (location.hash === '#grade') document.getElementById('grade')?.scrollIntoView({ block: 'start' });
+    }, [notices]);
 
     return <div className="container page guide">
         <h1 className="page-title">공지</h1>
@@ -37,7 +57,7 @@ export default function Guide() {
 
         <section className="section">
             <h2 className="section-title">거래 순서</h2>
-            <ol className="steps">{STEPS.map(([title, text], i) => <li key={title}><b>{i + 1}. {title}</b><p>{text}</p></li>)}</ol>
+            <ol className="steps">{STEPS.map(([title, text], i) => <li key={title}><span className="step-num">{i + 1}</span><b>{title}</b><p>{text}</p></li>)}</ol>
         </section>
 
         <section className="section">
@@ -45,17 +65,22 @@ export default function Guide() {
             <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">제출: {b.requirements.join(', ')}</p></div>)}</div>
         </section>
 
-        <section className="section">
+        <section className="section" id="grade">
             <div className="section-head"><h2 className="section-title">등급</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>등급 신청하기</button></div>
-            <table className="grade-price">
-                <thead><tr><th>등급</th><th>영구</th><th>6개월</th></tr></thead>
-                <tbody>{GRADES.map(g => <tr key={g.id}>
-                    <td><span className="row"><CIcon name={g.icon} size={22} />{g.name}</span></td>
-                    {g.plans.length ? <><td>{g.plans.find(p => p.id === 'permanent')?.price.toLocaleString('ko-KR') + '원'}</td><td>{g.plans.find(p => p.id === '6m') ? g.plans.find(p => p.id === '6m')!.price.toLocaleString('ko-KR') + '원' : '-'}</td></>
-                        : <td colSpan={2} className="grade-note">{g.note}</td>}
-                </tr>)}</tbody>
-            </table>
-            <p className="muted small mt-12">{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</p>
+            <div className="table-scroll">
+                <table className="grade-benefits">
+                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
+                    <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
+                        <th scope="row">{label}</th>
+                        {TABLE_GRADES.map((g, i) => <td key={g.id}>{cell(g, i)}</td>)}
+                    </tr>)}</tbody>
+                </table>
+            </div>
+            <ul className="grade-notes">
+                <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 등급·인증 지급은 매니저만 합니다.</li>
+                <li>채팅, 제시, 찜, 신고, 검색 필터, 인증 신청은 등급과 관계없이 같습니다.</li>
+                <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
+            </ul>
         </section>
 
         <section className="section">
@@ -63,9 +88,11 @@ export default function Guide() {
             <ul className="rules">
                 <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
                 <li>계정 거래와 대리는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
-                <li>비번, 인증번호는 글에 쓰지 마세요.</li>
+                <li>비번, 인증번호는 글에 쓰지 마세요. 인증번호는 누구에게도 알려 주지 마세요.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
+                <li>중개 거래는 신용인에게만 맡기세요. 사이트는 중개에 참여하지 않습니다.</li>
+                <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>
     </div>;

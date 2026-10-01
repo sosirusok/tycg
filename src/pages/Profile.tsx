@@ -2,23 +2,29 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, MessageCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, type Post, type User } from '../../shared/market';
-import { BADGES, gradeInfo } from '../../shared/membership';
+import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { setPageTitle, useApp } from '../app/state';
+import { gradeBenefits } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
-type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean };
+type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean };
+// GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
+type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
+const PAGE_SIZE = 20;
 
 export default function ProfilePage({ id }: { id?: string }) {
     const { me, setMe, refreshMe, requireLogin, openApply, logout } = useApp();
     // A 404 means there is no such member; any other failure (offline, 429, 5xx) can be retried.
     const [user, setUser] = useState<Profile | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null), [retry, setRetry] = useState(0);
     const [tab, setTab] = useState<'active' | 'closed'>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1), [loadingMore, setLoadingMore] = useState(false);
+    const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
     const [postsVersion, setPostsVersion] = useState(0);
     const [account, setAccount] = useState<'' | 'password' | 'withdraw'>('');
@@ -29,11 +35,20 @@ export default function ProfilePage({ id }: { id?: string }) {
             .catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     }, [id, me?.grade, me?.badges.length, retry]);
     useEffect(() => { if (user) setPageTitle(user.nickname); }, [user?.nickname]);
+    const postsPage = (n: number) => api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: String(PAGE_SIZE), page: String(n), ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }));
     useEffect(() => {
-        setPosts(null);
-        api<{ posts: Post[]; total: number }>('posts?' + new URLSearchParams({ author: id || '', size: '20', ...(tab === 'active' ? { active: '1' } : { status: 'closed' }) }))
-            .then(d => { setPosts(d.posts); setTotal(d.total); }).catch(() => setPosts([]));
+        let alive = true;
+        setPosts(null); setPage(1);
+        postsPage(1).then(d => { if (alive) { setPosts(d.posts); setTotal(d.total); } }).catch(() => { if (alive) setPosts([]); });
+        return () => { alive = false; };
     }, [id, tab, postsVersion]);
+    // The owner's counters: '오늘 끌올 2/10 · 거래중 글 4/30 · 상단 노출 1/1'.
+    useEffect(() => {
+        if (!mine || me?.role === 'manager') { setUsage(null); return; }
+        let alive = true;
+        api<Usage>('me/usage').then(d => { if (alive) setUsage(d); }).catch(() => {});
+        return () => { alive = false; };
+    }, [mine, me?.grade, me?.role]);
 
     if (error) return <div className="container page">{error.status === 404
         ? <EmptyState icon="search" title="없는 회원입니다" />
@@ -62,10 +77,33 @@ export default function ProfilePage({ id }: { id?: string }) {
         catch (e) { toast.error(errorText(e)); }
     });
     const block = () => requireLogin(async () => {
-        try { await api('blocks', 'POST', { userId: user.id, active: true }); toast('차단 완료. 해제는 내 거래 > 차단'); }
+        if (blockBusy) return;
+        const active = !user.blocked;
+        setBlockBusy(true);
+        try { await api('blocks', 'POST', { userId: user.id, active }); setUser(v => v && { ...v, blocked: active }); toast(active ? '차단 완료' : '차단 해제'); }
         catch (e) { toast.error(errorText(e)); }
+        finally { setBlockBusy(false); }
     });
+    // '더 보기' adds the next page under the posts already shown.
+    async function more() {
+        if (loadingMore || !posts) return;
+        setLoadingMore(true);
+        try {
+            const d = await postsPage(page + 1);
+            const seen = new Set(posts.map(p => p.id));
+            setPosts([...posts, ...d.posts.filter(p => !seen.has(p.id))]);
+            // An empty page means the list shrank meanwhile: stop offering more.
+            setTotal(d.posts.length ? d.total : posts.length);
+            setPage(page + 1);
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setLoadingMore(false); }
+    }
     const grade = gradeInfo(user.grade);
+    // The next grade up for sale and the first thing it adds, on the owner's own grade card.
+    const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
+    const usageLine = usage && usage.perks.bumpsPerDay !== null && usage.perks.openPosts !== null
+        ? `오늘 끌올 ${usage.bumpsToday}/${usage.perks.bumpsPerDay} · 거래중 글 ${usage.openPosts}/${usage.perks.openPosts}` + (usage.perks.boardSlots ? ` · 상단 노출 ${usage.featured.length}/${usage.perks.boardSlots}` : '')
+        : '';
 
     return <div className="container page profile">
         <section className="profile-head">
@@ -77,23 +115,24 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {user.bio && <p className="profile-bio">{user.bio}</p>}
             </div>
             <div className="profile-actions">
-                {mine ? <>
-                    <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditError(''); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
-                    {user.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" onClick={() => openApply()}>인증/등급 신청</button>}
-                </> : <>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
-                    {user.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" onClick={block}><Ban size={15} />차단</button>}
-                </>}
+                {mine ? <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditError(''); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
+                    : <>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
+                        {user.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" aria-pressed={!!user.blocked} disabled={blockBusy} onClick={block}><Ban size={15} />{user.blocked ? '차단 해제' : '차단'}</button>}
+                    </>}
             </div>
         </section>
 
         <section className="profile-cards">
             <div className="card card-pad">
-                <div className="card-title-row"><h2 className="card-title">인증</h2>
-                    {mine && user.role !== 'manager' && user.badges.length < BADGES.length && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: BADGES.find(b => !user.badges.includes(b.id))!.id })}>인증 신청</button>}</div>
+                <h2 className="card-title">인증</h2>
+                {/* 본인 인증, 대리 인증, 신용인 (the BADGES order). The owner applies from the row. */}
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
-                    return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <span className="verified"><VerifiedMark size={16} />인증 완료</span> : <span className="muted small">미인증</span>}</li>;
+                    return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <span className="verified"><VerifiedMark size={16} />인증 완료</span> : <>
+                        <span className="tag tag-line">미인증</span>
+                        {mine && user.role !== 'manager' && <button type="button" className="verify-apply" aria-label={b.name + ' 신청'} onClick={() => openApply({ kind: 'badge', target: b.id })}>신청</button>}
+                    </>}</li>;
                 })}</ul>
             </div>
             <div className="card card-pad">
@@ -101,7 +140,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {mine && user.role !== 'manager' && grade.rank < 3 && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청</button>}</div>
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
                     <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
-                    {mine && user.grade_expires_at && <p className="muted small">{dateText(user.grade_expires_at)}까지</p>}
+                    {/* The end date of a 6-month grade reaches only the member and the manager. */}
+                    {user.grade_expires_at && <p className="muted small mt-8">{dateText(user.grade_expires_at)}까지</p>}
+                    {mine && usageLine && <p className="grade-usage">{usageLine}</p>}
+                    {mine && nextGrade && <Link to="/guide#grade" className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}<ChevronRight size={16} /></Link>}
                 </>}
             </div>
         </section>
@@ -114,7 +156,8 @@ export default function ProfilePage({ id }: { id?: string }) {
 
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }]} />
-            <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div></>
+            <div className="mt-16">{posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
+                {posts.length < total && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 

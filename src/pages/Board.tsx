@@ -357,6 +357,11 @@ export function Board() {
                         </select>}
                     </div>
                 </div>
+                {/* '프리미엄 매물' (page 1, 최신순): the same posts stay in the list below, so counts and pages do not change. */}
+                {!loading && !data!.error && !!data!.featured?.length && <section className="featured-box" aria-label="프리미엄 매물">
+                    <h3>프리미엄 매물</h3>
+                    {data!.featured.map(p => <PostCard key={p.id} post={p} promoted showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}
+                </section>}
                 {loading ? <SkeletonRows />
                     : data!.error ? <EmptyState title="목록을 불러오지 못했습니다" text={data!.error} action={<div className="empty-actions"><button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button><button className="btn btn-line" onClick={clearAll}>필터 초기화</button></div>} />
                     : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>

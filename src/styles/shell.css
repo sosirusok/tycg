@@ -163,10 +163,15 @@
 .apply-state.on { background: none; padding: 0; color: var(--ink-2); }
 .apply-state.on svg { color: var(--brand); }
 .grade-table { display: grid; border: 1px solid var(--line); border-radius: var(--r-12); overflow: hidden; }
-.grade-row { display: grid; grid-template-columns: 32px 120px 1fr; align-items: center; gap: 14px; padding: 14px 16px; }
+.grade-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px 16px; }
 .grade-row + .grade-row { border-top: 1px solid var(--line); }
-.grade-row-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.grade-row-name { display: grid; gap: 2px; min-width: 0; }
+.grade-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .grade-row-name strong { color: var(--ink); font-size: var(--fs-15); }
+.grade-row-perks { color: var(--ink-3); font-size: var(--fs-13); }
+.apply-note { color: var(--ink-3); font-size: var(--fs-13); line-height: 1.6; }
+.apply-link { color: var(--brand); font-weight: 600; white-space: nowrap; }
+.apply-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .grade-row-plans { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .plan { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px 0 10px; border: 1px solid var(--line); border-radius: var(--r-8); font-size: var(--fs-14); cursor: pointer; }
 .plan input { position: absolute; opacity: 0; pointer-events: none; }
