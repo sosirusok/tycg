@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { dateText, priceText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, SITE_RULES, gapText, type GradeInfo } from '../../shared/membership';
+import { dateText, wonText } from '../../shared/market';
+import { BADGES, GRADES, PERKS, SITE_RULES, gapText, gradePriority, type GradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -23,13 +23,19 @@ const STEPS = [
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
 const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
-    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${priceText(p.price)}`) : '무료'],
+    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
     ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
     ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
     ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
     ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
+    // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
+    // 운영진 가측가 on the post for every grade (paid requests too).
+    // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
+    ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
+    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
+    ['운영진 가측가 표시', () => 'O'],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -103,6 +109,8 @@ export default function Guide() {
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
+                <li>중개·가측: 내 판매·교환 계정 글의 더보기에서 가측 신청, 채팅의 더보기에서 중개 신청. 무료 횟수가 없으면 유료이며 수수료는 매니저가 채팅으로 안내합니다. 플러스 체험 중에는 무료 횟수가 없습니다.</li>
+                <li>운영진 가측가는 글을 수정하면 표시되지 않습니다.</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>
@@ -115,7 +123,7 @@ export default function Guide() {
                 <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
-                <li>중개 거래는 신용인에게만 맡깁니다.</li>
+                <li>중개는 운영진 또는 신용인에게만 맡깁니다.</li>
                 <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { Coupons } from '../../shared/membership';
 
 // GET /me/usage (and the 끌올 response): the 끌올 지갑. Null wallet fields are the manager's (no wallet).
 export type Wallet = { bumpTokens: number | null; bumpMax: number | null; bumpRefillMin: number | null; nextRefillAt: number | null };
@@ -8,6 +9,8 @@ export type Usage = Wallet & {
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
     // The member's photo space in the current store (WP45); limit null for the manager.
     photos?: { storage: 'r2' | 'kv' | 'd1'; used: number; limit: number | null };
+    // 무료 중개·가측 this month (WP65).
+    coupons?: Coupons;
 };
 
 // The wallet now, from the values the server sent: each refill interval that passed since
@@ -66,11 +69,21 @@ export function useMinuteClock() {
     return [now, setNow] as const;
 }
 
-// '끌올 3/5 · 1:20 후 충전', or '끌올 5/5' when full. Nothing for the manager.
-export function WalletGauge({ usage, now, className }: { usage: Usage; now: number; className?: string }) {
+// '끌올 3/5 · 1:20 후 충전', or '끌올 5/5' when full. Nothing for the manager. extra is one more item at the
+// end (the profile's '무료 중개·가측 3/5 남음', WP65), so the line keeps at most 3 items.
+export function WalletGauge({ usage, now, className, extra }: { usage: Usage; now: number; className?: string; extra?: string }) {
     const w = walletNow(usage, now);
     if (!w) return null;
     return <p className={'wallet-gauge' + (className ? ' ' + className : '')}>
-        <b>끌올 {w.tokens}/{w.max}</b>{w.nextRefillAt !== null && <span> · {countdown(w.nextRefillAt - now)} 후 충전</span>}
+        <b>끌올 {w.tokens}/{w.max}</b>{w.nextRefillAt !== null && <span> · {countdown(w.nextRefillAt - now)} 후 충전</span>}{extra && <span> · {extra}</span>}
     </p>;
+}
+
+// The profile's 무료 중개·가측 item: '무료 중개·가측 3/5 남음' (left this month, as on the request sheet and
+// in the manager chat) or '무료 중개·가측 무제한'; none for
+// 일반 and the 플러스 체험, who have no free requests.
+export function couponItem(usage: Usage | null) {
+    const c = usage?.coupons;
+    if (!c || (c.limit !== null && c.limit <= 0)) return undefined;
+    return `무료 중개·가측 ${c.limit === null ? '무제한' : `${c.left}/${c.limit} 남음`}`;
 }

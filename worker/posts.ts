@@ -101,6 +101,12 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; }
         // A legacy 예약중 reads as 진행중 (WP43: two states).
         if (p.status !== 'closed') p.status = 'open';
+        // 운영진 가측가 (WP65): shown while the post was not edited after the appraisal (updated_at is the
+        // last edit; completing the post does not touch it, so a completed post keeps its 가측가). The
+        // columns are never cleared, so the manager also gets the last appraisal itself.
+        const appraised = p.appraised_price !== null && p.appraised_price !== undefined && p.appraised_at !== null && p.appraised_at !== undefined && p.updated_at <= p.appraised_at
+            ? { price: p.appraised_price, at: p.appraised_at } : null;
+        if (viewer?.role !== 'manager') { delete p.appraised_price; delete p.appraised_at; }
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -109,7 +115,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
-            featured,
+            featured, appraised,
             author_deleted: authorDeleted,
         };
     });
@@ -725,7 +731,8 @@ async function completePost(req: Request, u: User, post: any) {
     const plan = withPartner ? await planTrade({ ...post, status: 'closed', closed_at: now }, u, b.partnerId, b.amount, now, tradeGuard, guardArgs) : null;
     const keep = plan ? b.partnerId : null;
     const r = await db().batch([
-        db().prepare("UPDATE posts SET status='closed',closed_at=?,updated_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, now, post.id),
+        // updated_at stays the last edit of the listing (the 운영진 가측가 rule reads it); closed_at is the completion.
+        db().prepare("UPDATE posts SET status='closed',closed_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, post.id),
         ...endOffersStatements(post.id, post.author_id, `${COMPLETE_ENDS_OFFERS} AND ${guard}`, [keep, ...guardArgs], now),
         ...plan ? plan.statements : [],
     ]);

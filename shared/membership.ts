@@ -54,7 +54,7 @@ export const GRADES: GradeInfo[] = [
     { id: 'normal', name: '일반', rank: 0, icon: 'seedling', plans: [], note: '기본 등급' },
     { id: 'plus', name: '플러스', rank: 1, icon: 'star', plans: [{ id: 'permanent', label: '영구', price: 30000 }], note: '영구 구매만 가능' },
     { id: 'premium', name: '프리미엄', rank: 2, icon: 'gem-stone', plans: [{ id: 'permanent', label: '영구', price: 50000 }, { id: '6m', label: '6개월', price: 30000, months: 6 }], note: '영구 또는 6개월' },
-    { id: 'elite', name: '엘리트', rank: 3, icon: 'crown', plans: [{ id: 'permanent', label: '영구', price: 100000 }, { id: '6m', label: '6개월', price: 60000, months: 6 }], note: '영구 또는 6개월' },
+    { id: 'elite', name: '엘리트', rank: 3, icon: 'crown', plans: [{ id: 'permanent', label: '영구', price: 150000 }, { id: '6m', label: '6개월', price: 60000, months: 6 }], note: '영구 또는 6개월' },
     { id: 'admin', name: '관리자', rank: 4, icon: 'shield', plans: [], note: '매니저 지정' },
 ];
 
@@ -131,17 +131,19 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // (자동 끌올: autoBumpPosts posts, one every autoEveryMinutes, paused after pauseDays without a visit;
 // 광고 매물: adSlots). Nothing reads them yet. boardSlots is the round-2 게시판 상단 노출, which the 광고
 // package (WP53) replaces with adSlots.
+// serviceCoupons (WP65): 무료 중개·가측 per KST calendar month, shared between the two services
+// (Infinity = 무제한). A 플러스 무료 체험 gets none (serviceCouponsOf).
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
-    boardSlots: number; homeShelf: boolean;
+    boardSlots: number; homeShelf: boolean; serviceCoupons: number;
 };
 
-const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, boardSlots: 3, homeShelf: true };
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, boardSlots: 3, homeShelf: true, serviceCoupons: Infinity };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false },
-    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, boardSlots: 0, homeShelf: false },
-    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, boardSlots: 1, homeShelf: false },
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false, serviceCoupons: 0 },
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, boardSlots: 0, homeShelf: false, serviceCoupons: 1 },
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, boardSlots: 1, homeShelf: false, serviceCoupons: 5 },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -151,6 +153,35 @@ export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGap
 export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
     if (u.role === 'manager') return MANAGER_PERKS;
     return PERKS[u.grade as GradeId] || PERKS.normal;
+}
+
+// 중개·가측 (WP65): manual services the manager performs from the manager chat. 중개 = the manager
+// checks the account and the handover between two members; 가측 = the manager appraises an account.
+// The site never takes, holds or moves money.
+export type ServiceKind = 'broker' | 'appraise';
+export const SERVICE_NAMES: Record<ServiceKind, string> = { broker: '중개', appraise: '가측' };
+// The member's monthly 무료 중개·가측: none for the manager (who performs them) and none during a
+// 플러스 무료 체험 (free manual work per throwaway account); Infinity = 무제한.
+export function serviceCouponsOf(u: { role?: string | null; grade?: string | null; grade_trial?: boolean | null }): number {
+    if (u.role === 'manager' || u.grade_trial) return 0;
+    return (PERKS[u.grade as GradeId] || PERKS.normal).serviceCoupons;
+}
+// GET services/me and me/usage: limit and left are null for 무제한; resetsAt is the next 1st 00:00 KST.
+export type Coupons = { limit: number | null; used: number; left: number | null; resetsAt: number };
+// The KST calendar month 'YYYY-MM' (the coupon count's key, so it resets on the 1st with no cron),
+// and the start of the next one.
+export const kstMonth = (t: number) => new Date(t + KST).toISOString().slice(0, 7);
+export function nextKstMonthStart(t: number) {
+    const d = new Date(t + KST);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - KST;
+}
+// Handling order (1순위 first) for 중개·가측 requests: 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the
+// 플러스 체험 4. The report ordering (WP60) is meant to reuse this helper when it ships.
+export function gradePriority(grade: string | null | undefined, trial?: boolean | null) {
+    if (grade === 'elite' || grade === 'admin') return 1;
+    if (grade === 'premium') return 2;
+    if (grade === 'plus' && !trial) return 3;
+    return 4;
 }
 
 // 자동 끌올 (a later package) leaves this many 끌올 in the wallet for manual use.

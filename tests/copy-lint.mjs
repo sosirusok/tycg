@@ -17,6 +17,8 @@ const BANNED = [
     '제안', '(선택)', '비워 두세요', '할까요?', '나요?', '가요?', '쪽지', '보조 메일', '반갑습니다', '환영합니다',
     '한눈에', '손쉽게', '편리하게', '간편하게', '혜택을 누려',
     '→', '—', '인증·등급',
+    // 중개·가측 (WP65): the site never takes, holds or moves money, so no wording may promise it.
+    '대금 보관', '안전 결제', '100% 보장', '사기 0건',
 ];
 
 // Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone. WP43 retires

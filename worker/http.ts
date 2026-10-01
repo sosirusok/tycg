@@ -59,20 +59,22 @@ export function safeEqual(a: string, b: string) {
 
 // Creates the reserved manager account once, from deploy-time secrets. An existing
 // manager password is never overwritten by a later secret change.
+// Resolves to whether the manager account exists (false only while no password secret is set).
 let managerReady = false;
-export async function initManager() {
-    if (managerReady) return;
+export async function initManager(): Promise<boolean> {
+    if (managerReady) return true;
     const e = env as Partial<Env>;
-    if (await db().prepare('SELECT 1 FROM users WHERE id=?').bind(MANAGER_ID).first()) { managerReady = true; return; }
+    if (await db().prepare('SELECT 1 FROM users WHERE id=?').bind(MANAGER_ID).first()) { managerReady = true; return true; }
     let hash = e.MANAGER_PASSWORD_HASH, salt = e.MANAGER_PASSWORD_SALT;
     if ((!hash || !salt) && e.MANAGER_PASSWORD && e.MANAGER_PASSWORD.length >= 8) {
         salt = random();
         hash = await storedHash(e.MANAGER_PASSWORD, salt);
     }
-    if (!hash || !salt) return;
+    if (!hash || !salt) return false;
     await db().prepare('INSERT OR IGNORE INTO users (id,username,nickname,password_hash,salt,role,bio,created_at) VALUES (?,?,?,?,?,?,?,?)')
         .bind(MANAGER_ID, MANAGER_USERNAME, MANAGER_NICKNAME, hash, salt, 'manager', '좀비고 거래소 매니저입니다.', Date.now()).run();
     managerReady = true;
+    return true;
 }
 
 // SQL columns that describe a member's effective grade and verification badges.

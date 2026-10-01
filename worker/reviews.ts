@@ -237,7 +237,8 @@ async function listReviews(userId: string, url: URL) {
     const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('page'))) || 1, 1), 500);
     const shown = `EXISTS(SELECT 1 FROM users t WHERE t.id=r.target_id AND t.deleted_at IS NULL) AND ${liveReview('r')}`;
     const [rows, count] = await db().batch([
-        db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at,a.nickname,a.role,a.deleted_at,${memberColumns('a')}
+        db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at,a.nickname,a.role,a.deleted_at,${memberColumns('a')},
+            COALESCE((SELECT t.brokered FROM trades t WHERE t.id=r.trade_id),0) AS brokered
             FROM reviews r LEFT JOIN users a ON a.id=r.author_id WHERE r.target_id=? AND ${shown} ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?`).bind(userId, PAGE_SIZE, (page - 1) * PAGE_SIZE),
         db().prepare(`SELECT COUNT(*) AS n FROM reviews r WHERE r.target_id=? AND ${shown}`).bind(userId),
     ]);
@@ -253,10 +254,10 @@ async function listReviews(userId: string, url: URL) {
 }
 
 // The manager's view of a member's trades (latest 20, removed ones left out) with 거래가 and backing
-// (backing_offer: it came from an accepted 제시),
+// (backing_offer: it came from an accepted 제시; brokered: 운영진 중개, WP65),
 // for the member panel; an expired pending request is left out too.
 export function memberTradesStatement(userId: string, now = Date.now()) {
-    return db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,t.backing,t.backing_offer,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,COALESCE(NULLIF(t.title,''),p.title) AS title,o.nickname AS partner_nickname,o.deleted_at AS partner_deleted_at
+    return db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,t.backing,t.backing_offer,t.brokered,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,COALESCE(NULLIF(t.title,''),p.title) AS title,o.nickname AS partner_nickname,o.deleted_at AS partner_deleted_at
         FROM trades t LEFT JOIN posts p ON p.id=t.post_id LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
         WHERE (t.seller_id=? OR t.buyer_id=?) AND t.removed_at IS NULL AND (t.confirmed_at IS NOT NULL OR t.author_id IS NULL OR t.created_at>=?) ORDER BY t.created_at DESC LIMIT 20`).bind(userId, userId, userId, now - ANSWER_DAYS * DAY);
 }

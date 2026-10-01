@@ -14,6 +14,7 @@ import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
+import { servicesHandler } from './services';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 
 async function discardUnreadBody(req: Request) {
@@ -87,6 +88,8 @@ async function withdraw(req: Request) {
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
         db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${WITHDRAW_ENDS_OFFERS}`).bind(now, u.id, u.id),
         db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
+        // Open 중개·가측 신청 end too (WP65), so the manager's list keeps no request of a member who left.
+        db().prepare("UPDATE service_requests SET status='cancelled',decided_at=? WHERE user_id=? AND status='open'").bind(now, u.id),
         // Trade records still waiting for an answer that involve the member end (WP43).
         db().prepare('DELETE FROM trades WHERE (seller_id=? OR buyer_id=?) AND confirmed_at IS NULL AND author_id IS NOT NULL AND removed_at IS NULL').bind(u.id, u.id),
     ]);
@@ -309,6 +312,8 @@ async function route(req: Request): Promise<Response> {
                 break;
             }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+            // 중개·가측 신청 (WP65).
+            case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

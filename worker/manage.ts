@@ -5,6 +5,7 @@ import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } 
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
 import { deleteReview, deleteTrade } from './reviews';
+import { manageServices, decideService } from './services';
 import { storageMode, counterValue, DB_LIMIT_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, D1_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, R2_WARN_BYTES } from './storage';
 
 // One 신고 row: the reporter's name line, and for a member report the reported member's (탈퇴회원 once
@@ -60,8 +61,10 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             // 사용량: posts written yesterday (KST) as a relist of the same listing (같은 매물, WP44), on the
             // partial index posts_relist_created (0023).
             db().prepare('SELECT COUNT(*) AS n FROM posts WHERE created_at>=? AND created_at<? AND relist=1').bind(kstDayStart(Date.now()) - 86400000, kstDayStart(Date.now())),
+            // The '중개·가측' tab's count (WP65).
+            db().prepare("SELECT COUNT(*) AS n FROM service_requests WHERE status='open'"),
         ]);
-        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n,
+        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n, openServices: (r[4].results[0] as any).n,
             usage: { relistsYesterday: (r[3].results[0] as any).n } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
@@ -106,6 +109,9 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             .bind(String(gb * 1024 ** 3), Date.now()).run();
         return json(await storageReport());
     }
+    // 중개·가측 신청 (WP65): the open list by grade priority, and the manager's 완료 / 취소.
+    if (p[1] === 'services' && !p[2] && method === 'GET') return manageServices(url);
+    if (p[1] === 'services' && p[2] && !p[3] && method === 'PATCH') return decideService(req, u, p[2]);
     // A 후기 or a whole trade the manager removes (WP23), from the member panel.
     if (p[1] === 'reviews' && p[2] && !p[3] && method === 'DELETE') return deleteReview(p[2]);
     if (p[1] === 'trades' && p[2] && !p[3] && method === 'DELETE') return deleteTrade(p[2]);

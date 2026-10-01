@@ -59,7 +59,7 @@ const login = (name, pass) => client()('auth/login', 'POST', { username: usernam
 
 // Every local request shares one address, and the suites before this one use most of its
 // 40 sign-ins per 10 minutes, so this suite starts from a fresh address window.
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 
 const manager = client(), guest = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');

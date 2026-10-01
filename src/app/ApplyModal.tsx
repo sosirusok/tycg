@@ -17,11 +17,13 @@ const won = (n: number) => n.toLocaleString('ko-KR') + '원';
 
 // What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces), as
 // WP40 lists them (at most 3 data items per row; WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
+// 중개·가측 (WP65): '중개·가측 월 5회 무료', '중개·가측 무제한 무료' (엘리트 leads with it).
 export function gradeBenefits(id: string): string[] {
     const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
-    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`];
-    if (id === 'premium') return [wallet('premium')];
-    if (id === 'elite') return [wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
+    const services = (g: 'plus' | 'premium' | 'elite') => Number.isFinite(PERKS[g].serviceCoupons) ? `중개·가측 월 ${PERKS[g].serviceCoupons}회 무료` : '중개·가측 무제한 무료';
+    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`, services('plus')];
+    if (id === 'premium') return [wallet('premium'), services('premium')];
+    if (id === 'elite') return [services('elite'), wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
     return [];
 }
 
@@ -134,6 +136,8 @@ export function ApplyModal() {
                         <div className="grade-row-name">
                             <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
                             {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
+                            {/* The 체험 has no free 중개·가측 (WP65), though the 플러스 row lists them. */}
+                            {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">무료 중개·가측은 유료 플러스부터</span>}
                         </div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {

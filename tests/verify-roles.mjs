@@ -73,7 +73,7 @@ async function register(name) {
 }
 
 // The suites before this one use most of the 40 sign-ins per 10 minutes from this address.
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 
 const manager = client(), guest = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
@@ -116,6 +116,9 @@ const calls = [
     ['POST', 'manage/notice', notice],
     ['POST', 'manage/visibility', { postId: post.data.id, hidden: true, reason: '허위 매물' }],
     ['POST', 'manage/report', { id: report.id, status: 'resolved' }],
+    // 중개·가측 (WP65): the list and the decision are the manager's alone.
+    ['GET', 'manage/services?status=open'],
+    ['PATCH', 'manage/services/1', { action: 'done', price: 100000 }],
 ];
 for (const [who, caller] of [['관리자 B', b], ['member A', a]]) {
     for (const [method, path, data] of calls) {
