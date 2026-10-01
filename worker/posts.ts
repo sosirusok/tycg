@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, MANAGER_ID, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, digest, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
@@ -33,6 +33,10 @@ function relaxedLimits(req: Request) {
     const host = new URL(req.url).hostname;
     return (env as Partial<Env>).POST_LIMITS === 'relaxed' && (host === '127.0.0.1' || host === 'localhost');
 }
+
+// posts.thumb: 'data:image/webp;base64,…', at most 6,000 characters.
+const THUMB_RE = /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/;
+const THUMB_MAX = 6000;
 
 export const postSelect = `SELECT p.*,u.nickname,u.role,u.deleted_at AS author_deleted_at,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
 
@@ -288,9 +292,19 @@ async function validatePost(b: any, u: User, existing?: any) {
         uploads = (await db().prepare('SELECT id,hash,src_hash FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all<UploadHash>()).results;
         if (uploads.length !== images.length) fail(403, '본인이 올린 사진만 쓸 수 있습니다.');
     }
+    // The inline list thumbnail (WP45): a small WebP data URI the editor makes from the 대표 photo. Left out
+    // on an edit, it stays while the 대표 is the same; a post without photos has none.
+    let thumb: string | null | undefined = undefined;
+    if (b.thumb === null || b.thumb === '') thumb = null;
+    else if (b.thumb !== undefined) {
+        if (typeof b.thumb !== 'string' || b.thumb.length > THUMB_MAX || !THUMB_RE.test(b.thumb)) fail(400, '사진을 다시 선택해 주세요.');
+        thumb = b.thumb;
+    }
+    if (thumb === undefined && existing) thumb = images[0] && images[0] === parse(existing.images, [])[0] ? existing.thumb ?? null : null;
+    if (!images.length) thumb = null;
     // The status is never taken from the form (WP43): a new post starts 진행중, an edit keeps it, and only
     // PATCH /posts/:id/status completes a post.
-    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
+    return { thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
 }
 
 // Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
@@ -705,11 +719,40 @@ async function completePost(req: Request, u: User, post: any) {
     return json({ ok: true, closed_at: now, ...plan ? { trade: recorded ? plan.trade : null, chatId: plan.chatId } : {} });
 }
 
+// Guests counted in this isolate today: hashed address + post id → the KST day (no D1 write). At most
+// 5,000 entries, the oldest dropped first.
+const guestViews = new Map<string, number>();
+const GUEST_VIEWS_MAX = 5000;
+
+// One 조회: a member counts once per 6 hours per post (the 최근 본 글 row it also refreshes, which
+// moved here from POST /view; the 100-row trim runs on 1 view in 10), a guest once per address, post
+// and KST day in this isolate. Returns 1 when the view counted.
+async function countView(req: Request, u: User | null, postId: number): Promise<number> {
+    const now = Date.now();
+    if (u) {
+        const r = await db().batch([
+            db().prepare('UPDATE posts SET view_count=view_count+1 WHERE id=? AND NOT EXISTS(SELECT 1 FROM history WHERE user_id=? AND post_id=? AND created_at>?)').bind(postId, u.id, postId, now - 6 * HOUR),
+            db().prepare('INSERT INTO history(user_id,post_id,created_at) VALUES(?,?,?) ON CONFLICT(user_id,post_id) DO UPDATE SET created_at=excluded.created_at').bind(u.id, postId, now),
+            ...Math.random() < 0.1 ? [db().prepare('DELETE FROM history WHERE user_id=? AND post_id NOT IN(SELECT post_id FROM history WHERE user_id=? ORDER BY created_at DESC LIMIT 100)').bind(u.id, u.id)] : [],
+        ]);
+        return r[0].meta.changes ? 1 : 0;
+    }
+    const key = (await digest('view:' + (req.headers.get('CF-Connecting-IP') || ''))).slice(0, 24) + ':' + postId, day = kstDayStart(now);
+    if (guestViews.get(key) === day) return 0;
+    guestViews.delete(key);
+    guestViews.set(key, day);
+    while (guestViews.size > GUEST_VIEWS_MAX) guestViews.delete(guestViews.keys().next().value!);
+    await db().prepare('UPDATE posts SET view_count=view_count+1 WHERE id=?').bind(postId).run();
+    return 1;
+}
+
 export async function postsHandler(req: Request, p: string[], url: URL): Promise<Response> {
     const method = req.method;
     if (method === 'GET' && !p[1]) return listPosts(req, url);
     if (p[1] && method === 'GET' && !p[2]) {
         const u = await currentUser(req), post = await visiblePost(p[1], u);
+        // 조회수 (WP45): the detail page asks with view=1 once per post and KST day; the author never counts.
+        if (url.searchParams.get('view') === '1' && post.author_id !== u?.id) post.view_count = (Number(post.view_count) || 0) + await countView(req, u, post.id);
         // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43) for the author box; none for a withdrawn author.
         if (!post.author_deleted_at) {
             const stats = await tradeStats(post.author_id);
@@ -727,11 +770,10 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         else await db().prepare('DELETE FROM favorites WHERE user_id=? AND post_id=?').bind(u.id, existing.id).run();
         return json({ ok: true });
     }
+    // The pre-WP45 view call, kept for one release (pages loaded before the deploy); the detail page now
+    // sends GET posts/:id?view=1.
     if (p[2] === 'view' && method === 'POST') {
-        await db().batch([
-            db().prepare('INSERT INTO history(user_id,post_id,created_at) VALUES(?,?,?) ON CONFLICT(user_id,post_id) DO UPDATE SET created_at=excluded.created_at').bind(u.id, existing.id, Date.now()),
-            db().prepare('DELETE FROM history WHERE user_id=? AND post_id NOT IN(SELECT post_id FROM history WHERE user_id=? ORDER BY created_at DESC LIMIT 100)').bind(u.id, u.id),
-        ]);
+        if (existing.author_id !== u.id) await countView(req, u, existing.id);
         return json({ ok: true });
     }
     if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '권한이 없습니다.');
@@ -843,9 +885,9 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const spent = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='bump' AND created_at=? AND post_id=${newPost})`;
     const fresh = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='fresh' AND created_at=? AND post_id=${newPost})`, eventArgs = [u.id, now, ...newArgs];
     const r = await db().batch([
-        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,? WHERE ${guard}`)
-            .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, now, now, ...placeArgs, key,
+        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,? WHERE ${guard}`)
+            .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, ...placeArgs, key,
                 relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
@@ -903,10 +945,10 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
     const key = print.title_key, self = "(SELECT id FROM posts WHERE id=? AND status!='closed')";
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
-        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=?,
+        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,updated_at=?,
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)
-            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
+            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),

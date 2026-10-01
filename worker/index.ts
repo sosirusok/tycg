@@ -2,10 +2,12 @@ import { handleApi } from './api';
 import { cleanup } from './cleanup';
 import { db } from './http';
 import { meterOn, metered } from './meter';
+import { allowKvTestFailure } from './storage';
 
 // The daily cleanup. With the test meter on (READ_BUDGET=on, local only), its counts are kept in
 // settings 'sys:last_cron_meter' (never sent by any public route: 'sys:' keys stay on the server).
 async function scheduledRun() {
+    allowKvTestFailure(null);
     if (!meterOn()) return cleanup();
     const { result, meter } = await metered(() => cleanup());
     const now = Date.now();

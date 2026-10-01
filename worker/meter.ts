@@ -4,14 +4,14 @@ import { env } from 'cloudflare:workers';
 // Test meter (WP42). With READ_BUDGET=on (set only by scripts/test-local.mjs; wrangler.jsonc and
 // deploy.yml never set it), every API request to 127.0.0.1 or localhost and every scheduled run
 // counts its D1 rows read and written, D1 calls, D1 statements (each statement inside a batch
-// counts), R2 calls and outgoing fetches. handleApi returns them as X-Rows-Read, X-Rows-Written,
+// counts), R2 calls, KV calls and outgoing fetches. handleApi returns them as X-Rows-Read, X-Rows-Written,
 // X-D1-Calls and X-D1-Statements; scheduled() stores them in settings 'sys:last_cron_meter'.
 // The D1 limits page gives 50 queries per Worker invocation on Free and does not say how
 // statements inside a batch count, so scheduled code is held to ≤ 45 statements plus fetches.
-export type Meter = { rowsRead: number; rowsWritten: number; d1Calls: number; d1Statements: number; r2Calls: number; fetches: number };
+export type Meter = { rowsRead: number; rowsWritten: number; d1Calls: number; d1Statements: number; r2Calls: number; kvCalls: number; fetches: number };
 
 const store = new AsyncLocalStorage<Meter>();
-const newMeter = (): Meter => ({ rowsRead: 0, rowsWritten: 0, d1Calls: 0, d1Statements: 0, r2Calls: 0, fetches: 0 });
+const newMeter = (): Meter => ({ rowsRead: 0, rowsWritten: 0, d1Calls: 0, d1Statements: 0, r2Calls: 0, kvCalls: 0, fetches: 0 });
 
 export const meterOn = () => (env as Partial<Env>).READ_BUDGET === 'on';
 export function localRequest(req: Request) {
@@ -28,10 +28,11 @@ export async function metered<T>(fn: () => Promise<T>): Promise<{ result: T; met
 
 export const currentMeter = () => store.getStore();
 export function countR2(n = 1) { const m = store.getStore(); if (m) m.r2Calls += n; }
+export function countKv(n = 1) { const m = store.getStore(); if (m) m.kvCalls += n; }
 export function countFetch(n = 1) { const m = store.getStore(); if (m) m.fetches += n; }
 
 export function meterHeaders(m: Meter): Record<string, string> {
-    return { 'X-Rows-Read': String(m.rowsRead), 'X-Rows-Written': String(m.rowsWritten), 'X-D1-Calls': String(m.d1Calls), 'X-D1-Statements': String(m.d1Statements), 'X-R2-Calls': String(m.r2Calls), 'X-Fetches': String(m.fetches) };
+    return { 'X-Rows-Read': String(m.rowsRead), 'X-Rows-Written': String(m.rowsWritten), 'X-D1-Calls': String(m.d1Calls), 'X-D1-Statements': String(m.d1Statements), 'X-R2-Calls': String(m.r2Calls), 'X-KV-Calls': String(m.kvCalls), 'X-Fetches': String(m.fetches) };
 }
 
 type Meta = { rows_read?: number; rows_written?: number } | undefined;

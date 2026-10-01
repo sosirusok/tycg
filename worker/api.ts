@@ -10,6 +10,7 @@ import { communityHandler } from './community';
 import { membershipHandler, trialState, trialMeHandler } from './membership';
 import { kstDate, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
+import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
@@ -269,6 +270,7 @@ async function stats() {
 // With the test meter on (READ_BUDGET=on, requests to 127.0.0.1 or localhost only), the response
 // carries X-Rows-Read, X-Rows-Written, X-D1-Calls and X-D1-Statements for the whole request.
 export async function handleApi(req: Request) {
+    allowKvTestFailure(req);
     if (!meterOn() || !localRequest(req)) return route(req);
     const { result, meter } = await metered(() => route(req));
     for (const [k, v] of Object.entries(meterHeaders(meter))) result.headers.set(k, v);

@@ -6,6 +6,8 @@ export type Usage = Wallet & {
     perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; boardSlots: number | null; homeShelf: boolean | null };
     rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null; freshPerDay?: number | null };
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
+    // The member's photo space in the current store (WP45); limit null for the manager.
+    photos?: { storage: 'r2' | 'kv' | 'd1'; used: number; limit: number | null };
 };
 
 // The wallet now, from the values the server sent: each refill interval that passed since

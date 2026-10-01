@@ -68,7 +68,8 @@ async function fireCron() {
 // The unused-photo rule of worker/files.ts, for counting what the cron may still remove.
 const UNUSED = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
 // A photo a lookup reused within the day (touched_at, WP44) counts as used.
-const eligible = () => sql(`SELECT COUNT(*) AS n FROM uploads WHERE created_at<${Date.now() - DAY} AND COALESCE(touched_at,0)<${Date.now() - DAY} AND ${UNUSED}`)[0].n;
+// A deleted post's photos are held for the manager until keep_until (WP45).
+const eligible = () => sql(`SELECT COUNT(*) AS n FROM uploads WHERE created_at<${Date.now() - DAY} AND COALESCE(touched_at,0)<${Date.now() - DAY} AND COALESCE(keep_until,0)<${Date.now()} AND ${UNUSED}`)[0].n;
 
 // Rows a crashed earlier run left behind would change every number below.
 const removeSeed = r => sqlFile(`

@@ -35,15 +35,21 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
 
 export const errorText = (e: unknown) => e instanceof Error ? e.message : '다시 시도해 주세요.';
 
-// Resizes photos in the browser before upload. Most results are 100–400 KB WebP,
-// which fits both R2 and the D1 fallback (1.4 MB per photo).
+// Where the site keeps photos (GET /api/config storage, WP45): R2 takes larger files than KV and D1.
+export type PhotoStorage = 'r2' | 'kv' | 'd1';
+let photoStorage: PhotoStorage = 'r2';
+export function setPhotoStorage(mode: PhotoStorage | undefined) { if (mode === 'r2' || mode === 'kv' || mode === 'd1') photoStorage = mode; }
+
+// Resizes photos in the browser before upload: long side 1600px WebP q0.85 with R2, 1280px q0.8 with KV
+// and D1 (most results are 13-85KB), which fits KV and D1's 1.4 MB per photo.
 async function compress(file: File): Promise<Blob> {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('JPG, PNG, WebP 사진만 올릴 수 있습니다.');
     if (file.size > 20 * 1024 * 1024) throw new Error('20MB 이하의 사진을 선택해 주세요.');
     let bitmap: ImageBitmap;
     try { bitmap = await createImageBitmap(file); }
     catch { throw new Error('사진을 열 수 없습니다. JPG, PNG, WebP 사진인지 확인해 주세요.'); }
-    let edge = 1600, quality = 0.85, blob: Blob | null = null;
+    const r2 = photoStorage === 'r2';
+    let edge = r2 ? 1600 : 1280, quality = r2 ? 0.85 : 0.8, blob: Blob | null = null;
     for (let attempt = 0; attempt < 5; attempt++) {
         const ratio = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
         const canvas = document.createElement('canvas');
@@ -59,6 +65,29 @@ async function compress(file: File): Promise<Blob> {
     bitmap.close();
     if (!blob) throw new Error('사진을 처리하지 못했습니다.');
     return blob;
+}
+
+// The inline list thumbnail (WP45): a 176px square (cover crop) WebP data URI of the 대표 photo, q0.6;
+// over 6,000 characters it tries q0.4, then 144px. Null when the browser cannot make WebP or the photo
+// does not load (the list then shows the photo itself).
+export async function makeThumb(id: string): Promise<string | null> {
+    try {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = imageUrl(id);
+        await img.decode();
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        if (!side) return null;
+        for (const [size, q] of [[176, 0.6], [176, 0.4], [144, 0.4]] as const) {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = size;
+            canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+            const uri = canvas.toDataURL('image/webp', q);
+            if (!uri.startsWith('data:image/webp;base64,')) return null;
+            if (uri.length <= 6000) return uri;
+        }
+        return null;
+    } catch { return null; }
 }
 
 // The author's open posts a photo is already in (같은 매물, WP44).

@@ -3,7 +3,7 @@ import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, kstDateTime, type Application } from '../../shared/membership';
-import { api, errorText } from '../lib/api';
+import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
@@ -12,7 +12,9 @@ import { PostCard } from '../components/PostCard';
 
 type TabId = 'applications' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
-type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
+type Report = { id: number; post_id: number | null; title: string | null;
+    // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
+    post_images?: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
     // A member report: the reported member and the chat it came from.
     target_user_id: string | null; conversation_id: string | null; target_nickname?: string; target_role?: string; target_grade?: string; target_grade_trial?: boolean; target_badges?: string[]; target_deleted?: boolean; target_suspended?: boolean };
 type EvidenceMessage = { id: number; sender_id: string; nickname: string; body: string; type: string; photos: number; created_at: number };
@@ -106,6 +108,7 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
                 <span className="small">{r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
+                {!r.post_id && <DeletedPhotos images={r.post_images} />}
                 <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
@@ -119,6 +122,17 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={onChange} />}</Modal>
         <Modal open={!!evidence} onClose={() => setEvidence(null)} title="신고된 채팅" wide>{evidence && <ReportChat report={evidence} />}</Modal>
     </>;
+}
+
+// The photos of a reported post that was deleted, while the uploads are held (30 days); a photo already
+// removed hides itself.
+function DeletedPhotos({ images }: { images?: string | null }) {
+    let ids: string[] = [];
+    try { ids = images ? (JSON.parse(images) as unknown[]).filter((v): v is string => typeof v === 'string') : []; } catch { ids = []; }
+    if (!ids.length) return null;
+    return <span className="report-photos">{ids.slice(0, 12).map((img, i) => <a key={img} href={imageUrl(img)} target="_blank" rel="noreferrer" aria-label={`사진 ${i + 1} 크게 보기`}>
+        <img src={imageUrl(img)} alt="" loading="lazy" onError={e => { (e.currentTarget.parentElement as HTMLElement).hidden = true; }} />
+    </a>)}</span>;
 }
 
 // The chat a member report came from, read-only: who wrote each line and when. The reported member's lines are bold.
@@ -212,12 +226,58 @@ function TrialCard() {
     </section>;
 }
 
-// 사용량 (WP44 starts it; the photo and auto-bump lines join it later).
+type StorageInfo = {
+    mode: 'r2' | 'kv' | 'd1'; dbBytes: number; dbLimit: number; dbPhotoStop: number;
+    r2Bytes: number; r2Limit: number; r2Warn: number[]; r2UploadsToday: number; r2DailyUploads: number;
+    kvBytes: number; kvLimit: number; kvTrash: number; kvDeletesToday: number; d1PhotoBytes: number; d1SiteBytes: number;
+};
+const MB = 1024 * 1024, GB = 1024 * MB;
+// '123MB', or '4.2GB' from 1GB on.
+const sizeText = (b: number) => b >= GB ? `${(b / GB).toFixed(1).replace(/\.0$/, '')}GB` : `${Math.round(b / MB)}MB`;
+
+// 사용량 (WP44 starts it; WP45 adds the database and the photo stores; auto-bump lines join it later).
+// In KV and D1 modes it lists the two owner steps that turn on R2 (the deploy creates the bucket).
 function UsageCard({ usage }: { usage?: { relistsYesterday: number } }) {
-    if (!usage) return null;
+    const [store, setStore] = useState<StorageInfo | null>(null), [limitGB, setLimitGB] = useState(''), [busy, setBusy] = useState(false);
+    useEffect(() => { api<StorageInfo>('manage/storage').then(d => { setStore(d); setLimitGB(String(Math.round(d.r2Limit / GB))); }).catch(() => {}); }, []);
+    async function saveLimit(e: FormEvent) {
+        e.preventDefault();
+        setBusy(true);
+        try { const d = await api<StorageInfo>('manage/storage', 'PUT', { r2LimitGB: Number(limitGB) }); setStore(d); toast('저장 완료'); }
+        catch (err) { toast.error(errorText(err)); }
+        finally { setBusy(false); }
+    }
+    if (!usage && !store) return null;
+    const photo = store && (store.mode === 'r2' ? { used: store.r2Bytes, limit: store.r2Limit } : store.mode === 'kv' ? { used: store.kvBytes, limit: store.kvLimit } : { used: store.d1PhotoBytes, limit: store.d1SiteBytes });
+    // One line per store past 70% (90% reads the same with its own number); R2 warns at 8GB and 9.5GB of its free 10GB.
+    const warn: string[] = [];
+    if (store) {
+        const pct = (used: number, limit: number) => used / limit >= 0.9 ? 90 : used / limit >= 0.7 ? 70 : 0;
+        const db = pct(store.dbBytes, store.dbLimit);
+        if (db) warn.push(`DB 사용량이 ${db}%를 넘었습니다.`);
+        if (photo && store.mode !== 'r2' && pct(photo.used, photo.limit)) warn.push(`사진 저장 공간이 ${pct(photo.used, photo.limit)}%를 넘었습니다.`);
+        const over = store.mode === 'r2' ? [...store.r2Warn].reverse().find(w => store.r2Bytes >= w) : undefined;
+        if (over) warn.push(`사진 저장량이 ${sizeText(over)} 기준을 넘었습니다. R2 무료 용량은 10GB입니다.`);
+    }
     return <section className="card card-pad usage-admin">
         <h2 className="card-title">사용량</h2>
-        <p>어제 다시 올린 글 {usage.relistsYesterday.toLocaleString('ko-KR')}</p>
+        {usage && <p>어제 다시 올린 글 {usage.relistsYesterday.toLocaleString('ko-KR')}</p>}
+        {store && <>
+            <p>DB {sizeText(store.dbBytes)}/{sizeText(store.dbLimit)}</p>
+            {photo && <p>사진 {sizeText(photo.used)}/{sizeText(photo.limit)} <span className="muted small">{store.mode === 'r2' ? 'R2' : store.mode === 'kv' ? 'KV' : 'D1'}</span></p>}
+            {store.mode === 'r2' && <p className="muted small">오늘 올린 사진 {store.r2UploadsToday.toLocaleString('ko-KR')}/{store.r2DailyUploads.toLocaleString('ko-KR')}</p>}
+            {warn.map(w => <p key={w} className="alert usage-warn">{w}</p>)}
+            {store.mode !== 'r2' && <ol className="usage-steps">
+                <li>1. Cloudflare 대시보드 R2에서 결제 수단 등록 (해외결제 카드 또는 PayPal, 10GB 무료)</li>
+                <li>2. GitHub Actions에서 deploy 다시 실행</li>
+            </ol>}
+            {store.mode === 'r2' && <form className="row mt-8 usage-limit" onSubmit={saveLimit}>
+                <label className="field grow"><span className="field-label">사진 저장 한도</span>
+                    <div className="input-unit" style={{ maxWidth: 160 }}><input className="input" type="number" min={1} max={1000} value={limitGB} onChange={e => setLimitGB(e.target.value)} /><span>GB</span></div>
+                    <span className="field-hint">넘으면 사진 올리기 중단</span></label>
+                <button className="btn btn-line btn-sm" disabled={busy}>저장</button>
+            </form>}
+        </>}
     </section>;
 }
 

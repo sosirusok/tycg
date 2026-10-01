@@ -3,10 +3,10 @@ import type { User } from '../../shared/market';
 import { LATEST_SEASON } from '../../shared/market';
 import type { ApplicationKind, PlanId, TrialState } from '../../shared/membership';
 import { toast } from 'sonner';
-import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText } from '../lib/api';
+import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
 
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null } };
+export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -96,7 +96,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [me, setMe] = useState<User | null>(null);
     const [ready, setReady] = useState(false);
     const [trial, setTrial] = useState<TrialState | null>(null);
-    const [config, setConfig] = useState<SiteConfig>(defaultConfig);
+    const [config, setSiteConfig] = useState<SiteConfig>(defaultConfig);
+    // The photo store decides how far photos are shrunk before upload (lib/api compress).
+    const setConfig = useCallback((c: SiteConfig) => { setPhotoStorage(c.storage); setSiteConfig(c); }, []);
     const [unread, setUnread] = useState(0);
     const [authMode, setAuthMode] = useState<'' | 'login' | 'register'>('');
     const [apply, setApply] = useState<ApplyPreset | 'open' | null>(null);
@@ -111,7 +113,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateMe(d.user);
         setTrial(d.trial ?? null);
     }, [updateMe]);
-    const refreshConfig = useCallback(() => { api<SiteConfig>('config').then(setConfig).catch(() => {}); }, []);
+    const refreshConfig = useCallback(() => { api<SiteConfig>('config').then(setConfig).catch(() => {}); }, [setConfig]);
 
     useEffect(() => {
         Promise.all([refreshMe(), api<SiteConfig>('config').then(setConfig)]).catch(() => {}).finally(() => setReady(true));

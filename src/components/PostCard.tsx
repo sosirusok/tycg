@@ -98,7 +98,8 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             onChange?.();
         } catch (e) { toast.error(errorText(e)); }
     }
-    const thumb = post.images[0];
+    // The inline thumbnail the editor made (no image request), else the 대표 photo itself.
+    const thumb = post.images[0], thumbSrc = post.thumb || (thumb ? imageUrl(thumb) : '');
     const fav = me?.id !== post.author_id && <button type="button" className={'post-card-fav' + (post.favorite ? ' on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}>
         <Heart size={thumb ? 18 : 20} fill={post.favorite ? 'currentColor' : 'none'} />
     </button>;
@@ -127,7 +128,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             </div>
         </div>
         {thumb ? <div className="post-card-side">
-            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={imageUrl(thumb)} alt="" loading="lazy" /></Link>
+            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={thumbSrc} alt="" loading="lazy" /></Link>
             {fav}
         </div> : fav}
     </article>;

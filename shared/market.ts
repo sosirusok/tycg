@@ -62,6 +62,10 @@ export type Post = {
     bumped_at?: number;
     bump_count?: number;
     relist?: number;
+    // The inline list thumbnail ('data:image/webp;base64,…', WP45), null once the cleanup cleared it.
+    thumb?: string | null;
+    // 조회수 (WP45).
+    view_count?: number;
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];

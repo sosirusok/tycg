@@ -53,7 +53,7 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
     return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined };
 }
 
-// A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and the one
+// A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
 // 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
 function SellerRow({ post, usage, now, busy, closeOnly, onBump, onComplete }: {
     post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onComplete: () => void;
@@ -71,7 +71,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, onBump, onComplete }: {
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 <b>{price}</b>
             </div>
-            <span className="seller-stats">찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
+            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
         </div>
         <div className="seller-actions">
             {!closed && <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}

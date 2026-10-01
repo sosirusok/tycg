@@ -83,7 +83,7 @@ try {
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs'])) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -101,12 +101,41 @@ try {
     // READ_BUDGET=on turns on the read and call meter (worker/meter.ts) on this server only: responses
     // carry X-Rows-Read and friends, and the cron stores its counts in settings 'sys:last_cron_meter'.
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
     // verify-deals (WP43) runs on this strict server, so completing posts and trade records meet the
     // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints). verify-budget stays last: it seeds 20,000 posts and removes them at the end.
     for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-budget.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+    }
+    const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;
+    stop(fallback);
+    await fallbackExited;
+
+    // KV photos (WP45): the no-R2 config plus a local PHOTOS namespace, on a short-lived 8792 server
+    // without assets (so the cron can be triggered). verify-kv runs twice: as is, then with
+    // KV_TEST_FAIL=on (every KV put and delete throws). Then the R2 mover: the same server with both R2
+    // and KV bound, for the mover part of verify-parity.
+    const kvNamespaces = [{ binding: 'PHOTOS', id: 'zombiego-market-photos-local' }];
+    const kvConfig = path.join(path.dirname(config), 'wrangler.kv.json');
+    await writeFile(kvConfig, JSON.stringify({ ...built, kv_namespaces: kvNamespaces }));
+    const withR2 = JSON.parse(await readFile(config, 'utf8'));
+    delete withR2.assets;
+    const moverConfig = path.join(path.dirname(config), 'wrangler.mover.json');
+    await writeFile(moverConfig, JSON.stringify({ ...withR2, kv_namespaces: kvNamespaces }));
+    const phases = [
+        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: [], phase: 'main' },
+        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: ['--var', 'KV_TEST_FAIL:on'], phase: 'fail' },
+        { suite: 'tests/verify-parity.mjs', config: moverConfig, vars: [], phase: 'mover' },
+    ].filter(p => pick([p.suite]).length);
+    for (const p of phases) {
+        const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8792', '--inspector-port', '0', '--test-scheduled',
+            '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'TEST_HOOKS:on', ...p.vars], { stdio: ['ignore', 'pipe', 'pipe'] });
+        await waitFor('http://127.0.0.1:8792', kvServer);
+        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8792', TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+        const kvExited = kvServer.exitCode === null ? once(kvServer, 'exit') : null;
+        stop(kvServer);
+        await kvExited;
     }
 } catch (error) {
     console.error(error.message);

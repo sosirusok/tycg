@@ -94,6 +94,18 @@ function StatusSeg({ post, className = '', onComplete }: { post: Post; className
     return <button type="button" className={'btn ' + (closed ? 'btn-line' : 'btn-primary') + ' status-btn ' + className} disabled={closed} onClick={onComplete}>{closedLabel(post.kind)}</button>;
 }
 
+// Whether this browser still has to send today's view of a post: localStorage 'v:<id>:<KST date>' is set
+// on the first visit of the KST day. Storage may be unavailable (private mode): then every visit asks
+// and the server's dedupe decides.
+function viewDue(id: string) {
+    const key = `v:${id}:${new Date(Date.now() + 9 * HOUR).toISOString().slice(0, 10)}`;
+    try {
+        if (localStorage.getItem(key)) return false;
+        localStorage.setItem(key, '1');
+    } catch { /* storage unavailable */ }
+    return true;
+}
+
 export function Detail({ id }: { id: string }) {
     const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
@@ -103,7 +115,8 @@ export function Detail({ id }: { id: string }) {
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
-    const load = () => api<{ post: DetailPost }>('posts/' + id).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
+    // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
+    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     // Waits for the session check, so a full page load asks for the post once.
@@ -113,6 +126,8 @@ export function Detail({ id }: { id: string }) {
     // Under 이용 정지 the author may only complete or delete the post (no 끌올, 상단 노출, 가격 수정, 수정).
     const suspended = !!me?.suspended_until && me.suspended_until > now;
     const closedAt = post?.status === 'closed' ? post.closed_at ?? post.updated_at : null;
+    // Retention (WP45): 90 days after 완료 only the 대표 photo stays.
+    const trimmed = closedAt !== null && closedAt < now - 90 * 24 * HOUR && post?.images.length === 1;
     const closedMine = mine && closedAt !== null && closedAt > now - 7 * 24 * HOUR && !suspended;
     useEffect(() => {
         if (!closedMine) { setRecordable(false); return; }
@@ -127,7 +142,6 @@ export function Detail({ id }: { id: string }) {
         const y = takeScrollRestore();
         if (y !== null) window.scrollTo(0, y);
     }, [!!post]);
-    useEffect(() => { if (me && post && post.author_id !== me.id) api(`posts/${id}/view`, 'POST', {}).catch(() => {}); }, [me?.id, post?.id]);
     // The 끌올 button turns on by itself when it is ready (gap, 새 글 우선 and the next refill).
     const nextBump = post && usage ? bumpReadyAt(post, usage, now) : 0;
     useEffect(() => {
@@ -239,10 +253,11 @@ export function Detail({ id }: { id: string }) {
                 <div className="detail-meta">
                     {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                     {post.hidden === 1 && <span className="status status-closed">숨김</span>}
-                    <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''}</span>
+                    <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''} · 조회 {(post.view_count || 0).toLocaleString('ko-KR')}</span>
                 </div>
                 {/* On phones the author and their verification checks come right under the title. */}
                 <AuthorBox post={post} own={mine} className="author-box-top" />
+                {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
                 {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
 
                 {info.length > 0 && <section className="detail-section">

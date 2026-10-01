@@ -7,7 +7,7 @@ import {
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { SITE_RULES } from '../../shared/membership';
-import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, imageUrl, lookupPhotos, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, imageUrl, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
@@ -153,6 +153,9 @@ export default function Editor({ id }: { id?: string }) {
     const [photoCap, setPhotoCap] = useState(PHOTO_CAP);
     // GET me/usage for the 새 글 allowance line above [등록] (first 3 new posts a day are free).
     const [usage, setUsage] = useState<Usage | null>(null);
+    // '사진 용량 12.3MB/100MB' while photos are kept in KV or D1 (WP45); nothing with R2 or for the manager.
+    const photoLine = usage?.photos && usage.photos.storage !== 'r2' && usage.photos.limit
+        ? `사진 용량 ${(usage.photos.used / 1048576).toFixed(1)}MB/${Math.round(usage.photos.limit / 1048576)}MB` : '';
     const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
     // 같은 매물 (WP44): the author's open posts each picked photo is already in, and the 409 sheet.
     const [usedIn, setUsedIn] = useState<Record<string, UsedIn[]>>({});
@@ -326,6 +329,8 @@ export default function Editor({ id }: { id?: string }) {
             const ids = [...new Set(added.filter((v): v is string => !!v))].filter(v => !formRef.current.images.includes(v));
             if (ids.length) patch({ images: [...formRef.current.images, ...ids] });
             setUsedIn(u => ({ ...u, ...seen }));
+            // '사진 용량 12.3MB/100MB' follows the new photos (KV and D1 only).
+            if (photoLine) api<Usage>('me/usage').then(setUsage).catch(() => {});
             setUploading(false);
             setProgress(null);
             if (fileInput.current) fileInput.current.value = '';
@@ -379,7 +384,10 @@ export default function Editor({ id }: { id?: string }) {
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
+            // The list thumbnail of the 대표 photo (WP45). Without one (no WebP in this browser) the list shows
+            // the photo itself, and an edit keeps the thumbnail it had while the 대표 is the same.
+            const thumb = form.images[0] ? await makeThumb(form.images[0]) : null;
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -602,6 +610,7 @@ export default function Editor({ id }: { id?: string }) {
                         </button>}
                     </div>
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
+                    {photoLine && !progress && <p className="field-hint mt-8 ed-photo-usage">{photoLine}</p>}
                     {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button></p>}
                 </Section>
 

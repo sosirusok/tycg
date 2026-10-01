@@ -1,4 +1,5 @@
 import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
+import { storageMode } from './storage';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
@@ -13,7 +14,8 @@ export async function siteConfig() {
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
     // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
     const w = await trialWindow(), open = trialOpen(w);
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null } };
+    // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
+    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode() };
 }
 
 const DAY = 86400000;
