@@ -369,7 +369,7 @@ export default function Editor({ id }: { id?: string }) {
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
             setLeaveGuard(null);
-            toast(id ? '수정 완료' : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용' : d.placed === 'last' ? '끌올이 없어 최근 끌올 자리에 등록했습니다.' : '등록 완료');
+            toast(id ? '수정 완료' : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용' : d.placed === 'last' ? '끌올이 없어 최근 끌올 글 아래에 등록했습니다.' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
         } catch (err) { done.current = false; showError(errorText(err)); }
         finally { setBusy(false); }

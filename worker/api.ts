@@ -96,14 +96,14 @@ async function withdraw(req: Request) {
 // 플러스 무료 체험 at sign-up, while the window is open. At most 5 trials per hashed address per KST
 // day (the counter is only read here, so a 6th sign-up is never refused); a capped account is marked
 // trial_at=-1 so the catch-up in currentUser never grants it later. A sign-up while the window is
-// closed is marked -1 too, so moving the end date later (종료일 변경 after 지금 마감) never hands
+// closed is marked -2 (a separate marker, so it never reads as capped), so moving the end date later (종료일 변경 after 지금 마감) never hands
 // trials to those accounts through the catch-up, which has no per-address cap. The catch-up is only
 // for sign-ups the previous Worker served (trial_at stays NULL there). Sign-up never fails because of
 // the trial. Returns whether the cap applied.
 async function signUpTrial(id: string, ip: string, createdAt: number) {
     try {
         if (!trialOpen(await trialWindow(true), createdAt)) {
-            await db().prepare('UPDATE users SET trial_at=-1 WHERE id=? AND trial_at IS NULL').bind(id).run();
+            await db().prepare('UPDATE users SET trial_at=-2 WHERE id=? AND trial_at IS NULL').bind(id).run();
             return false;
         }
         try { await limit('trial-ip:' + ip + ':' + kstDate(createdAt), 5, DAY); }

@@ -116,9 +116,9 @@ export default function ProfilePage({ id }: { id?: string }) {
     const trialing = !!user.grade_trial && !!user.grade_expires_at;
     const grade = gradeInfo(user.grade_trial && !mine && me?.role !== 'manager' ? 'normal' : user.grade);
     // The next grade up for sale and the first thing it adds, on the owner's own grade card.
-    // While on the 플러스 체험, the next grade is 플러스 itself (the purchase that keeps the benefits),
-    // the same target as the 등급 신청 button.
-    const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === (trialing ? 1 : grade.rank + 1) && g.plans.length);
+    // While on the 플러스 체험 the card already says 플러스 and the trial line covers keeping it, so the
+    // next grade is 프리미엄, as for a paid 플러스 member.
+    const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
     return <div className="container page profile">
         <section className="profile-head">
             <Avatar name={user.nickname} size="lg" />

@@ -21,7 +21,8 @@ const DAY = 86400000;
 // The member's own 플러스 무료 체험 state: when it ends, whether the sign-up popup is still due
 // (trial running and never closed), whether the one-time end band is due (the trial ended, no grade
 // replaced it and the band was not closed yet: reminded_at=-1 on the trial row), and whether the
-// per-address cap kept the trial from this account (shown for a day after sign-up).
+// per-address cap kept the trial from this account (trial_at=-1, shown for a day after sign-up; a
+// closed-window sign-up is -2 and never reads as capped).
 export async function trialState(u: User, capped = false): Promise<TrialState> {
     const now = Date.now();
     const r = await db().prepare(`SELECT u.trial_at,u.trial_popup_at,u.created_at,t.expires_at,t.reminded_at FROM users u

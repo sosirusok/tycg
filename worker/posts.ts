@@ -725,16 +725,20 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // 새 글 allowance (decisions item 1b, the backstop that needs no identity): only the first
         // SITE_RULES.freshPerDay new posts of the KST day go to the top for free ('fresh' event). From
         // the next one on, a new post spends 1 끌올 from the wallet ('bump' event), or, with the wallet
-        // empty, sits at the member's latest top time of the last 2 days. So changing the title
-        // never buys more top placements than the allowance plus the wallet. Everything is decided
-        // inside this batch (one transaction), so parallel creates cannot overspend.
+        // empty, goes below the member's latest top time T of the last 2 days: T minus one refill
+        // interval for each such post since T (the k-th sits at T - k x refill), so a burst of new
+        // posts never stacks at or above a recent top placement. Deleting one gives nothing back
+        // (the 'post' events stay). So changing the title never buys more top placements than the
+        // allowance plus the wallet. Everything is decided inside this batch (one transaction), so
+        // parallel creates cannot overspend.
         const perks = perksOf(u), capped = strict && Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
         const freshCount = "(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='fresh' AND created_at>=?)", freshArgs = [u.id, dayStart];
         const walletNow = `(SELECT ${WALLET_NOW} FROM users WHERE id=?)`, walletArgs = [M, now, R, u.id];
         const placeSql = capped
-            ? `CASE WHEN ${freshCount}<? OR ${walletNow}>=1 THEN ? ELSE COALESCE((SELECT MAX(created_at) FROM post_events WHERE user_id=? AND kind IN ('fresh','bump') AND created_at>?),?) END`
+            ? `CASE WHEN ${freshCount}<? OR ${walletNow}>=1 THEN ? ELSE (SELECT top.t-?*(1+(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>top.t))
+                FROM (SELECT COALESCE((SELECT MAX(created_at) FROM post_events WHERE user_id=? AND kind IN ('fresh','bump') AND created_at>?),?) AS t) top) END`
             : '?';
-        const placeArgs = capped ? [...freshArgs, rules.freshPerDay, ...walletArgs, now, u.id, now - 48 * HOUR, now] : [now];
+        const placeArgs = capped ? [...freshArgs, rules.freshPerDay, ...walletArgs, now, R, u.id, u.id, now - 48 * HOUR, now] : [now];
         const spent = `EXISTS(SELECT 1 FROM post_events WHERE post_id=${newPost} AND kind='bump')`;
         const r = await db().batch([
             db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},? WHERE ${guard}`)
@@ -759,7 +763,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         if (!r[0].meta.changes) fail(429, '잠시 후 다시 시도해 주세요.');
         const out = r[r.length - 1].results[0] as { bump: number; bumped_at: number; bump_tokens: number; bump_at: number };
         // placed: 'fresh' (one of today's free new posts), 'bump' (spent 1 끌올) or 'last' (wallet empty:
-        // placed at the latest top time). The manager and POST_LIMITS=relaxed always get 'fresh'.
+        // placed below the latest top time). The manager and POST_LIMITS=relaxed always get 'fresh'.
         const placed = !capped ? 'fresh' : out.bump ? 'bump' : out.bumped_at < now ? 'last' : 'fresh';
         return json({ id: r[0].meta.last_row_id, placed, bumpedAt: out.bumped_at, ...capped ? walletJson(out, perks, now) : {} }, 201);
     }

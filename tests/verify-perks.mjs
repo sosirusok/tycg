@@ -282,9 +282,26 @@ setWallet(fresher, 0, Date.now());
 const othersNew = await created(other, 'another member posts after the 4th');
 const fifth = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 다섯번째 완전히 다른 제목`));
 equal([fifth.status, fifth.data.placed, fifth.data.bumpTokens], [201, 'last', 0], 'with the wallet empty the 5th new post is placed, not refused');
-equal(fifth.data.bumpedAt, fourth.data.bumpedAt, 'at the latest top time (the 4th post)');
+const refill = 360 * 60000;
+equal(fifth.data.bumpedAt, fourth.data.bumpedAt - refill, 'one refill interval below the latest top time (the 4th post)');
 const freshList = (await guest(`posts?kind=sell&q=${run}&size=40`)).data.posts.map(p => p.id);
-check(freshList.includes(othersNew) && freshList.indexOf(fifth.data.id) > freshList.indexOf(othersNew), `the 5th post sits below a post another member wrote before it (${freshList.slice(0, 6).join(',')})`);
+check(freshList.includes(othersNew) && (freshList.indexOf(fifth.data.id) === -1 || freshList.indexOf(fifth.data.id) > freshList.indexOf(othersNew)), `the 5th post sits below a post another member wrote before it (${freshList.slice(0, 6).join(',')})`);
+// A burst of empty-wallet posts never stacks at the top: each goes one refill interval lower, and
+// deleting one gives nothing back.
+const lastBurst = [];
+for (let i = 0; i < 10; i++) {
+    const r = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 연속 ${i} 제목 ${i * 7}`));
+    equal([r.status, r.data.placed], [201, 'last'], `burst post ${i + 1} is placed below`);
+    lastBurst.push(r.data);
+}
+equal(lastBurst.map(b => b.bumpedAt), lastBurst.map((_, i) => fourth.data.bumpedAt - refill * (i + 2)), 'each burst post sits one refill interval below the previous one');
+await fresher(`posts/${lastBurst[9].id}`, 'DELETE');
+const afterDelete = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 삭제 후 다시`));
+equal(afterDelete.data.bumpedAt, fourth.data.bumpedAt - refill * 12, 'deleting a placed post does not give its place back');
+const lastBurstList = (await guest(`posts?kind=sell&q=${run}&size=40`)).data.posts.map(p => p.id);
+const fourthAt = lastBurstList.indexOf(fourth.data.id);
+check(fourthAt >= 0 && [fifth.data, ...lastBurst.slice(0, 9), afterDelete.data].every(b => lastBurstList.indexOf(b.id) === -1 || lastBurstList.indexOf(b.id) > fourthAt), 'no empty-wallet post ranks above the member\'s own latest top post');
+check(lastBurstList.slice(0, 10).filter(id => lastBurst.some(b => b.id === id)).length < 10, 'the burst does not fill the board\'s top 10');
 equal((await fresher('me/usage')).data.freshToday, 3, 'usage.freshToday is 3');
 const freshRace = await register('fresh2');
 const raced = await Promise.all([0, 1, 2, 3, 4].map(i => freshRace('posts', 'POST', sale(`[QA] 동시 새 글 ${run} ${i}`))));

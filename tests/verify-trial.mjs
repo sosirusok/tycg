@@ -153,11 +153,12 @@ const closed = await manager('manage/trial', 'PUT', { close: true });
 equal([closed.status, closed.data.open], [200, false], 'the manager closes the window (지금 마감)');
 equal((await client()('config')).data.trial?.open, false, 'GET config: trial.open is false');
 const d = await register('d');
-equal([d.user.grade, d.trial.popup], ['normal', false], 'a sign-up with the window closed is 일반');
+equal([d.user.grade, d.trial.popup, d.trial.capped], ['normal', false, false], 'a sign-up with the window closed is 일반 and not capped');
+equal((await me(d)).trial.capped, false, 'auth/me: a closed-window sign-up is not capped');
 
 // 6. Moving the end later never hands trials to accounts that signed up while the window was closed:
-// they are marked trial_at=-1 at sign-up (the catch-up below has no per-address cap).
-equal(sql(`SELECT trial_at FROM users WHERE id='${d.user.id}'`)[0].trial_at, -1, 'a closed-window sign-up is marked trial_at=-1');
+// they are marked trial_at=-2 at sign-up (the catch-up below has no per-address cap).
+equal(sql(`SELECT trial_at FROM users WHERE id='${d.user.id}'`)[0].trial_at, -2, 'a closed-window sign-up is marked trial_at=-2');
 equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).data.open, true, 'the window is open again');
 const dClosed = await me(d);
 equal([dClosed.user.grade, trialRows(d.user.id).length], ['normal', 0], 'reopening gives that account no trial');
