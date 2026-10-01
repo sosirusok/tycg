@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { Bell, BellRing, ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
@@ -18,7 +18,7 @@ import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { AD_TEXT, gradeInfo } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT, gradeInfo } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 
 type Row = [string, ReactNode];
@@ -28,6 +28,8 @@ type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reaso
     author_created_at?: number; author_prev_nickname?: string;
     // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
     auto?: { bump: boolean; remindAt: number | null };
+    // 판매자 구독 (WP54): whether the viewer follows the author, and the author's '구독 허용'.
+    author_followed?: boolean; author_follow_allowed?: boolean;
     // '비슷한 매물' (WP53): other members' ads under a completed post only.
     ads?: Post[] };
 const HOUR = 3600000;
@@ -121,6 +123,16 @@ export function Detail({ id }: { id: string }) {
     const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
+    // 구독 / 구독 중 in the author box (WP54).
+    const [followBusy, setFollowBusy] = useState(false);
+    const follow = () => requireLogin(async () => {
+        if (!post || followBusy) return;
+        const active = !post.author_followed;
+        setFollowBusy(true);
+        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setFollowBusy(false); }
+    });
     const [lightbox, setLightbox] = useState<number | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
@@ -272,7 +284,7 @@ export function Detail({ id }: { id: string }) {
                     <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''} · 조회 {(post.view_count || 0).toLocaleString('ko-KR')}</span>
                 </div>
                 {/* On phones the author and their verification checks come right under the title. */}
-                <AuthorBox post={post} own={mine} className="author-box-top" />
+                <AuthorBox post={post} own={mine} className="author-box-top" onFollow={follow} followBusy={followBusy} />
                 {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
                 {/* The first 2 photos load with the page, the rest as they scroll in (WP46). */}
                 {post.images.length > 0 && <Gallery images={post.images} onOpen={setLightbox} />}
@@ -322,7 +334,7 @@ export function Detail({ id }: { id: string }) {
                 </div>}
                 {autoSheet}
                 {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
-                <AuthorBox post={post} own={mine} className="author-box-side" />
+                <AuthorBox post={post} own={mine} className="author-box-side" onFollow={follow} followBusy={followBusy} />
                 <p className="safety">입금 전 <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트</a>로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>
             </aside>
         </div>
@@ -361,7 +373,7 @@ export function Detail({ id }: { id: string }) {
     </div>;
 }
 
-function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; className: string }) {
+function AuthorBox({ post, own, className, onFollow, followBusy }: { post: DetailPost; own: boolean; className: string; onFollow: () => void; followBusy: boolean }) {
     // A withdrawn author has no profile; the name is plain 탈퇴회원 without grade or badges.
     if (post.author_deleted) return <div className={'author-box ' + className}>
         <Avatar name={post.nickname} />
@@ -372,7 +384,9 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
     // '이전 닉네임: {닉}' while the nickname changed within 90 days.
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
-    return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
+    // '구독' sits beside the profile link (not inside it); it hides when the author takes no follows.
+    const followable = !own && (post.author_follow_allowed !== false || !!post.author_followed);
+    return <div className={'author-box ' + className}><Link to={'/profile/' + post.author_id} className="author-link">
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
             {seen && <span className="author-stats author-seen">{seen}</span>}
@@ -380,7 +394,10 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
             {post.author_created_at && <span className="author-stats">{dateText(post.author_created_at)} 가입</span>}
             {post.author_prev_nickname && <span className="author-stats">이전 닉네임: {post.author_prev_nickname}</span>}</span>
         <ChevronRight size={18} className="muted" />
-    </Link>;
+    </Link>
+        {followable && <button type="button" className={'btn btn-line btn-xs author-follow' + (post.author_followed ? ' is-on' : '')} aria-pressed={!!post.author_followed} disabled={followBusy} onClick={onFollow}>
+            {post.author_followed ? <BellRing size={14} /> : <Bell size={14} />}{post.author_followed ? ALERT_TEXT.following : ALERT_TEXT.follow}</button>}
+    </div>;
 }
 
 function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => void; post: Post }) {

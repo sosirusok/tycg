@@ -132,22 +132,24 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // 광고 (WP53): adSlots of the member's open posts can be ads, and pauseDays is also the visit rule for ads).
 // serviceCoupons (WP65): 무료 중개·가측 per KST calendar month, shared between the two services
 // (Infinity = 무제한). A 플러스 무료 체험 gets none (serviceCouponsOf).
+// 조건 알림 (WP54): filterAlerts saved searches with any filter can send 알림 (0: none), and
+// filterAlertEvents says what they tell: 'new' 새 글 only, 'all' 새 글 and 가격 내림.
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
-    serviceCoupons: number;
+    serviceCoupons: number; filterAlerts: number; filterAlertEvents: 'new' | 'all';
 };
 
-const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity };
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all' };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0 },
-    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1 },
-    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5 },
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new' },
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new' },
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all' },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
 };
-export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGapMinutes: 0, pauseDays: 0 };
+export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGapMinutes: 0, pauseDays: 0, filterAlerts: Infinity };
 
 export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
     if (u.role === 'manager') return MANAGER_PERKS;
@@ -242,6 +244,37 @@ export const AUTO_TEXT = {
     reserve: '자동 끌올은 한 번에 글 1개씩 · 2개는 직접 끌올용으로 남김',
     capped: '자동 끌올은 게시판 활동량에 맞춰 제한됩니다.',
 };
+
+// 새 글 알림 (WP54): 키워드·게시판 알림 and 판매자 구독 for every grade, 조건 알림 for 플러스 and up.
+export const ALERT_TEXT = {
+    keywordButton: '이 키워드 알림 받기',
+    boardBell: '새 글 알림',
+    on: '알림 설정 완료',
+    off: '알림 해제',
+    keywordMax: (n: number) => `키워드 알림은 ${n}개까지입니다.`,
+    filterOff: '조건 알림은 플러스부터 가능합니다.',
+    filterMax: (n: number) => `조건 알림은 ${n}개까지입니다.`,
+    filterCount: (used: number, max: number) => `조건 알림 ${used}/${max}`,
+    follow: '구독',
+    following: '구독 중',
+    followed: '구독 완료',
+    unfollowed: '구독 해제',
+    allow: '구독 허용',
+    followMax: (n: number) => `구독은 ${n}명까지입니다.`,
+    followClosed: '구독을 받지 않는 회원입니다.',
+    manage: '구독 관리',
+    noFollows: '구독한 회원이 없습니다.',
+    keyword: (name: string) => `‘${name}’ 새 글`,
+    filter: (name: string) => `‘${name}’ 조건 새 글`,
+    filterDrop: (name: string) => `‘${name}’ 조건 가격 내림`,
+    member: (nickname: string) => `${nickname} 새 글`,
+    count: (n: number) => ` ${n >= 99 ? '99+' : n}개`,
+};
+// The 조건 알림 cell of the guide table: '-', '3개 (새 글)', '10개 (새 글 · 가격 내림)'.
+export function filterAlertText(perks: Perks) {
+    if (!perks.filterAlerts) return '-';
+    return `${Number.isFinite(perks.filterAlerts) ? perks.filterAlerts + '개' : '무제한'} (${perks.filterAlertEvents === 'all' ? '새 글 · 가격 내림' : '새 글'})`;
+}
 
 // '30분', '1시간', '1시간 30분'.
 export function gapText(min: number) {

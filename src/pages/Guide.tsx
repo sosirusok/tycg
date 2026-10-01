@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { AD_TEXT, BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -43,6 +43,8 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
     ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
     ['운영진 가측가 표시', () => 'O'],
+    // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
+    ['조건 알림', g => filterAlertText(PERKS[g.id])],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -52,8 +54,10 @@ const FREE_ITEMS = [
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '채팅·제시',
     '링크 자동 연결',
-    '찜',
+    '찜·알림',
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
+    `키워드·게시판 알림 ${SITE_RULES.keywordAlerts}개`,
+    '판매자 구독',
     '거래 기록·후기',
     '신고·차단',
 ];

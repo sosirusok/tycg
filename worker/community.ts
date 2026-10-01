@@ -1,8 +1,8 @@
 import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
 import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
-import { SITE_RULES } from '../shared/membership';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
+import { searchesHandler } from './alerts';
 
 // Badge and grade columns for a listed member, without the grade's end date.
 export function publicMember(row: any, prefix = '') {
@@ -33,24 +33,8 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
             return json({ ok: true });
         }
     }
-    if (p[0] === 'searches') {
-        const u = await requireUser(req);
-        if (method === 'GET') {
-            const r = await db().prepare('SELECT id,name,query FROM saved_searches WHERE user_id=? ORDER BY created_at DESC').bind(u.id).all();
-            return json({ searches: r.results });
-        }
-        if (method === 'POST') {
-            const b = await body(req), name = textField(b.name, 1, 32, '검색 이름'), q = textField(b.query, 1, 12000, '검색 조건');
-            const count = await db().prepare('SELECT COUNT(*) AS n FROM saved_searches WHERE user_id=?').bind(u.id).first<any>();
-            if (count.n >= SITE_RULES.savedSearches) fail(409, `검색은 최대 ${SITE_RULES.savedSearches}개까지 저장할 수 있습니다.`);
-            await db().prepare('INSERT INTO saved_searches(id,user_id,name,query,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), u.id, name, q, Date.now()).run();
-            return json({ ok: true });
-        }
-        if (method === 'DELETE' && p[1]) {
-            await db().prepare('DELETE FROM saved_searches WHERE id=? AND user_id=?').bind(p[1], u.id).run();
-            return json({ ok: true });
-        }
-    }
+    // Saved searches and their 알림 (WP54).
+    if (p[0] === 'searches') return searchesHandler(req, p);
     if (p[0] === 'blocks') {
         const u = await requireUser(req);
         if (method === 'GET') {

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
+import { Bell, BellRing, PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
@@ -11,7 +11,7 @@ import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
-import { AD_TEXT } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
@@ -55,8 +55,9 @@ type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
 
 // Saved searches (GET /searches, 20 per member for every grade), read once per member per page load
 // and kept here so moving between tabs does not ask again. The stored query is the board's own
-// canonical query without the page, compared with its keys sorted.
-type Saved = { id: string; name: string; query: string };
+// canonical query without the page, compared with its keys sorted. alert: the search sends 새 글 알림
+// (WP54); keyword: it holds only the tab, category and word (키워드·게시판 알림, every grade).
+type Saved = { id: string; name: string; query: string; alert?: boolean; keyword?: boolean };
 let savedCache: { user: string; list: Saved[] } | null = null;
 const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchParams(q); p.delete('page'); p.sort(); return p.toString(); };
 // The name is the filter chips in order, within the server's 32 characters.
@@ -378,9 +379,41 @@ export function Board() {
         } catch (e) { toast.error(errorText(e)); }
     }
     async function restoreSearch(v: Saved) {
-        try { await api('searches', 'POST', { name: v.name, query: v.query }); await refreshSaved(); }
+        try { await api('searches', 'POST', { name: v.name, query: v.query, alert: !!v.alert }); await refreshSaved(); }
         catch (e) { toast.error(errorText(e)); }
     }
+    // 새 글 알림 (WP54). The bell on a saved chip turns its 알림 on or off; '이 키워드 알림 받기' (after a
+    // search) and the board header bell save the board's tab, category and word with the 알림 on, or
+    // turn on the 알림 of the same saved search.
+    const [alerting, setAlerting] = useState(false);
+    async function setAlert(v: Saved, on: boolean) {
+        if (alerting) return;
+        setAlerting(true);
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await refreshSaved(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAlerting(false); }
+    }
+    const boardQuery = (word: string) => {
+        const p = new URLSearchParams({ kind, category });
+        if (kind === 'exchange') p.set('wantedCategory', wanted);
+        if (word) p.set('q', word);
+        return searchKey(p);
+    };
+    const searched = kind !== 'all' ? (params.get('q') || '').trim() : '';
+    const keywordKey = searched ? boardQuery(searched) : '', boardKey = kind !== 'all' ? boardQuery('') : '';
+    const keywordSaved = keywordKey ? saved.find(v => searchKey(v.query) === keywordKey) : undefined;
+    const boardSaved = boardKey ? saved.find(v => searchKey(v.query) === boardKey) : undefined;
+    function alertFor(key: string, name: string, existing: Saved | undefined, on: boolean) {
+        requireLogin(async () => {
+            if (existing) return setAlert(existing, on);
+            if (alerting) return;
+            setAlerting(true);
+            try { await api('searches', 'POST', { name: name.length > 32 ? name.slice(0, 31) + '…' : name, query: key, alert: true }); toast(ALERT_TEXT.on); await refreshSaved(); }
+            catch (e) { toast.error(errorText(e)); }
+            finally { setAlerting(false); }
+        });
+    }
+    const boardBellOn = !!boardSaved?.alert;
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
     const compose = () => requireLogin(u => {
@@ -407,7 +440,11 @@ export function Board() {
     return <div className="container page board">
         <div className="board-head">
             <h1 className="page-title">{title}</h1>
-            <button type="button" className="btn btn-line btn-sm board-write" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
+            <div className="board-head-tools">
+                {kind !== 'all' && <button type="button" className={'icon-btn board-bell' + (boardBellOn ? ' is-on' : '')} aria-label={ALERT_TEXT.boardBell} aria-pressed={boardBellOn} title={`${KIND_NAMES[kind]} · ${categoryName(category)} ${ALERT_TEXT.boardBell}`} disabled={alerting}
+                    onClick={() => alertFor(boardKey, `${KIND_NAMES[kind]} · ${categoryName(category)}`, boardSaved, !boardBellOn)}>{boardBellOn ? <BellRing size={20} /> : <Bell size={20} />}</button>}
+                <button type="button" className="btn btn-line btn-sm board-write" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
+            </div>
         </div>
         <div className="tabs kind-tabs" role="tablist" aria-label="거래 구분" ref={tabsRef}>
             {kind === 'all' && <button type="button" role="tab" className="tab" aria-selected>전체{counts && <b>{data!.total.toLocaleString()}</b>}</button>}
@@ -441,9 +478,11 @@ export function Board() {
                     <span className="saved-label">저장한 검색</span>
                     {tabSaved.map(v => { const on = searchKey(v.query) === currentKey; return <span key={v.id} className={'saved-chip' + (on ? ' on' : '')}>
                         <button type="button" aria-pressed={on} title={v.name} onClick={() => { if (!on) void navigate('/trade?' + v.query); }}>{v.name}</button>
+                        <button type="button" className={'saved-bell' + (v.alert ? ' is-on' : '')} aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} aria-pressed={!!v.alert} disabled={alerting} onClick={() => void setAlert(v, !v.alert)}>{v.alert ? <BellRing size={13} /> : <Bell size={13} />}</button>
                         <button type="button" aria-label={v.name + ' 삭제'} onClick={() => void deleteSearch(v)}><X size={13} /></button>
                     </span>; })}
                 </div>}
+                {searched && !keywordSaved?.alert && <div className="keyword-alert"><button type="button" className="btn btn-line btn-sm" disabled={alerting} onClick={() => alertFor(keywordKey, searched, keywordSaved, true)}><Bell size={15} />{ALERT_TEXT.keywordButton}</button></div>}
                 {chips.length > 0 && <div className="active-filters">{chips.map(c => <button type="button" key={c.key} onClick={c.clear} aria-label={c.label + ' 해제'}>{c.label}<X size={13} /></button>)}
                     {me && !isSaved && <button type="button" className="btn btn-line btn-xs save-search" disabled={savingSearch} onClick={() => void saveSearch()}>이 조건 저장</button>}
                     <button type="button" className="clear" onClick={clearAll}>전체 해제</button></div>}

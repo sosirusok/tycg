@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind } from '../../shared/market';
-import { AUTO_TEXT } from '../../shared/membership';
+import { ALERT_TEXT, AUTO_TEXT } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
-import { Link } from '../lib/router';
+import { Link, navigate } from '../lib/router';
 import { CIcon, SkeletonRows } from '../components/ui';
 import { WalletGauge, kstClock, useMinuteClock, type Usage, type Wallet } from '../components/Wallet';
 import { useAutoToggle } from '../components/AutoSheet';
@@ -81,5 +81,35 @@ export function Auto() {
             <li>{AUTO_TEXT.capped}</li>
         </ul>
         {sheet}
+    </section>;
+}
+
+// The '알림' card (WP54): every saved search with its 알림 switch. 키워드·게시판 알림 are free for every
+// grade (SITE_RULES.keywordAlerts); 조건 알림 count against the grade ('조건 알림 3/10').
+type SavedAlert = { id: string; name: string; query: string; alert: boolean; keyword: boolean };
+type SavedList = { searches: SavedAlert[]; filterAlerts: number | null; keywordAlerts: number };
+export function AlertCard() {
+    const [d, setD] = useState<SavedList | null>(null), [busy, setBusy] = useState(false);
+    const load = () => api<SavedList>('searches').then(setD).catch(e => toast.error(errorText(e)));
+    useEffect(() => { void load(); }, []);
+    if (!d) return <SkeletonRows count={1} height={120} />;
+    async function toggle(v: SavedAlert, on: boolean) {
+        if (busy) return;
+        setBusy(true);
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await load(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    const used = d.searches.filter(v => v.alert && !v.keyword).length;
+    return <section className="card card-pad auto-card alert-card" aria-labelledby="auto-alert-title">
+        <div className="card-title-row"><h2 className="card-title" id="auto-alert-title">알림</h2>
+            {d.filterAlerts !== null && <span className="alert-count">{ALERT_TEXT.filterCount(used, d.filterAlerts)}</span>}</div>
+        {d.searches.length ? <ul className="auto-list">{d.searches.map(v => <li key={v.id} className={v.alert ? 'is-on' : ''}>
+            <span className="auto-main">
+                <button type="button" className="auto-title" onClick={() => void navigate('/trade?' + v.query)}>{v.name}</button>
+                <span className="auto-sub">{v.keyword ? (new URLSearchParams(v.query).get('q') ? '키워드 알림' : '게시판 알림') : '조건 알림'}</span>
+            </span>
+            <label className="switch auto-post-switch"><input type="checkbox" role="switch" aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} checked={v.alert} disabled={busy} onChange={e => void toggle(v, e.target.checked)} /></label>
+        </li>)}</ul> : <p className="auto-empty">저장한 검색이 없습니다. 게시판에서 검색 조건을 저장하면 여기서 알림을 켤 수 있습니다.</p>}
     </section>;
 }

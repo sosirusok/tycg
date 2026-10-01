@@ -43,6 +43,14 @@
 
 /* board */
 .board-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.board-head-tools { display: flex; align-items: center; gap: 8px; }
+/* 새 글 알림 (WP54): the board bell, the bell on a saved chip and '이 키워드 알림 받기'. */
+.board-bell { width: 36px; height: 36px; border: 1px solid var(--line); }
+.board-bell.is-on { border-color: var(--brand); }
+.saved-chip > .saved-bell { display: grid; place-items: center; width: 24px; height: 100%; color: var(--ink-4); }
+.saved-chip > .saved-bell.is-on, .saved-chip.on > .saved-bell { color: var(--brand); }
+.keyword-alert { margin-top: 12px; }
+.keyword-alert .btn { gap: 6px; }
 .kind-tabs { margin-top: 20px; }
 .kind-tabs .tab b.zero { color: var(--ink-4); }
 .board-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
@@ -143,6 +151,11 @@
 .side-actions .btn[aria-pressed] { padding: 0; }
 .author-box { display: flex; gap: 12px; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); }
 .author-box .name-line .nick { font-size: var(--fs-15); }
+.author-link { display: flex; flex: 1; min-width: 0; gap: 12px; align-items: center; color: inherit; }
+.author-follow { flex: none; gap: 4px; }
+/* The narrow side card puts '구독' on its own row under the author. */
+.author-box-side { flex-wrap: wrap; }
+.author-box-side .author-follow { width: 100%; height: 36px; justify-content: center; }
 .author-stats { display: block; color: var(--ink-3); font-size: var(--fs-13); margin-top: 4px; }
 .author-box-top { display: none; }
 /* '최근 접속', then '거래 3회 · 후기 좋아요 2', the join date and '이전 닉네임' (WP51). */
@@ -579,6 +592,7 @@
   .seller-bump { flex: 1; }
 }
 /* Simple lists (my trades; the manager lists reuse them) */
+.follow-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .simple-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
@@ -731,6 +745,10 @@
 .auto-title { overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .auto-list li:not(.is-on) .auto-title { color: var(--ink-2); font-weight: 500; }
 .auto-sub { color: var(--ink-3); font-size: var(--fs-13); }
+/* '알림' card (WP54): saved searches with their switch, no thumbnail column. */
+.alert-card .auto-list li { grid-template-columns: minmax(0, 1fr) auto; }
+.alert-card .auto-title { text-align: left; }
+.alert-count { flex: none; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
 .auto-post-switch { padding: 8px 0 8px 8px; }
 .auto-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-14); }
 .auto-hints { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--ink-3); font-size: var(--fs-13); }

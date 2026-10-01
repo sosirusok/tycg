@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Ban, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Ban, Bell, BellRing, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
-import { BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
+import { ALERT_TEXT, BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -18,7 +18,9 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 
 // suspended: under 이용 정지 now; suspended_until (until when) reaches only the member and the manager.
 // tradeCount, dealSum (거금), goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
-type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
+type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean;
+    // 판매자 구독 (WP54): whether the viewer follows the member, '구독 허용', and (own profile) the follower count.
+    followed?: boolean; follow_allowed?: boolean; follower_count?: number };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
 // brokered: the trade of the 후기 was brokered by the manager (운영진 중개, WP65).
 type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean; brokered?: number };
@@ -36,7 +38,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const [tab, setTab] = useState<ProfileTab>('active'), [posts, setPosts] = useState<Post[] | null>(null), [total, setTotal] = useState(0);
     const [capped, setCapped] = useState({ on: false, full: false });
     const [page, setPage] = useState(1), [loadingMore, setLoadingMore] = useState(false);
-    const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false);
+    const [usage, setUsage] = useState<Usage | null>(null), [blockBusy, setBlockBusy] = useState(false), [followBusy, setFollowBusy] = useState(false);
     const [clock] = useMinuteClock();
     const [editing, setEditing] = useState(false), [nickname, setNickname] = useState(''), [bio, setBio] = useState(''), [saving, setSaving] = useState(false), [editError, setEditError] = useState('');
     const [postsVersion, setPostsVersion] = useState(0);
@@ -94,6 +96,23 @@ export default function ProfilePage({ id }: { id?: string }) {
         try { const d = await api<{ id: string }>('chats', 'POST', { userId: user.id }); void navigate('/chat/' + d.id); }
         catch (e) { toast.error(errorText(e)); }
     });
+    // 구독 / 구독 중 (WP54): new posts of this member reach the 알림함.
+    const follow = () => requireLogin(async () => {
+        if (followBusy) return;
+        const active = !user.followed;
+        setFollowBusy(true);
+        try { await api(`users/${user.id}/follow`, 'POST', { active }); setUser(v => v && { ...v, followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setFollowBusy(false); }
+    });
+    // '구독 허용' (WP54): saved at once; off also stops 알림 to members who already follow.
+    async function setFollowAllowed(on: boolean) {
+        if (followBusy) return;
+        setFollowBusy(true);
+        try { await api('users/me', 'PATCH', { follow_allowed: on }); setUser(v => v && { ...v, follow_allowed: on }); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setFollowBusy(false); }
+    }
     const block = () => requireLogin(async () => {
         if (blockBusy) return;
         const active = !user.blocked;
@@ -146,6 +165,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {mine ? <button type="button" className="btn btn-line btn-sm" onClick={() => { setNickname(user.nickname); setBio(user.bio); setEditError(''); setEditing(true); }}><Pencil size={15} />프로필 수정</button>
                     : <>
                         <button type="button" className="btn btn-primary btn-sm" onClick={chat}><MessageCircle size={16} />채팅하기</button>
+                        {(user.follow_allowed || user.followed) && <button type="button" className={'btn btn-line btn-sm' + (user.followed ? ' is-on' : '')} aria-pressed={!!user.followed} disabled={followBusy} onClick={follow}>{user.followed ? <BellRing size={15} /> : <Bell size={15} />}{user.followed ? ALERT_TEXT.following : ALERT_TEXT.follow}</button>}
                         {user.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" aria-pressed={!!user.blocked} disabled={blockBusy} onClick={block}><Ban size={15} />{user.blocked ? '차단 해제' : '차단'}</button>}
                         {user.role !== 'manager' && me?.role !== 'manager' && <button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(() => setReporting(true))}><Flag size={15} />신고</button>}
                     </>}
@@ -202,6 +222,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {user.role !== 'manager' && <span id="profile-nickname-hint" className="field-hint">{nicknameLocked ? `${monthDay(user.nickname_next_at!)}부터 변경 가능` : '30일에 한 번 변경 가능'}</span>}</div>
                 <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="예: 래더계 위주 거래, 밤에 답장 빠름" /></label>
                 {editError && <p className="field-error" role="alert">{editError}</p>}
+                <div className="follow-setting">
+                    <label className="switch"><input type="checkbox" role="switch" checked={user.follow_allowed !== false} disabled={followBusy} onChange={e => void setFollowAllowed(e.target.checked)} />{ALERT_TEXT.allow}</label>
+                    {user.follower_count !== undefined && <span className="muted small">구독자 {user.follower_count}명</span>}
+                </div>
                 <div className="row">
                     <button type="button" className="btn btn-line btn-sm" onClick={() => { setEditing(false); setAccount('password'); }}>비밀번호 변경</button>
                     {user.role !== 'manager' && <button type="button" className="btn btn-text small" style={{ marginLeft: 'auto' }} onClick={() => { setEditing(false); setAccount('withdraw'); }}>회원 탈퇴</button>}

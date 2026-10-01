@@ -18,6 +18,7 @@ import { servicesHandler } from './services';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 import { notificationsHandler } from './notifications';
 import { automationHandler } from './automation';
+import { followAllowedHandler, followHandler, followsList } from './alerts';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -84,7 +85,7 @@ async function withdraw(req: Request) {
     await db().batch([
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
         db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?`).bind(now, u.id),
-        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
@@ -197,15 +198,22 @@ async function usersHandler(req: Request, p: string[]) {
         const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
         // How many 후기 the 후기 tab holds; the trade counts come from tradeStats.
         const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
-            (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count FROM users u WHERE u.id=?`)
-            .bind(...listedArgs, ...listedArgs, p[1]).first<any>();
+            (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count,
+            u.follow_allowed,EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=u.id) AS followed,
+            CASE WHEN u.id=? THEN (SELECT COUNT(*) FROM follows f WHERE f.target_id=u.id) END AS follower_count FROM users u WHERE u.id=?`)
+            .bind(...listedArgs, ...listedArgs, viewer?.id || '', viewer?.id || '', p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
-        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, review_count, ...rest } = row;
+        const { prev_nickname, nickname_changed_at, deleted_at, suspended_until, review_count, follow_allowed, followed, follower_count, ...rest } = row;
         // A withdrawn member is only a name: no bio, grade, badges, counts or chat.
         if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, tradeCount: 0, dealSum: 0, goodCount: 0, reviewCount: 0, last_seen_at: null, deleted: true } });
         // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43): confirmed trades, deduped per counterpart and 30 days.
         const stats = await tradeStats(row.id);
         const user: Record<string, unknown> = { ...withMember(rest), tradeCount: stats.trade_count, dealSum: stats.deal_sum, goodCount: stats.good_count, reviewCount: review_count };
+        // 판매자 구독 (WP54): whether the viewer follows this member and whether the member takes follows
+        // ('구독 허용'); the member alone sees how many follow them.
+        user.followed = !!followed;
+        user.follow_allowed = !!follow_allowed;
+        if (viewer?.id === row.id) user.follower_count = Number(follower_count) || 0;
         // The nickname before the latest change stays on the profile for 90 days.
         if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
         // The member sees when their nickname can change again (30 days after the last change).
@@ -291,7 +299,10 @@ async function route(req: Request): Promise<Response> {
             case 'users': {
                 // users/:id/reviews (WP23) is the 후기 tab and users/:id/trades (WP51) the 거래 기록 tab; users/:id is the profile.
                 if (p[2] === 'reviews' || p[2] === 'trades') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
-                if (p[1]) return await usersHandler(req, p);
+                // 판매자 구독 (WP54): users/:id/follow, and PATCH users/me {follow_allowed} ('구독 허용').
+                if (p[2] === 'follow' && !p[3] && method === 'POST') return await followHandler(req, p[1]);
+                if (p[1] === 'me' && !p[2] && method === 'PATCH') return await followAllowedHandler(req);
+                if (p[1] && !p[2]) return await usersHandler(req, p);
                 break;
             }
             case 'stats': if (method === 'GET') return await stats(); break;
@@ -311,6 +322,8 @@ async function route(req: Request): Promise<Response> {
                 if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
                 // 자동화 tab (WP52).
                 if (p[1] === 'automation') { const a = await automationHandler(req, p); if (a) return a; break; }
+                // 구독 관리 (WP54).
+                if (p[1] === 'follows' && !p[2] && method === 'GET') return await followsList(req);
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;

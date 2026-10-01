@@ -279,12 +279,11 @@ const BARE_TIER_WORDS = ['다이아몬드', '다이아', '다야', '플래티넘
 
 // The ladder a whole search names: '28챌' is 28시즌 챌린저, '현플' the latest season's 플래티넘,
 // '다야' any season of 다이아몬드. A season outside the tier's range names nothing. The latest
-// season is read only for a search that has the shorthand's shape.
-async function tierSearch(q: string): Promise<{ tier: string; season: number | null } | null> {
+// season (latestSeason) is read only for a search that has the shorthand's shape (needsSeason).
+export function tierSearch(q: string, latest: number): { tier: string; season: number | null } | null {
     if (BARE_TIER_WORDS.includes(q)) return { tier: TIER_WORDS[q], season: null };
     const m = TIER_SHORTHAND.exec(q);
     if (!m) return null;
-    const latest = await latestSeason();
     const tier = TIERS.find(t => t.id === TIER_WORDS[m[2]])!, season = m[1] === '현' ? latest : Number(m[1]);
     return season >= tier.min && season <= latest ? { tier: tier.id, season } : null;
 }
@@ -414,11 +413,31 @@ export function bumpBackfill(now: number) {
     return now - isolateStart < HOUR ? [db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0')] : [];
 }
 
-async function listPosts(req: Request, url: URL) {
-    const now = Date.now(), backfill = bumpBackfill(now);
-    const u = await currentUser(req), s = url.searchParams;
-    const author = s.get('author');
-    const { where, values } = baseFilters(u, author, now) as { where: string[]; values: any[] };
+// The search word's SQL (WP54), shared by the board search and the 키워드 알림 cron, so an 알림 never
+// promises posts the board will not show. Each argument is an SQL expression: word is the lowered word,
+// wordNs the lowered word without spaces, skins a JSON list of the skins the word names (null: none) and
+// ladder a condition on p.id for a ladder the whole word names (null: none). An empty word matches
+// every post (instr(x,'') is 1). Joins users u (the author's nickname).
+export function qClause(word: string, wordNs: string, skins: string | null, ladder: string | null) {
+    return `(instr(lower(p.title),${word})>0 OR instr(lower(p.body),${word})>0 OR instr(lower(replace(p.details,' ','')),${wordNs})>0 OR instr(lower(u.nickname),${word})>0`
+        + (skins ? ` OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(${skins}) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(${skins}) w ON own.value=w.value)` : '')
+        + (ladder ? ` OR ${ladder}` : '') + ')';
+}
+// The board search's bound form: q is bound 4 times, the skins twice, then the ladder.
+export const BOARD_Q = { word: 'lower(?)', wordNs: "lower(replace(?,' ',''))", skins: '?' };
+export const ladderSql = (season: boolean) => `p.id IN (SELECT post_id FROM post_seasons WHERE tier=?${season ? ' AND season=?' : ''})`;
+// The search word as the board reads it (trimmed, at most 100 characters).
+export const searchWord = (raw: string | null | undefined) => (raw || '').trim().slice(0, 100);
+
+// Whether a query needs the latest season (a ladder shorthand such as '현플', or season tags).
+export const needsSeason = (s: URLSearchParams) => TIER_SHORTHAND.test(searchWord(s.get('q'))) || !!s.get('tags') || !!s.get('wantedTags');
+
+// Every filter of a board query (WP54: shared by the board list and the 조건 알림 cron): the shared
+// base filters (baseFilters, with the viewer), the tab, category and state, the search word and every
+// field filter. Not here: scope (찜, 최근 본 글), 내 글 'stale', the 30-day board window and the order.
+// A bad value throws 400 as the board always did. latest: the latest season (needsSeason).
+export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'> | null, latest: number, now: number, author: string | null = null) {
+    const { where, values } = baseFilters(u as User | null, author, now) as { where: string[]; values: any[] };
     for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
@@ -430,15 +449,13 @@ async function listPosts(req: Request, url: URL) {
         where.push("(CASE WHEN p.price_mode='legacy' THEN CASE WHEN p.price IS NULL THEN 'negotiate' ELSE 'fixed' END ELSE p.price_mode END)=?");
         values.push(s.get('mode'));
     }
-    const q = s.get('q')?.trim().slice(0, 100);
+    const q = searchWord(s.get('q'));
     if (q) {
         // A skin's short name or in-game name (악주, 뱀동, 악몽의 주인 …) also finds posts that list that skin.
         const skins = skinsForWord(q);
         // A whole search that names a ladder ('28챌', '현플', '다야') also finds posts with that ladder record.
-        const ladder = await tierSearch(q);
-        where.push("(instr(lower(p.title),lower(?))>0 OR instr(lower(p.body),lower(?))>0 OR instr(lower(replace(p.details,' ','')),lower(replace(?,' ','')))>0 OR instr(lower(u.nickname),lower(?))>0"
-            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '')
-            + (ladder ? ` OR p.id IN (SELECT post_id FROM post_seasons WHERE tier=?${ladder.season === null ? '' : ' AND season=?'})` : '') + ')');
+        const ladder = tierSearch(q, latest);
+        where.push(qClause(BOARD_Q.word, BOARD_Q.wordNs, skins.length ? BOARD_Q.skins : null, ladder ? ladderSql(ladder.season !== null) : null));
         values.push(q, q, q, q);
         if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
         if (ladder) values.push(ladder.tier, ...ladder.season === null ? [] : [ladder.season]);
@@ -562,7 +579,7 @@ async function listPosts(req: Request, url: URL) {
         const raw = s.get(param);
         if (!raw) continue;
         const tags = parse(raw, null);
-        if (!validTags(tags, await latestSeason())) fail(400, '검색 시즌을 확인해 주세요.');
+        if (!validTags(tags, latest)) fail(400, '검색 시즌을 확인해 주세요.');
         const unique = uniqueTags(tags);
         if (unique.length) {
             where.push(seasonFilter(table, unique, param === 'tags' && s.get('match') === 'all'));
@@ -574,6 +591,14 @@ async function listPosts(req: Request, url: URL) {
         where.push('EXISTS (SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge=?)');
         values.push(badge);
     }
+    return { where, values, q };
+}
+
+async function listPosts(req: Request, url: URL) {
+    const now = Date.now(), backfill = bumpBackfill(now);
+    const u = await currentUser(req), s = url.searchParams;
+    const author = s.get('author');
+    const { where, values, q } = buildPostFilter(s, u, needsSeason(s) ? await latestSeason() : LATEST_SEASON, now, author);
     const scope = s.get('scope');
     if (scope === 'favorites' || scope === 'recent') {
         if (!u) fail(401, '로그인이 필요합니다.');
@@ -877,8 +902,12 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // and under a completed post '비슷한 매물' (WP53): other advertisers' open posts of the same tab, in
         // the same batch. An open post never carries ads (its seller keeps the buyer).
         const now = Date.now(), closed = post.status === 'closed';
-        const reads = [...!post.author_deleted_at ? [tradeStatsStatement(post.author_id)] : [], ...closed ? [similarStatement(post, u, now)] : []];
+        // The viewer's 구독 of the author (WP54) rides the same batch.
+        const followRead = !!u && u.id !== post.author_id && !post.author_deleted_at;
+        const reads = [...!post.author_deleted_at ? [tradeStatsStatement(post.author_id)] : [], ...closed ? [similarStatement(post, u, now)] : [],
+            ...followRead ? [db().prepare('SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND target_id=?) AS f,follow_allowed AS a FROM users WHERE id=?').bind(u!.id, post.author_id, post.author_id)] : []];
         const got = reads.length ? await db().batch(reads) : [];
+        const follow = followRead ? got.pop()!.results[0] as { f: number; a: number } | undefined : undefined;
         if (!post.author_deleted_at) {
             const stats = tradeStatsOf(got[0].results as any[]);
             Object.assign(post, { author_trade_count: stats.trade_count, author_deal_sum: stats.deal_sum, author_good_count: stats.good_count });
@@ -891,6 +920,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         out.link_cards = await shownCards(req, post, out.author_grade, out.role);
         // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
         if (u && u.id === post.author_id) out.auto = await postAutoOf(post.id);
+        if (follow) { out.author_followed = !!follow.f; out.author_follow_allowed = !!follow.a; }
         return json({ post: out });
     }
     const u = await requireUser(req);

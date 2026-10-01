@@ -425,7 +425,7 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
 equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0 }, '일반 perks');
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new' }, '일반 perks');
 equal(usage.freshToday, 3, 'usage counts today\'s free new posts (3 of the 4)');
 equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
 check(usage.nextRefillAt > Date.now() && usage.nextRefillAt - Date.now() <= 6 * HOUR, 'nextRefillAt is within the next 6 hours');

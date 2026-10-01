@@ -1,10 +1,13 @@
 import { db, fail, requireUser, json, body } from './http';
 import { kstDayStart } from '../shared/membership';
+import { alertCounts } from './alerts';
 
 // 알림함 (WP50). Every 알림 is written by an INSERT … SELECT inside the batch of the event that causes it,
 // so it commits (or not) with that event and costs no extra D1 call.
 // auto_paused, auto_stale and bump_ready come from the 자동 끌올 ticks (WP52).
-export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing' | 'auto_paused' | 'auto_stale' | 'bump_ready';
+// keyword, board, follow and condition are the 새 글 알림 of tick B (WP54, worker/alerts.ts).
+export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing' | 'auto_paused' | 'auto_stale' | 'bump_ready'
+    | 'keyword' | 'board' | 'follow' | 'condition';
 
 // At most this many 알림 per member per KST day; the check reads at most this many index entries.
 export const NOTIFY_PER_DAY = 100;
@@ -22,15 +25,16 @@ const COUNT_CAP = 99;
 //   repeated event writes nothing until that row is read; a later 가격 내림 (fav_price) instead updates
 //   that unread row's text and time, so it shows the latest price (still one row per post).
 // The outer SELECT always has a WHERE, which SQLite needs to parse the upsert after INSERT … SELECT.
-export function notifyStatement(type: NotifyType, select: string, args: unknown[], now: number, guard = '1', guardArgs: unknown[] = []) {
+// type null: the select also yields the type column (키워드 and 게시판 알림 come from one statement).
+export function notifyStatement(type: NotifyType | null, select: string, args: unknown[], now: number, guard = '1', guardArgs: unknown[] = []) {
     return db().prepare(`INSERT INTO notifications(user_id,type,ref,post_id,actor_id,text,created_at)
-        SELECT x.user_id,?,COALESCE(x.ref,''),x.post_id,x.actor_id,x.text,? FROM (${select}) x
+        SELECT x.user_id,${type === null ? 'x.type' : '?'},COALESCE(x.ref,''),x.post_id,x.actor_id,x.text,? FROM (${select}) x
         WHERE x.user_id IS NOT NULL AND x.user_id IS NOT x.actor_id AND ${guard}
         AND EXISTS(SELECT 1 FROM users nu WHERE nu.id=x.user_id AND nu.deleted_at IS NULL)
         AND NOT EXISTS(SELECT 1 FROM blocks nb WHERE (nb.user_id=x.user_id AND nb.target_id=x.actor_id) OR (nb.user_id=x.actor_id AND nb.target_id=x.user_id))
         AND NOT EXISTS(SELECT 1 FROM notifications nd WHERE nd.user_id=x.user_id AND nd.created_at>=? LIMIT 1 OFFSET ${NOTIFY_PER_DAY - 1})
         ON CONFLICT(user_id,type,ref) WHERE read_at IS NULL ${type === 'fav_price' ? 'DO UPDATE SET text=excluded.text,created_at=excluded.created_at' : 'DO NOTHING'}`)
-        .bind(type, now, ...args, ...guardArgs, kstDayStart(now));
+        .bind(...type === null ? [] : [type], now, ...args, ...guardArgs, kstDayStart(now));
 }
 
 // The favorites of a post as recipients, the post's author as the actor.
@@ -65,7 +69,10 @@ export async function notificationsHandler(req: Request, p: string[], url: URL):
         const page = Number(url.searchParams.get('page') || 1);
         if (!Number.isSafeInteger(page) || page < 1 || page > 50) fail(400, '페이지를 확인해 주세요.');
         const r = await db().prepare(`${ROW_SQL} WHERE n.user_id=? ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`).bind(u.id, NOTIFY_PAGE + 1, (page - 1) * NOTIFY_PAGE).all<Row>();
-        return json({ alerts: r.results.slice(0, NOTIFY_PAGE).map(row), hasMore: r.results.length > NOTIFY_PAGE, page });
+        const alerts = r.results.slice(0, NOTIFY_PAGE).map(row);
+        // 새 글 알림 (WP54): unread rows count the matching posts now and carry the board query.
+        const counts = await alertCounts(alerts, u);
+        return json({ alerts: alerts.map(a => counts.has(a.id) ? { ...a, ...counts.get(a.id) } : a), hasMore: r.results.length > NOTIFY_PAGE, page });
     }
     if (p[1] === 'latest' && !p[2] && method === 'GET') {
         const r = await db().prepare(`${ROW_SQL} WHERE n.user_id=? AND n.read_at IS NULL ORDER BY n.created_at DESC,n.id DESC LIMIT 1`).bind(u.id).first<Row>();

@@ -12,7 +12,7 @@ import { PostCard } from '../components/PostCard';
 import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 import { remindText, setBumpRemind } from '../components/AutoSheet';
-import { Auto } from './Auto';
+import { AlertCard, Auto } from './Auto';
 
 // '자동화' (WP52) shows for 플러스 and up (the 체험 too) and the manager.
 const TABS = [
@@ -213,7 +213,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={tabs} /></div>
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
-                : tab === 'auto' ? <Auto />
+                : tab === 'auto' ? <><Auto /><div className="mt-16"><AlertCard /></div></>
                 : tab === 'posts' ? <>
                     {stale && <div className="auto-stale mine-stale">
                         <span>{AUTO_TEXT.staleCount(items.length)}</span>
