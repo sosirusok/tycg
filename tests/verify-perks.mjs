@@ -128,13 +128,17 @@ equal(t1.status, 201, 'first title is posted');
 refused(await titled('28챌린저  계정팝니다!'), 409, '같은 제목의 거래중 글이 있습니다. 그 글을 끌올해 주세요.', 'same title with other spacing is refused while open');
 equal((await plus('posts', 'POST', { ...sale('28 챌린저 계정 팝니다'), kind: 'buy', price: null })).status, 201, 'the same title on another tab is allowed');
 equal((await setStatus(plus, t1.data.id, 'closed')).status, 200, 'first post is closed');
+// 같은 매물 (WP44): a listing completed or deleted within 7 days is never refused; inside its 끌올 gap the
+// repost goes back to the old place (the round-2 deleted-title wait is gone).
 const t2 = await titled('28 챌린저 계정 팝니다');
-equal(t2.status, 201, 'a title that only matches 거래완료 posts is allowed');
+equal([t2.status, t2.data.placed, t2.data.relist], [201, 'old', true], 'a title that only matches 거래완료 posts is a relist at the old place');
+equal(t2.data.bumpedAt, sql(`SELECT created_at FROM posts WHERE id=${t1.data.id}`)[0].created_at, 'the old place is the completed post\'s place');
 equal((await plus(`posts/${t2.data.id}`, 'DELETE')).status, 200, 'the new post is deleted');
-refused(await titled('28 챌린저 계정 팝니다'), 429, '부터 다시 올릴 수 있습니다', 'reposting a deleted title right away is refused');
+const t3 = await titled('28 챌린저 계정 팝니다');
+equal([t3.status, t3.data.placed, t3.data.bumpedAt], [201, 'old', t2.data.bumpedAt], 'reposting a deleted title right away goes back to the same place');
 const kst = t => { const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * HOUR); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
-const deletedEvent = sql(`SELECT MAX(created_at) AS t FROM post_events WHERE post_id=${t2.data.id} AND kind='post'`)[0].t;
-refused(await titled('28 챌린저 계정 팝니다'), 429, `${kst(deletedEvent + 3 * HOUR)}부터`, 'the wait ends 3 hours (플러스 gap) after that post');
+equal(t3.data.bumpAt, t2.data.bumpedAt + 3 * HOUR, 'it can be bumped 3 hours (플러스 gap) after that place');
+await plus(`posts/${t3.data.id}`, 'DELETE');
 const managerTitle = `[QA] 매니저 ${run}`;
 const m1 = await manager('posts', 'POST', sale(managerTitle)), m2 = await manager('posts', 'POST', sale(managerTitle));
 check(m1.status === 201 && m2.status === 201, 'the manager has no same-title cap');
@@ -155,7 +159,8 @@ equal(bumped.status, 200, 'bump after 6 hours');
 equal([bumped.data.bumpTokens, bumped.data.bumpMax, bumped.data.bumpRefillMin], [2, 3, 360], 'the bump response carries the wallet (2/3)');
 check(bumped.data.nextRefillAt - bumped.data.bumpedAt === 6 * HOUR, 'the refill clock starts at the first spend from a full wallet');
 check(bumped.data.nextBumpAt - bumped.data.bumpedAt === 6 * HOUR, 'nextBumpAt is 6 hours later');
-equal((await guest(`posts?kind=sell&q=${run}`)).data.posts[0].id, b1, 'the bumped post is first in 최신순');
+// Today's free new posts sit 1 hour ahead (새 글 우선, WP44); below them the bumped post is first.
+equal((await guest(`posts?kind=sell&q=${run}&size=40`)).data.posts.find(p => p.bumped_at <= Date.now())?.id, b1, 'the bumped post is first in 최신순 below 새 글 우선');
 const afterBump = (await guest('posts/' + b1)).data.post;
 check(afterBump.bump_count === 1 && afterBump.bumped_at > afterBump.created_at, 'bump_count and bumped_at are returned; created_at is kept');
 refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 6시간마다', 'bumping again waits for the gap');
@@ -274,9 +279,10 @@ for (let i = 0; i < 3; i++) {
     equal([r.status, r.data.placed, r.data.bumpTokens], [201, 'fresh', 3], `new post ${i + 1} of 3 is a free new post`);
     placedPosts.push(r.data);
 }
+equal(sql(`SELECT bumped_at-created_at AS ahead FROM posts WHERE id IN (${placedPosts.map(p => p.id).join(',')})`).map(r => r.ahead), [HOUR, HOUR, HOUR], 'each free new post sits 1 hour ahead (새 글 우선)');
 const fourth = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 네번째`));
 equal([fourth.status, fourth.data.placed, fourth.data.bumpTokens], [201, 'bump', 2], 'the 4th new post spends 1 끌올 (2/3 left)');
-check(fourth.data.bumpedAt >= placedPosts[2].bumpedAt, 'and goes to the top');
+equal(sql(`SELECT bumped_at-created_at AS d FROM posts WHERE id=${fourth.data.id}`)[0].d, 0, 'and goes to the top at now');
 equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${fresher.user.id}' AND kind='fresh'`)[0].n, 3, 'three fresh events');
 setWallet(fresher, 0, Date.now());
 const othersNew = await created(other, 'another member posts after the 4th');

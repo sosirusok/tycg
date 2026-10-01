@@ -7,11 +7,12 @@ import {
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { SITE_RULES } from '../../shared/membership';
-import { api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, imageUrl, lookupPhotos, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
-import { walletNow, type Usage } from '../components/Wallet';
+import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
+import { SameListingSheet, type Dup } from '../components/SameListingSheet';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 type Form = {
@@ -153,6 +154,9 @@ export default function Editor({ id }: { id?: string }) {
     // GET me/usage for the 새 글 allowance line above [등록] (first 3 new posts a day are free).
     const [usage, setUsage] = useState<Usage | null>(null);
     const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+    // 같은 매물 (WP44): the author's open posts each picked photo is already in, and the 409 sheet.
+    const [usedIn, setUsedIn] = useState<Record<string, UsedIn[]>>({});
+    const [dup, setDup] = useState<Dup | null>(null);
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
     formRef.current = form;
@@ -298,21 +302,30 @@ export default function Editor({ id }: { id?: string }) {
         if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
         setUploading(true);
         setProgress({ done: 0, total: list.length });
+        // The originals' hashes first: photos this member already uploaded are reused without
+        // compressing or uploading them again (the hashes are advisory; a browser without them uploads).
+        const hashes = await Promise.all(list.map(f => fileHash(f)));
+        const known = await lookupPhotos(hashes.filter((h): h is string => !!h));
         const added: (string | null)[] = list.map(() => null);
+        const seen: Record<string, UsedIn[]> = { ...known.usedIn };
         let next = 0, failed: unknown = null;
         const worker = async () => {
             while (next < list.length && !failed) {
-                const i = next++;
-                try { added[i] = await uploadPhoto(list[i]); }
-                catch (e) { failed = failed || e; }
+                const i = next++, h = hashes[i];
+                try {
+                    if (h && known.found[h]) added[i] = known.found[h];
+                    else { const up = await sendPhoto(list[i], h); added[i] = up.id; seen[up.id] = up.usedIn; }
+                } catch (e) { failed = failed || e; }
                 setProgress(pr => pr && { ...pr, done: pr.done + 1 });
             }
         };
         try { await Promise.all([worker(), worker(), worker()]); }
         finally {
             if (failed) toast.error(errorText(failed));
-            const ids = added.filter((v): v is string => !!v);
+            // A photo already in the grid (picked again) is not added twice.
+            const ids = [...new Set(added.filter((v): v is string => !!v))].filter(v => !formRef.current.images.includes(v));
             if (ids.length) patch({ images: [...formRef.current.images, ...ids] });
+            setUsedIn(u => ({ ...u, ...seen }));
             setUploading(false);
             setProgress(null);
             if (fileInput.current) fileInput.current.value = '';
@@ -368,12 +381,20 @@ export default function Editor({ id }: { id?: string }) {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
             const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
             done.current = true;
-            const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
+            const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
             setLeaveGuard(null);
-            toast(id ? '수정 완료' : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용' : d.placed === 'last' ? '끌올이 없어 최근 끌올 글 아래에 등록했습니다.' : '등록 완료');
+            toast(id ? d.notice || '수정 완료'
+                : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용'
+                : d.placed === 'old' ? `같은 매물이라 이전 자리에 등록했습니다.${d.bumpAt && d.bumpAt > Date.now() ? ` (${readyClock(d.bumpAt)}부터 끌올 가능)` : ''}`
+                : d.placed === 'last' ? '끌올이 없어 최근 끌올 글 아래에 등록했습니다.' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
-        } catch (err) { done.current = false; showError(errorText(err)); }
+        } catch (err) {
+            done.current = false;
+            // The same listing is open: the sheet names it and offers its 끌올; the draft stays.
+            if (err instanceof ApiError && err.status === 409 && err.data?.dup) setDup(err.data.dup);
+            else showError(errorText(err));
+        }
         finally { setBusy(false); }
     }
 
@@ -382,6 +403,22 @@ export default function Editor({ id }: { id?: string }) {
     const wallet = usage ? walletNow(usage, Date.now()) : null, freshPerDay = usage?.rules.freshPerDay ?? 3;
     const freshLine = usage && wallet && (usage.freshToday ?? 0) >= freshPerDay
         ? `오늘 새 글 ${freshPerDay}개 사용 · ${wallet.tokens >= 1 ? '이번 글은 끌올 1개' : '남은 끌올 없음'}` : '';
+    // The picked photos are mostly one open post's (2 × shared > the larger set): one line under the
+    // grid names it and offers its 끌올 instead of a second post.
+    const photoPost = (() => {
+        const counts = new Map<number, { post: UsedIn; n: number }>();
+        for (const img of form.images) for (const p of usedIn[img] || []) {
+            if (p.id === Number(id)) continue;
+            const c = counts.get(p.id) || { post: p, n: 0 };
+            c.n++;
+            counts.set(p.id, c);
+        }
+        return [...counts.values()].find(c => 2 * c.n > Math.max(form.images.length, c.post.photos))?.post || null;
+    })();
+    async function bumpUsed(postId: number) {
+        try { await api(`posts/${postId}/bump`, 'POST'); toast('끌올 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+    }
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     if (loadError) return <div className="container page"><EmptyState title="글을 불러오지 못했습니다" text={loadError} /></div>;
     if (!loaded) return <div className="container page"><SkeletonRows count={3} height={180} /></div>;
@@ -565,6 +602,7 @@ export default function Editor({ id }: { id?: string }) {
                         </button>}
                     </div>
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
+                    {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button></p>}
                 </Section>
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
@@ -575,6 +613,7 @@ export default function Editor({ id }: { id?: string }) {
                 </div>
             </fieldset>
         </form>
+        <SameListingSheet dup={dup} onClose={() => setDup(null)} />
         <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분 변경" description="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => setPendingKind(null)}>취소</button><button type="button" className="btn btn-danger-solid" onClick={() => { if (pendingKind) applyKind(pendingKind); }}>바꾸기</button></>} />
         <Modal open={!!leaveAsk} onClose={() => void answerLeave('stay')} title="저장되지 않은 글" description="이 글을 임시저장하면 이전에 임시저장된 글은 지워집니다."

@@ -3,12 +3,16 @@ import { unused } from './files';
 import { deleteR2Photos } from './storage';
 import { UNREAD_RECOUNT } from './chat';
 import { postTitleKey } from './posts';
+import { PRINT_DAYS, fieldsHash } from './prints';
+import { listingFields, photoKeys } from '../shared/listing';
 import { gradeInfo } from '../shared/membership';
 
 const DAY = 86400000;
 // Photos removed per daily run (one SELECT, one DELETE and one R2 call).
 export const PHOTOS_PER_RUN = 100;
 const TITLE_KEYS_PER_ROUND = 200;
+// Backfilled prints filled per daily run (one SELECT and one UPDATE).
+export const PRINTS_PER_RUN = 1000;
 
 // "10월 7일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -35,15 +39,24 @@ export async function cleanup(now = Date.now()) {
     const r = await db().batch([
         db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now),
         db().prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(now),
-        // The daily caps look back to KST midnight and the deleted-title wait at most 6 hours.
+        // The daily caps look back to KST midnight and the 새 글 placement at most 2 days.
         db().prepare('DELETE FROM post_events WHERE created_at<?').bind(now - 2 * DAY),
         db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0'),
         db().prepare("SELECT id,title FROM posts WHERE title_key='' LIMIT ?").bind(TITLE_KEYS_PER_ROUND),
         dueReminders(now),
-        db().prepare(`SELECT id,storage FROM uploads WHERE created_at<? AND ${unused} LIMIT ?`).bind(now - DAY, PHOTOS_PER_RUN),
+        // A lookup that reused a photo (touched_at, WP44) counts as a use too.
+        db().prepare(`SELECT id,storage FROM uploads WHERE created_at<? AND COALESCE(touched_at,0)<? AND ${unused} LIMIT ?`).bind(now - DAY, now - DAY, PHOTOS_PER_RUN),
+        // 같은 매물 (WP44): prints are kept 7 days after the post was completed or deleted, and never for a
+        // member who left; backfilled prints get their fields and photo keys.
+        db().prepare('DELETE FROM post_prints WHERE gone_at<?').bind(now - PRINT_DAYS * DAY),
+        db().prepare('DELETE FROM post_prints WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL)'),
+        db().prepare(`SELECT pp.post_id,pp.title_key,p.kind,p.category,p.title,p.details,p.images,
+            (SELECT json_group_array(json_object('tier',s.tier,'season',s.season)) FROM post_seasons s WHERE s.post_id=p.id) AS tags
+            FROM post_prints pp INDEXED BY post_prints_unfilled JOIN posts p ON p.id=pp.post_id WHERE pp.fields IS NULL ORDER BY pp.post_id DESC LIMIT ?`).bind(PRINTS_PER_RUN),
     ]);
     const titles = r[4].results as { id: number; title: string }[], due = r[5].results as Due[], photos = r[6].results as Photo[];
     await fillTitleKeys(titles);
+    await fillPrints(r[9].results as Unfilled[]);
     const reminded = due.length ? await remindGradeEnds(due, now) : 0;
     const removed = photos.length ? await removePhotos(photos) : 0;
     return { removed, reminded };
@@ -94,4 +107,21 @@ async function removePhotos(photos: Photo[]) {
         .bind(JSON.stringify(photos.map(p => p.id))).all<Photo>()).results;
     await deleteR2Photos(gone.filter(p => p.storage === 'r2').map(p => p.id));
     return gone.length;
+}
+
+type Unfilled = { post_id: number; title_key: string; kind: string; category: string; title: string; details: string; images: string; tags: string | null };
+const parseJson = (s: string | null, fallback: any) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
+
+// The prints the migration backfilled (fields NULL) get their canonical fields, fields hash, photo keys
+// and title key in one UPDATE. Those posts' photos predate the hashes, so each photo is keyed by its
+// upload id, which still matches a relist that reuses the same upload.
+async function fillPrints(rows: Unfilled[]) {
+    if (!rows.length) return;
+    const list = await Promise.all(rows.map(async r => {
+        const fields = listingFields(r.kind, r.category, parseJson(r.details, {}), parseJson(r.tags, []));
+        return { id: r.post_id, f: JSON.stringify(fields), h: await fieldsHash(fields), p: JSON.stringify(photoKeys(parseJson(r.images, []), new Map())), k: r.title_key || postTitleKey(r.title) };
+    }));
+    const rowsJson = JSON.stringify(list), at = (f: string) => `json_extract(value,'$.${f}') AS ${f}`;
+    await db().prepare(`UPDATE post_prints SET fields=j.f,fields_hash=j.h,photos=j.p,title_key=j.k
+        FROM (SELECT ${['id', 'f', 'h', 'p', 'k'].map(at).join(',')} FROM json_each(?)) j WHERE post_prints.post_id=j.id AND post_prints.fields IS NULL`).bind(rowsJson).run();
 }

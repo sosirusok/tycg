@@ -42,7 +42,8 @@ const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAA
 // The cron removes 100 unused photos per run: photos older runs left behind are removed first, so
 // the photos of this run are the ones the checks below see.
 const UNUSED = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
-const eligible = () => sql(`SELECT COUNT(*) AS n FROM uploads WHERE created_at<${Date.now() - DAY} AND ${UNUSED}`)[0].n;
+// A photo a lookup reused within the day (touched_at, WP44) counts as used.
+const eligible = () => sql(`SELECT COUNT(*) AS n FROM uploads WHERE created_at<${Date.now() - DAY} AND COALESCE(touched_at,0)<${Date.now() - DAY} AND ${UNUSED}`)[0].n;
 async function fireCron() {
     const r = await fetch(base + '/cdn-cgi/handler/scheduled?cron=17+18+*+*+*', { signal: AbortSignal.timeout(30000) });
     await r.arrayBuffer();

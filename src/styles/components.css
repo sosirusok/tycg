@@ -180,4 +180,4 @@
 .header-notice .icon-btn { flex: none; width: 32px; height: 32px; }
 .menu-sub { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--fs-13); }
 .grade-trial { color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
-.trial-admin { display: grid; gap: 6px; max-width: 560px; margin-bottom: 28px; }
+.trial-admin, .usage-admin { display: grid; gap: 6px; max-width: 560px; margin-bottom: 28px; }

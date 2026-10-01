@@ -1,5 +1,6 @@
 export class ApiError extends Error {
-    constructor(public status: number, message: string) { super(message); }
+    // data: the whole error body, for refusals that carry more than the message (같은 매물's dup).
+    constructor(public status: number, message: string, public data?: any) { super(message); }
 }
 
 export const UNAUTHORIZED_EVENT = 'zg:unauthorized';
@@ -28,7 +29,7 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
     // Right before the throw, so the caller's own error toast comes first (AppProvider skips a duplicate).
     if (response.status === 401) sessionEnded(path);
     if (!parsed) throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    if (!response.ok) throw new ApiError(response.status, body?.error || '요청을 처리하지 못했습니다.');
+    if (!response.ok) throw new ApiError(response.status, body?.error || '요청을 처리하지 못했습니다.', body);
     return body as T;
 }
 
@@ -60,18 +61,47 @@ async function compress(file: File): Promise<Blob> {
     return blob;
 }
 
-export async function uploadPhoto(file: File): Promise<string> {
+// The author's open posts a photo is already in (같은 매물, WP44).
+export type UsedIn = { id: number; title: string; photos: number };
+export type Uploaded = { id: string; reused?: boolean; usedIn: UsedIn[] };
+
+// SHA-256 hex of a file, or null where the browser cannot compute it (the hashes are advisory).
+export async function fileHash(file: Blob): Promise<string | null> {
+    try {
+        if (!globalThis.crypto?.subtle) return null;
+        return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('');
+    } catch { return null; }
+}
+
+// The member's own uploads of these originals: {found: {hash: upload id}, usedIn: {upload id: posts}}.
+// A failed lookup finds nothing, and the photos are simply uploaded.
+export async function lookupPhotos(hashes: string[]): Promise<{ found: Record<string, string>; usedIn: Record<string, UsedIn[]> }> {
+    if (!hashes.length) return { found: {}, usedIn: {} };
+    try { return await api('uploads/lookup', 'POST', { hashes: hashes.slice(0, 100) }); }
+    catch { return { found: {}, usedIn: {} }; }
+}
+
+// Compresses and uploads one photo with X-Photo-Hash '<compressed>,<original>'. src: the original's
+// hash when already computed. The server returns the stored photo when the same original was uploaded
+// before (reused) and the author's open posts it is in.
+export async function sendPhoto(file: File, src?: string | null): Promise<Uploaded> {
+    const original = src === undefined ? await fileHash(file) : src;
     const blob = await compress(file);
+    const out = original ? await fileHash(blob) : null;
     let response: Response;
     try {
-        response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type }, body: blob });
+        response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type, ...original && out ? { 'X-Photo-Hash': out + ',' + original } : {} }, body: blob });
     } catch {
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
     const body = await response.json().catch(() => ({}));
     if (response.status === 401) sessionEnded('uploads');
     if (!response.ok) throw new ApiError(response.status, body.error || '사진을 올리지 못했습니다.');
-    return body.id;
+    return { id: body.id, reused: !!body.reused, usedIn: body.usedIn || [] };
+}
+
+export async function uploadPhoto(file: File): Promise<string> {
+    return (await sendPhoto(file)).id;
 }
 
 export const imageUrl = (id: string) => '/api/images/' + id;

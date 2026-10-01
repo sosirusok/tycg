@@ -1,5 +1,6 @@
 import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import { REPORT_REASONS } from '../shared/market';
+import { kstDayStart } from '../shared/membership';
 import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
@@ -34,8 +35,11 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
+            // 사용량: posts written yesterday (KST) as a relist of the same listing (같은 매물, WP44).
+            db().prepare('SELECT COUNT(*) AS n FROM posts WHERE created_at>=? AND created_at<? AND relist=1').bind(kstDayStart(Date.now()) - 86400000, kstDayStart(Date.now())),
         ]);
-        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n });
+        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n,
+            usage: { relistsYesterday: (r[3].results[0] as any).n } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
     if (p[1] === 'reports' && p[2] && p[3] === 'messages' && !p[4] && method === 'GET') {

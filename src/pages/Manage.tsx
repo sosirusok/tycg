@@ -21,7 +21,7 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
     const tab = (['applications', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number } | null>(null);
+    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; usage?: { relistsYesterday: number } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
@@ -40,7 +40,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
                 : tab === 'members' ? <Members />
                 : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
-                : tab === 'notices' ? <Notices /> : <Settings />}
+                : tab === 'notices' ? <Notices /> : <Settings usage={summary?.usage} />}
         </div>
     </div>;
 }
@@ -212,7 +212,16 @@ function TrialCard() {
     </section>;
 }
 
-function Settings() {
+// 사용량 (WP44 starts it; the photo and auto-bump lines join it later).
+function UsageCard({ usage }: { usage?: { relistsYesterday: number } }) {
+    if (!usage) return null;
+    return <section className="card card-pad usage-admin">
+        <h2 className="card-title">사용량</h2>
+        <p>어제 다시 올린 글 {usage.relistsYesterday.toLocaleString('ko-KR')}</p>
+    </section>;
+}
+
+function Settings({ usage }: { usage?: { relistsYesterday: number } }) {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
     useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); }, [config]);
@@ -223,7 +232,7 @@ function Settings() {
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
-    return <><TrialCard /><form className="settings-form" onSubmit={save}>
+    return <><UsageCard usage={usage} /><TrialCard /><form className="settings-form" onSubmit={save}>
         <label className="field"><span className="field-label">등급 입금 안내</span>
             <textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={notice} onChange={e => setNotice(e.target.value)} placeholder="예: 국민은행 000000-00-000000 (예금주 ○○○)" />
             <span className="field-hint">신청 창 입금 안내에 표시. 비우면 ‘채팅으로 안내’로 표시.</span></label>

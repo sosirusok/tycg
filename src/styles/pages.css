@@ -143,6 +143,9 @@
 /* 완료 sheet (WP43): the post strip, '거래한 회원' radio cards (the last one '사이트 밖 거래 · 기록 없음'),
    '거래가' and the lock line, 16px apart; one primary button in the footer. */
 .complete-sheet { display: grid; gap: 16px; }
+/* 같은 매물 sheet (WP44): the same post strip, then what is the same. */
+.same-sheet { display: grid; gap: 16px; }
+.same-line { margin: 0; color: var(--ink-2); font-size: var(--fs-14); }
 .post-strip { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: var(--r-12); background: var(--fill-2); }
 .post-strip-thumb { flex: none; display: grid; place-items: center; width: 48px; height: 48px; overflow: hidden; border-radius: 8px; background: var(--white); }
 .post-strip-thumb img { width: 100%; height: 100%; object-fit: cover; }
@@ -581,4 +584,6 @@
 @media (max-width: 960px) { .guide-cards { grid-template-columns: 1fr; } }
 /* The 새 글 allowance line above [등록] (from the 4th new post of the day). */
 .ed-fresh { margin-top: 24px; }
+/* '‘제목’ 글에 있는 사진입니다. 끌올' under the photo grid (WP44). */
+.ed-used-bump { padding: 0 2px; border: 0; background: none; color: var(--brand); font: inherit; font-weight: 600; cursor: pointer; }
 .ed-fresh + .ed-bar { margin-top: 8px; }

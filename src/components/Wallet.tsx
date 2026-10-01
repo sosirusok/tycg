@@ -22,6 +22,12 @@ export function walletNow(w: Wallet, now: number): { tokens: number; max: number
     return { tokens, max: w.bumpMax, nextRefillAt: next };
 }
 
+// '15:40' on the Korean clock, rounded up to the minute like the server's messages.
+export function kstClock(t: number) {
+    const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * 3600000);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+
 // '1:20' until the next refill (hours:minutes, rounded up to the minute).
 export function countdown(ms: number) {
     const m = Math.max(1, Math.ceil(ms / 60000));

@@ -74,9 +74,10 @@ function orderedTags(tags: SeasonTag[], highlight: SeasonTag[]) {
     return [...tags].sort((a, b) => Number(hit(b)) - Number(hit(a)) || b.season - a.season);
 }
 
-// Time shown on a row: the last 끌올 when the post was bumped after it was written.
-export function postTime(p: Pick<Post, 'created_at' | 'bumped_at'>) {
-    return (p.bumped_at || 0) - p.created_at > 60000 ? '끌올 ' + relativeTime(p.bumped_at!) : relativeTime(p.created_at);
+// Time shown on a row: the last 끌올 for a bumped post (or a relist at its place), else when it was
+// written. A new post placed ahead of now (새 글 우선) never reads '끌올 방금 전'.
+export function postTime(p: Pick<Post, 'created_at' | 'bumped_at' | 'bump_count'>, now = Date.now()) {
+    return (p.bump_count || 0) > 0 && p.bumped_at && p.bumped_at <= now ? '끌올 ' + relativeTime(p.bumped_at) : relativeTime(p.created_at);
 }
 
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of

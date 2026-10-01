@@ -57,8 +57,11 @@ export type Post = {
     closed_at?: number | null;
     created_at: number;
     updated_at: number;
-    // Last 끌올 (equal to created_at until the first bump).
+    // The place in 최신순: the last 끌올, or created_at. A new post of today's allowance sits 1 hour
+    // ahead (새 글 우선), and a relist of the same listing may sit at its old place (WP44).
     bumped_at?: number;
+    bump_count?: number;
+    relist?: number;
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];
