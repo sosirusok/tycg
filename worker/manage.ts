@@ -37,7 +37,8 @@ async function storageReport() {
     return {
         mode: storageMode(), dbBytes: Number(r[2].meta.size_after) || 0, dbLimit: DB_LIMIT_BYTES, dbPhotoStop: DB_PHOTO_STOP,
         r2Bytes: bytes('r2'), r2Limit: stop > 0 ? stop : R2_SITE_BYTES, r2Warn: R2_WARN_BYTES, r2UploadsToday: counterValue(settings.get('sys:r2_puts'), now), r2DailyUploads: R2_SITE_DAILY_UPLOADS,
-        kvBytes: bytes('kv'), kvLimit: KV_SITE_BYTES, kvTrash: Number((r[2].results[0] as { n: number }).n) || 0, kvDeletesToday: counterValue(settings.get('sys:kv_deletes'), now),
+        // KV holds the keys still waiting in kv_trash too (upload_totals 'kv_trash', 0023).
+        kvBytes: bytes('kv') + bytes('kv_trash'), kvLimit: KV_SITE_BYTES, kvTrash: Number((r[2].results[0] as { n: number }).n) || 0, kvDeletesToday: counterValue(settings.get('sys:kv_deletes'), now),
         d1PhotoBytes: bytes('d1'), d1SiteBytes: D1_SITE_BYTES,
     };
 }
@@ -56,7 +57,8 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
-            // 사용량: posts written yesterday (KST) as a relist of the same listing (같은 매물, WP44).
+            // 사용량: posts written yesterday (KST) as a relist of the same listing (같은 매물, WP44), on the
+            // partial index posts_relist_created (0023).
             db().prepare('SELECT COUNT(*) AS n FROM posts WHERE created_at>=? AND created_at<? AND relist=1').bind(kstDayStart(Date.now()) - 86400000, kstDayStart(Date.now())),
         ]);
         return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n,

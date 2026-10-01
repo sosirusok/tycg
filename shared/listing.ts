@@ -173,3 +173,22 @@ export function photoKeys(images: string[], hashes: Map<string, { hash: string |
         return keys.length ? [...new Set(keys)] : ['u:' + id];
     });
 }
+
+// The fields hash: the first 32 hex characters of the SHA-256 of fieldsHashInput, or null.
+export async function fieldsHash(f: ListingFields | null) {
+    const input = fieldsHashInput(f);
+    if (!input) return null;
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
+    return Array.from(bytes, x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+// One backfilled print (fields NULL) completed by the daily cleanup from its post's stored columns:
+// canonical fields, fields hash, photo keys (the upload ids: those photos predate the hashes, and a relist
+// reusing the same upload still matches) and title key. Pure, so its CPU cost is checked in Node
+// (tests/verify-dup.mjs).
+export type UnfilledPrint = { post_id: number; title_key: string; kind: string; category: string; title: string; details: string; images: string; tags: string | null };
+const parseText = (s: string | null, fallback: any) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
+export async function printFill(r: UnfilledPrint) {
+    const fields = listingFields(r.kind, r.category, parseText(r.details, {}), parseText(r.tags, []));
+    return { id: r.post_id, f: JSON.stringify(fields), h: await fieldsHash(fields), p: JSON.stringify(photoKeys(parseText(r.images, []), new Map())), k: r.title_key || postTitleKey(r.title) };
+}

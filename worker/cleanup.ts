@@ -3,16 +3,21 @@ import { unused } from './files';
 import { deleteR2Photos, deleteKvKeys, getKv, putR2, blobBytes, hasBucket, hasKv, counterValue, utcDate } from './storage';
 import { UNREAD_RECOUNT } from './chat';
 import { postTitleKey } from './posts';
-import { PRINT_DAYS, fieldsHash } from './prints';
-import { listingFields, photoKeys } from '../shared/listing';
+import { PRINT_DAYS } from './prints';
+import { printFill, type UnfilledPrint } from '../shared/listing';
 import { gradeInfo } from '../shared/membership';
 
 const DAY = 86400000;
 // Photos removed per daily run (one SELECT, one DELETE and one R2 call).
 export const PHOTOS_PER_RUN = 100;
 const TITLE_KEYS_PER_ROUND = 200;
-// Backfilled prints filled per daily run (one SELECT and one UPDATE).
-export const PRINTS_PER_RUN = 1000;
+// Backfilled prints filled per daily run (one SELECT and one UPDATE, committed after the main write batch).
+// Each row costs JSON parsing, the canonical fields and a SHA-256 (about 0.1 ms of CPU), and the Free plan
+// gives 10 ms per invocation, so 50 rows keep the fill near 5 ms.
+export const PRINTS_PER_RUN = 50;
+// Open posts written without a print (the previous Worker during a deploy) get one per run, among the
+// newest 2,000 post ids (a rowid range, so the read stays small).
+const MISSING_PRINTS_PER_RUN = 200;
 // Photo retention (decisions item 6): a 완료 post keeps every photo for 90 days, then only its 대표;
 // a deleted post's photos are held 30 days for the manager (the posts_delete_hold trigger, 0022).
 export const RETAIN_DAYS = 90;
@@ -21,20 +26,24 @@ export const RETENTION_PER_RUN = 100;
 // 60 days (an edit makes a new one), which bounds them to about 60 days of posts in D1.
 const THUMB_OPEN_DAYS = 60;
 const THUMBS_PER_RUN = 2000;
-// KV deletes: at most 6 a run, and only while settings 'sys:kv_deletes' ('<UTC date>:<n>') is under 900
-// for the UTC day (KV Free allows 1,000 deletes a day and resets at 00:00 UTC). Tick B (WP52) takes this
-// over; until then the daily cleanup runs it.
-export const KV_DELETES_PER_RUN = 6;
+// KV deletes: at most 100 a run, and only while settings 'sys:kv_deletes' ('<UTC date>:<n>') is under 900
+// for the UTC day (KV Free allows 1,000 deletes a day and resets at 00:00 UTC). While only the daily cron
+// runs them, a run must keep up with what one run can queue (100 unused photos plus the mover's copies).
+// KV operations do not count toward the 50 subrequests. Tick B (WP52) may take this over with a smaller
+// number per run.
+export const KV_DELETES_PER_RUN = 100;
 export const KV_DELETES_PER_DAY = 900;
-// The R2 mover: once a bucket is bound, at most 3 D1 or KV photos a run are copied into R2.
+// The R2 mover: once a bucket is bound, at most 3 photos a run are copied into R2: KV ones first, and at
+// most 1 D1 photo (its base64 text, up to about 1.9 MB, is read on its own and decoded, which costs CPU).
 export const MOVES_PER_RUN = 3;
+const D1_MOVES_PER_RUN = 1;
 
 // "10월 7일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
 type Due = { id: number; user_id: string; grade: string; expires_at: number };
 type Photo = { id: string; storage: string };
-type Movable = { id: string; storage: string; mime: string; data: string | null };
+type Movable = { id: string; storage: string; mime: string };
 
 // A 6-month grade that ends within 7 days gets one manager chat message. A 플러스 무료 체험 never does
 // (its reminders stay in the app: the member's status line and the home end band). A renewal moves the
@@ -45,40 +54,46 @@ const dueReminders = (now: number) => db().prepare(`SELECT g.id,g.user_id,g.grad
     AND NOT EXISTS(SELECT 1 FROM user_grades o WHERE o.user_id=g.user_id AND o.id!=g.id AND o.rank>=g.rank AND (o.expires_at IS NULL OR o.expires_at>g.expires_at))
     ORDER BY g.expires_at LIMIT 50`).bind(now, now + 7 * DAY, 7 * DAY);
 
-// Unused photos the cleanup may remove: no post, chat or draft uses them, nothing touched them for a day,
-// and the delete hold (keep_until) is over.
-const removable = (now: number) => `${unused} AND COALESCE(uploads.keep_until,0)<${Math.floor(now)}`;
+// Unused photos the cleanup may remove: uploaded more than a day ago, no post, chat or draft uses them,
+// nothing touched them for a day (a lookup that reused a photo, WP44, counts as a use), and the delete
+// hold (keep_until) is over. The final DELETE checks all of it again, so a photo reused or attached
+// between the read and the write batch is kept.
+const removable = (now: number) => {
+    const t = Math.floor(now), day = Math.floor(now - DAY);
+    return `uploads.created_at<${day} AND COALESCE(uploads.touched_at,0)<${day} AND ${unused} AND COALESCE(uploads.keep_until,0)<${t}`;
+};
 
 // Daily housekeeping (cron in wrangler.jsonc): expired sessions, finished rate-limit windows, post
 // events older than the caps look back, posts the previous Worker wrote without bumped_at or
 // title_key, grade-end reminders, photos that no post, chat message or draft has used for a day, photo
 // retention, old thumbnails, the KV delete budget and the R2 mover.
 // The Workers Free plan allows 50 subrequests per invocation, so the whole run is set-based: one read
-// call, at most 2 title-key calls, one write batch, one R2 delete and 3 R2 puts (≤ 8 D1 or R2 calls and
-// about 35 statements), plus at most 6 KV deletes and 3 KV reads, whatever the number of rows.
+// call, at most 2 title-key calls, one D1 photo read and 3 R2 puts for the mover, one write batch, one R2
+// delete and the print fill (≤ 10 D1 or R2 calls and about 40 statements), plus at most 100 KV deletes
+// and 3 KV reads, whatever the number of rows. CPU (10 ms on Free) is kept low by the small JS row
+// counts: 50 prints, 1 D1 photo and the title keys.
 export async function cleanup(now = Date.now()) {
     const kv = hasKv(), mover = hasBucket();
     // Call 1: the housekeeping writes and the reads the rest of the run works from.
     const reads = {
         titles: db().prepare("SELECT id,title FROM posts WHERE title_key='' LIMIT ?").bind(TITLE_KEYS_PER_ROUND),
         due: dueReminders(now),
-        // A lookup that reused a photo (touched_at, WP44) counts as a use too.
-        photos: db().prepare(`SELECT id,storage FROM uploads WHERE created_at<? AND COALESCE(touched_at,0)<? AND ${removable(now)} LIMIT ?`).bind(now - DAY, now - DAY, PHOTOS_PER_RUN),
+        photos: db().prepare(`SELECT id,storage FROM uploads WHERE ${removable(now)} LIMIT ?`).bind(PHOTOS_PER_RUN),
         prints: db().prepare(`SELECT pp.post_id,pp.title_key,p.kind,p.category,p.title,p.details,p.images,
             (SELECT json_group_array(json_object('tier',s.tier,'season',s.season)) FROM post_seasons s WHERE s.post_id=p.id) AS tags
             FROM post_prints pp INDEXED BY post_prints_unfilled JOIN posts p ON p.id=pp.post_id WHERE pp.fields IS NULL ORDER BY pp.post_id DESC LIMIT ?`).bind(PRINTS_PER_RUN),
         // 완료 posts past 90 days that still have more than the 대표, without a pending report or a trade
         // recorded in the last 7 days.
-        retain: db().prepare(`SELECT p.id FROM posts p WHERE p.status='closed' AND COALESCE(p.closed_at,p.updated_at)<? AND json_array_length(p.images)>1
+        retain: db().prepare(`SELECT p.id FROM posts p WHERE p.status='closed' AND COALESCE(p.closed_at,p.updated_at)<? AND json_valid(p.images) AND json_array_length(p.images)>1
             AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending')
             AND NOT EXISTS(SELECT 1 FROM trades t WHERE t.post_id=p.id AND t.created_at>?) LIMIT ?`).bind(now - RETAIN_DAYS * DAY, now - 7 * DAY, RETENTION_PER_RUN),
         trash: db().prepare('SELECT id FROM kv_trash ORDER BY created_at LIMIT ?').bind(kv ? KV_DELETES_PER_RUN : 0),
         kvCount: db().prepare("SELECT value FROM settings WHERE key='sys:kv_deletes'"),
         // KV first (the smaller store), then D1.
-        movableKv: db().prepare(`SELECT u.id,u.storage,u.mime,NULL AS data FROM uploads u INDEXED BY uploads_movable WHERE u.storage IN ('d1','kv') AND u.storage='kv' LIMIT ?`)
+        movableKv: db().prepare(`SELECT u.id,u.storage,u.mime FROM uploads u INDEXED BY uploads_movable WHERE u.storage IN ('d1','kv') AND u.storage='kv' LIMIT ?`)
             .bind(mover && kv ? MOVES_PER_RUN : 0),
-        movableD1: db().prepare(`SELECT u.id,u.storage,u.mime,b.data FROM uploads u INDEXED BY uploads_movable LEFT JOIN upload_blobs b ON b.id=u.id WHERE u.storage IN ('d1','kv') AND u.storage='d1' LIMIT ?`)
-            .bind(mover ? MOVES_PER_RUN : 0),
+        movableD1: db().prepare(`SELECT u.id,u.storage,u.mime FROM uploads u INDEXED BY uploads_movable WHERE u.storage IN ('d1','kv') AND u.storage='d1' LIMIT ?`)
+            .bind(mover ? D1_MOVES_PER_RUN : 0),
     };
     const names = Object.keys(reads) as (keyof typeof reads)[];
     const r = await db().batch([
@@ -91,17 +106,20 @@ export async function cleanup(now = Date.now()) {
         // member who left.
         db().prepare('DELETE FROM post_prints WHERE gone_at<?').bind(now - PRINT_DAYS * DAY),
         db().prepare('DELETE FROM post_prints WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL)'),
+        // Open posts without a print (written by the previous Worker after 0021 ran) get an empty one,
+        // which the fill below completes on later runs.
+        db().prepare(`INSERT OR IGNORE INTO post_prints(post_id,user_id,kind,category,title_key,fields) SELECT p.id,p.author_id,p.kind,p.category,p.title_key,NULL FROM posts p
+            WHERE p.id>(SELECT COALESCE(MAX(id),0) FROM posts)-2000 AND p.status!='closed' AND NOT EXISTS(SELECT 1 FROM post_prints pp WHERE pp.post_id=p.id)
+            AND EXISTS(SELECT 1 FROM users u WHERE u.id=p.author_id AND u.deleted_at IS NULL) LIMIT ?`).bind(MISSING_PRINTS_PER_RUN),
         db().prepare(`UPDATE posts SET thumb=NULL WHERE id IN (SELECT id FROM posts INDEXED BY posts_thumb WHERE thumb IS NOT NULL
             AND ((status='closed' AND COALESCE(closed_at,updated_at)<?) OR (status!='closed' AND bumped_at<?)) LIMIT ?)`).bind(now - RETAIN_DAYS * DAY, now - THUMB_OPEN_DAYS * DAY, THUMBS_PER_RUN),
         ...names.map(n => reads[n]),
     ]);
-    const got = <T>(n: keyof typeof reads) => r[7 + names.indexOf(n)].results as T[];
+    const got = <T>(n: keyof typeof reads) => r[8 + names.indexOf(n)].results as T[];
     const titles = got<{ id: number; title: string }>('titles'), due = got<Due>('due'), photos = got<Photo>('photos');
     const retain = got<{ id: number }>('retain').map(p => p.id);
     await fillTitleKeys(titles);
     const writes: D1PreparedStatement[] = [];
-    const prints = await fillPrints(got<Unfilled>('prints'));
-    if (prints) writes.push(prints);
     const remindAt = writes.length;
     if (due.length) writes.push(...remindGradeEnds(due, now));
     // KV deletes under the day's budget, one by one; only the ids that went leave kv_trash.
@@ -113,7 +131,7 @@ export async function cleanup(now = Date.now()) {
     const moved: Photo[] = [];
     for (const m of [...got<Movable>('movableKv'), ...got<Movable>('movableD1')].slice(0, MOVES_PER_RUN)) {
         try {
-            const bytes = m.storage === 'd1' ? (m.data ? blobBytes(m.data) : null) : await getKv(m.id);
+            const bytes = m.storage === 'd1' ? await d1Bytes(m.id) : await getKv(m.id);
             if (!bytes) continue;
             await putR2(m.id, bytes, m.mime);
             moved.push({ id: m.id, storage: m.storage });
@@ -158,6 +176,9 @@ export async function cleanup(now = Date.now()) {
     // A photo deleted while it was being copied leaves an R2 object nobody uses: it goes with the rest.
     const orphans = moved.filter((_, i) => !w[movedFirst + i]?.results.length).map(m => m.id);
     await deleteR2Photos([...gone.filter(p => p.storage === 'r2').map(p => p.id), ...orphans]);
+    // Last, on its own: the print fill, so a slow fill can never keep the work above from committing.
+    const prints = await fillPrints(got<UnfilledPrint>('prints'));
+    if (prints) await prints.run();
     return { removed: gone.length, reminded: due.length ? w[remindAt + 1].meta.changes : 0, trimmed: retain.length, kvDeleted: kvDeleted.length, moved: moved.length - orphans.length };
 }
 
@@ -198,18 +219,17 @@ function remindGradeEnds(due: Due[], now: number) {
     ];
 }
 
-type Unfilled = { post_id: number; title_key: string; kind: string; category: string; title: string; details: string; images: string; tags: string | null };
-const parseJson = (s: string | null, fallback: any) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
+// The bytes of one D1 photo for the mover, read on its own.
+async function d1Bytes(id: string) {
+    const row = await db().prepare('SELECT data FROM upload_blobs WHERE id=?').bind(id).first<{ data: string }>();
+    return row ? blobBytes(row.data) : null;
+}
 
 // The prints the migration backfilled (fields NULL) get their canonical fields, fields hash, photo keys
-// and title key in one UPDATE. Those posts' photos predate the hashes, so each photo is keyed by its
-// upload id, which still matches a relist that reuses the same upload.
-async function fillPrints(rows: Unfilled[]) {
+// and title key in one UPDATE (shared/listing.ts printFill).
+async function fillPrints(rows: UnfilledPrint[]) {
     if (!rows.length) return null;
-    const list = await Promise.all(rows.map(async r => {
-        const fields = listingFields(r.kind, r.category, parseJson(r.details, {}), parseJson(r.tags, []));
-        return { id: r.post_id, f: JSON.stringify(fields), h: await fieldsHash(fields), p: JSON.stringify(photoKeys(parseJson(r.images, []), new Map())), k: r.title_key || postTitleKey(r.title) };
-    }));
+    const list = await Promise.all(rows.map(printFill));
     const rowsJson = JSON.stringify(list), at = (f: string) => `json_extract(value,'$.${f}') AS ${f}`;
     return db().prepare(`UPDATE post_prints SET fields=j.f,fields_hash=j.h,photos=j.p,title_key=j.k
         FROM (SELECT ${['id', 'f', 'h', 'p', 'k'].map(at).join(',')} FROM json_each(?)) j WHERE post_prints.post_id=j.id AND post_prints.fields IS NULL`).bind(rowsJson);

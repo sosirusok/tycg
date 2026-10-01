@@ -6,9 +6,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // KV photo storage (WP45): R2 off, the PHOTOS namespace bound. scripts/test-local.mjs runs this on a
-// short-lived 8792 server (no R2, no assets, --test-scheduled) twice: TEST_PHASE=main, then
+// short-lived 8791 server (no R2, no assets, --test-scheduled) twice: TEST_PHASE=main, then
 // TEST_PHASE=fail with KV_TEST_FAIL=on (every KV put and delete throws).
-const base = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8792').origin;
+const base = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8791').origin;
 assert.ok(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(base), 'Local Worker origin required.');
 const phase = process.env.TEST_PHASE || 'main';
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -78,10 +78,12 @@ const upload = bytes => call('uploads', 'POST', undefined, { type: 'image/png', 
 const storageOf = id => sql(`SELECT storage FROM uploads WHERE id='${id}'`)[0]?.storage;
 
 if (phase === 'main') {
-    // Static: the deploy finds the namespace before it creates one, and the KV step never fails the deploy.
+    // Static: the deploy finds the namespace before it creates one, retries the listing and stops (never
+    // drops a namespace in use) when it still cannot read it; only a failed create goes on without KV.
     const yml = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
     const step = yml.slice(yml.indexOf('- name: Find or create the KV namespace'), yml.indexOf('- name: Put real ids into wrangler.jsonc'));
-    check(step.includes('continue-on-error: true'), 'deploy.yml: the KV step continues on error');
+    check(!step.includes('continue-on-error'), 'deploy.yml: a KV listing failure is not ignored');
+    check(/for attempt in 1 2 3; do\s+if kv="\$\(find_kv\)"/.test(step) && step.includes('::error::KV 저장소 목록을 확인하지 못했습니다.') && step.includes('USE_KV를 false로'), 'deploy.yml: the listing is retried, then the deploy stops with a Korean error');
     check(step.indexOf('kv namespace list') > 0 && step.indexOf('kv namespace list') < step.indexOf('kv namespace create'), 'deploy.yml: the namespace is found before it is created');
     check(!/kv namespace delete|kv namespace rename/.test(yml), 'deploy.yml: nothing deletes or replaces a namespace');
     check(/kv_namespaces: \[\{ binding: "PHOTOS"/.test(yml), 'deploy.yml: the binding is patched as PHOTOS');

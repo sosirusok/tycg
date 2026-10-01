@@ -18,7 +18,7 @@ import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_good_count?: number };
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -292,8 +292,9 @@ export function Detail({ id }: { id: string }) {
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
-                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing. */}
-                {mine && usage && (slots > 0
+                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing.
+                    A completed post shows it only while still featured, so it can be turned off. */}
+                {mine && usage && (post.status !== 'closed' || (!!post.featured && slots > 0)) && (slots > 0
                     ? <div className="promo-row">
                         <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || suspended || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
                         <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
@@ -352,14 +353,14 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
-    // '거래 3회 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
+    // '거래 3회 · 거금 35만원 · 후기 좋아요 2' once there is any, then '최근 접속' when it is known (not on one's own post,
     // as on the profile).
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
-            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good)}</span>}
+            {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>}
             {seen && <span className="author-stats author-seen">{seen}</span>}</span>
         <ChevronRight size={18} className="muted" />
     </Link>;

@@ -187,6 +187,16 @@ export default function Editor({ id }: { id?: string }) {
         setVersion(v => v + 1);
     };
     const fromDraft = ({ savedAt: _s, ...rest }: Draft) => { void _s; return normalize(rest); };
+    // Photos that came with a restored draft (or the post) are looked up too, so the used-photo line
+    // below the grid also shows for them.
+    useEffect(() => {
+        const ids = formRef.current.images.slice(0, 100);
+        if (!version || !ids.length) return;
+        let alive = true;
+        api<{ usedIn: Record<string, UsedIn[]> }>('uploads/lookup', 'POST', { ids })
+            .then(d => { if (alive) setUsedIn(u => ({ ...u, ...d.usedIn })); }).catch(() => {});
+        return () => { alive = false; };
+    }, [version]);
 
     useEffect(() => {
         if (!me) return;
@@ -424,9 +434,18 @@ export default function Editor({ id }: { id?: string }) {
         return [...counts.values()].find(c => 2 * c.n > Math.max(form.images.length, c.post.photos))?.post || null;
     })();
     async function bumpUsed(postId: number) {
-        try { await api(`posts/${postId}/bump`, 'POST'); toast('끌올 완료'); }
+        try {
+            const d = await api<{ nextBumpAt?: number }>(`posts/${postId}/bump`, 'POST');
+            toast('끌올 완료');
+            // The line then shows when that post can be bumped again.
+            const next = d.nextBumpAt ?? null;
+            setUsedIn(u => Object.fromEntries(Object.entries(u).map(([k, list]) => [k, list.map(p => p.id === postId ? { ...p, bumpAt: next } : p)])));
+        }
         catch (e) { toast.error(errorText(e)); }
     }
+    // While that post cannot be bumped yet (its gap, its 새 글 우선 hour or an empty wallet) the line
+    // says from when instead of offering a 끌올 that would only fail.
+    const usedWait = photoPost?.bumpAt && photoPost.bumpAt > Date.now() ? photoPost.bumpAt : 0;
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     if (loadError) return <div className="container page"><EmptyState title="글을 불러오지 못했습니다" text={loadError} /></div>;
     if (!loaded) return <div className="container page"><SkeletonRows count={3} height={180} /></div>;
@@ -611,7 +630,7 @@ export default function Editor({ id }: { id?: string }) {
                     </div>
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
                     {photoLine && !progress && <p className="field-hint mt-8 ed-photo-usage">{photoLine}</p>}
-                    {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button></p>}
+                    {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. {usedWait ? <span className="nowrap">{readyClock(usedWait)}부터 끌올 가능</span> : <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button>}</p>}
                 </Section>
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}

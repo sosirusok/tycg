@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
 import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound, X } from 'lucide-react';
@@ -49,18 +49,24 @@ function rememberBoard(params: URLSearchParams) {
     } catch { /* not remembered */ }
 }
 
-// A sign-up the per-address cap kept from the trial gets one closable line under the header, once
-// per browser session.
+// A sign-up the per-address cap kept from the trial is told once: one closable line under the header on
+// the home page, never again once it has been seen (this browser) and never while the member holds a
+// paid grade.
 const CAPPED_KEY = 'zg:trial-capped';
-function CappedNotice() {
-    const { trial } = useApp();
-    const [closed, setClosed] = useState(() => { try { return sessionStorage.getItem(CAPPED_KEY) === '1'; } catch { return false; } });
-    if (!trial?.capped || closed) return null;
-    const close = () => { setClosed(true); try { sessionStorage.setItem(CAPPED_KEY, '1'); } catch { /* not remembered */ } };
+function CappedNotice({ home }: { home: boolean }) {
+    const { trial, me } = useApp();
+    const [closed, setClosed] = useState(() => { try { return localStorage.getItem(CAPPED_KEY) === '1'; } catch { return false; } });
+    const show = !!trial?.capped && !closed && home && !!me && me.grade === 'normal';
+    const shown = useRef(false);
+    useEffect(() => {
+        if (show) { shown.current = true; try { localStorage.setItem(CAPPED_KEY, '1'); } catch { /* shown again next time */ } }
+        else if (!home && shown.current) setClosed(true);
+    }, [show, home]);
+    if (!show) return null;
     return <div className="header-notice" role="status">
         <div className="container header-notice-inner">
             <p>같은 곳에서 가입한 계정이 많아 무료 체험이 적용되지 않았습니다.</p>
-            <button type="button" className="icon-btn" aria-label="닫기" onClick={close}><X size={18} /></button>
+            <button type="button" className="icon-btn" aria-label="닫기" onClick={() => setClosed(true)}><X size={18} /></button>
         </div>
     </div>;
 }
@@ -154,7 +160,7 @@ function Shell() {
                 </div>
             </div>
         </header>
-        <CappedNotice />
+        <CappedNotice home={page === ''} />
         <main id="main">
             <Suspense fallback={<div className="container page"><SkeletonRows /></div>}>
                 {page === '' ? <Home />

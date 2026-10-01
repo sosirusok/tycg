@@ -1,8 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { db, fail, currentUser, requireUser, json, limit, body, ApiError } from './http';
-import { SITE_RULES } from '../shared/membership';
+import type { User } from '../shared/market';
+import { SITE_RULES, perksOf, walletOf } from '../shared/membership';
 import {
-    putPhoto, getPhoto, removeRowStatements, deleteR2Photo, photoLimit, photoLimitText, storageMode, dbSize, testDbBytes, testStorage, userLimit, userLimitText, utcDate,
+    putPhoto, getPhoto, removeRowStatements, deleteR2Photo, photoLimit, photoLimitText, storageMode, dbSize, testDbBytes, testStorage, userLimit, userLimitText, utcDate, counterValue,
     D1_USER_BYTES, D1_SITE_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, STORAGE_FULL, DAILY_FULL, type Storage,
 } from './storage';
 
@@ -16,15 +17,22 @@ export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_i
 const HEX64 = /^[0-9a-f]{64}$/;
 
 // The author's open posts that use these uploads ('‘제목’ 글에 있는 사진입니다.' in the editor), with
-// how many photos each post has.
-type UsedRow = { upload_id: string; id: number; title: string; photos: number };
+// how many photos each post has and when it can be bumped (bumpAt, null: now; the same rule as the 409
+// 같은 매물 sheet: its own gap, its 새 글 우선 hour and the wallet refill).
+type UsedRow = { upload_id: string; id: number; title: string; photos: number; bumped_at: number; created_at: number; bump_count: number; bump_tokens: number; bump_at: number };
 function usedInStatement(ownerId: string, uploadsSql: string, args: unknown[]) {
-    return db().prepare(`SELECT pi.upload_id,p.id,p.title,json_array_length(p.images) AS photos FROM post_images pi JOIN posts p ON p.id=pi.post_id
+    return db().prepare(`SELECT pi.upload_id,p.id,p.title,json_array_length(p.images) AS photos,p.bumped_at,p.created_at,p.bump_count,w.bump_tokens,w.bump_at
+        FROM post_images pi JOIN posts p ON p.id=pi.post_id JOIN users w ON w.id=p.author_id
         WHERE pi.upload_id IN (${uploadsSql}) AND p.author_id=? AND p.status!='closed' LIMIT 200`).bind(...args, ownerId);
 }
-function usedInMap(rows: UsedRow[]) {
-    const out: Record<string, { id: number; title: string; photos: number }[]> = {};
-    for (const r of rows) (out[r.upload_id] ||= []).push({ id: r.id, title: r.title, photos: Number(r.photos) || 0 });
+function usedInMap(rows: UsedRow[], u: User, now: number) {
+    const perks = perksOf(u), out: Record<string, { id: number; title: string; photos: number; bumpAt: number | null }[]> = {};
+    for (const r of rows) {
+        const wallet = walletOf(r.bump_tokens, r.bump_at, perks, now);
+        const gapEnd = (r.bump_count ? r.bumped_at : r.created_at) + perks.bumpGapMinutes * 60000;
+        const t = Math.max(gapEnd, r.bumped_at > now ? r.bumped_at : 0, wallet.tokens < 1 && wallet.nextRefillAt ? wallet.nextRefillAt : 0);
+        (out[r.upload_id] ||= []).push({ id: r.id, title: r.title, photos: Number(r.photos) || 0, bumpAt: t > now ? t : null });
+    }
     return out;
 }
 
@@ -58,7 +66,8 @@ async function readBody(req: Request, max: number, mode: Storage) {
 }
 
 type Totals = Record<string, number>;
-const fullUser = (mode: Storage) => `사진 용량(1인 ${userLimitText(mode)})을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.`;
+// Photos of a deleted post stay held (and counted) for 30 days (posts_delete_hold, 0022).
+const fullUser = (mode: Storage) => `사진 용량(1인 ${userLimitText(mode)})을 넘었습니다. 안 쓰는 사진은 하루 뒤, 삭제한 글의 사진은 30일 뒤 정리됩니다.`;
 
 // The D1 budgets: the member's 30MB (409, or 507 when D1 is only the KV fallback), the site's 300MB of
 // D1 photos (the first site limit), then the whole database below 420MB of its 500MB (decisions item 6).
@@ -88,15 +97,14 @@ async function upload(req: Request) {
     let mode: Storage = testStorage(req) ?? storageMode(), fallback = false;
     // Photos that no post, chat or draft uses are removed a day after upload (see cleanup.ts).
     // users.upload_rows/upload_bytes (0018) and upload_totals (0022) are kept by triggers on uploads, so
-    // this reads a few rows instead of every upload. In R2 mode the same call counts the day's put
-    // (settings 'sys:r2_puts', '<UTC date>:<n>') and reads the manager's stop ('sys:r2_site_bytes').
+    // this reads a few rows instead of every upload. In R2 mode the same call reads the day's puts
+    // (settings 'sys:r2_puts', '<UTC date>:<n>', counted after each stored photo below) and the manager's
+    // stop ('sys:r2_site_bytes').
     const r = await db().batch([
         db().prepare('SELECT upload_rows AS n,upload_bytes AS bytes FROM users WHERE id=?').bind(u.id),
         db().prepare('SELECT storage,bytes FROM upload_totals'),
         ...mode === 'r2' ? [
-            db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:r2_puts',?,?) ON CONFLICT(key) DO UPDATE SET
-                value=CASE WHEN settings.value LIKE ? THEN ?||':'||(CAST(substr(settings.value,12) AS INTEGER)+1) ELSE excluded.value END,updated_at=excluded.updated_at RETURNING value`)
-                .bind(today + ':1', now, today + ':%', today),
+            db().prepare("SELECT value FROM settings WHERE key='sys:r2_puts'"),
             db().prepare("SELECT value FROM settings WHERE key='sys:r2_site_bytes'"),
         ] : [],
     ]);
@@ -110,14 +118,14 @@ async function upload(req: Request) {
     const size = bytes.byteLength;
     if (mode === 'r2') {
         if (member && mine && mine.bytes + size > userLimit('r2')) fail(409, fullUser('r2'));
-        const puts = Number(String((r[2].results[0] as { value?: string } | undefined)?.value || '').split(':')[1]) || 0;
-        if (puts > R2_SITE_DAILY_UPLOADS) fail(507, DAILY_FULL);
+        if (counterValue((r[2].results[0] as { value?: string } | undefined)?.value, now) >= R2_SITE_DAILY_UPLOADS) fail(507, DAILY_FULL);
         const stop = Number((r[3].results[0] as { value?: string } | undefined)?.value);
         if ((totals.r2 || 0) + size > (stop > 0 ? stop : R2_SITE_BYTES)) fail(507, STORAGE_FULL);
     } else if (mode === 'kv') {
         if (member && mine && mine.bytes + size > userLimit('kv')) fail(409, fullUser('kv'));
-        // KV full for the site: D1 takes the photo if its budget allows.
-        if ((totals.kv || 0) + size > KV_SITE_BYTES) { mode = 'd1'; fallback = true; }
+        // KV full for the site: D1 takes the photo if its budget allows. Keys waiting in kv_trash still
+        // use KV space (upload_totals 'kv_trash', kept by triggers since 0023).
+        if ((totals.kv || 0) + (totals.kv_trash || 0) + size > KV_SITE_BYTES) { mode = 'd1'; fallback = true; }
     }
     if (mode === 'd1') await checkD1(req, u.id, member, size, totals, r[r.length - 1].meta, fallback);
     // X-Photo-Hash '<compressed>,<original>' (SHA-256 hex, computed by the browser) is advisory: a
@@ -134,10 +142,16 @@ async function upload(req: Request) {
         ]);
         const reused = (prev.results[0] as { id: string } | undefined)?.id;
         if (!reused) fail(409, '잠시 후 다시 시도해 주세요.');
-        return json({ id: reused, reused: true, usedIn: usedInMap(used.results as UsedRow[])[reused] || [] }, 200);
+        return json({ id: reused, reused: true, usedIn: usedInMap(used.results as UsedRow[], u, now)[reused] || [] }, 200);
     }
     const drop = () => db().prepare('DELETE FROM uploads WHERE id=?').bind(id).run();
-    try { await putPhoto(id, bytes, mime, mode); }
+    try {
+        await putPhoto(id, bytes, mime, mode);
+        // The day's R2 puts count only photos actually written (not refusals or reused photos).
+        if (mode === 'r2') await db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:r2_puts',?,?) ON CONFLICT(key) DO UPDATE SET
+            value=CASE WHEN settings.value LIKE ? THEN ?||':'||(CAST(substr(settings.value,12) AS INTEGER)+1) ELSE excluded.value END,updated_at=excluded.updated_at`)
+            .bind(today + ':1', now, today + ':%', today).run();
+    }
     catch (e) {
         if (mode !== 'kv' || e instanceof ApiError) { await drop(); throw e; }
         // KV refused the put (for example the Free plan's 1,000 writes a day): D1 if its budget allows.
@@ -165,6 +179,13 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     // compressed nor uploaded again, and the match counts as a use for the unused-photo cleanup.
     if (p[0] === 'uploads' && p[1] === 'lookup' && !p[2] && method === 'POST') {
         const u = await requireUser(req), b = await body(req);
+        // {ids}: the editor's photos restored with a draft; only the posts they are in (no touch).
+        if (Array.isArray(b.ids)) {
+            const ids = [...new Set(b.ids.filter((v: unknown): v is string => typeof v === 'string' && v.length <= 64))].slice(0, 100);
+            if (!ids.length) return json({ usedIn: {} });
+            const used = await usedInStatement(u.id, 'SELECT value FROM json_each(?)', [JSON.stringify(ids)]).all<UsedRow>();
+            return json({ usedIn: usedInMap(used.results, u, Date.now()) });
+        }
         const hashes = Array.isArray(b.hashes) ? [...new Set(b.hashes.filter((h: unknown): h is string => typeof h === 'string' && HEX64.test(h)))].slice(0, 100) : [];
         if (!hashes.length) return json({ found: {}, usedIn: {} });
         const list = JSON.stringify(hashes), now = Date.now();
@@ -177,7 +198,7 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
         for (const r of touched.results as { id: string; hash: string | null; src_hash: string | null }[]) {
             for (const h of [r.src_hash, r.hash]) if (h && hashes.includes(h) && !found[h]) found[h] = r.id;
         }
-        return json({ found, usedIn: usedInMap(used.results as UsedRow[]) });
+        return json({ found, usedIn: usedInMap(used.results as UsedRow[], u, now) });
     }
     if (p[0] === 'uploads' && p[1] === 'usage' && !p[2] && method === 'GET') {
         const u = await requireUser(req);

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 // R2 mode (WP45). TEST_PHASE=main runs on 8790 (R2 bound): the 1GB per member budget, the site guards,
 // 조회수 inside GET posts/:id?view=1, manage/storage and caching. TEST_PHASE=mover runs on a short-lived
-// 8792 server with both R2 and KV bound (no assets, --test-scheduled, TEST_HOOKS=on): the R2 mover.
+// 8791 server with both R2 and KV bound (no assets, --test-scheduled, TEST_HOOKS=on): the R2 mover.
 const base = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790').origin;
 assert.ok(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(base), 'Local Worker origin required.');
 const phase = process.env.TEST_PHASE || 'main';
@@ -139,13 +139,15 @@ if (phase === 'main') {
         const got = await a.call('images/' + id);
         equal([got.status, Buffer.compare(Buffer.from(got.bytes), Buffer.from(bytes[i]))], [200, 0], `moved photo ${i + 1} still serves the same bytes`);
     }
-    // D1 rows follow once no KV row is left: each run moves up to 3, and their D1 bytes go.
+    // D1 rows follow KV rows: each run moves up to 3 photos, KV first and at most 1 D1 photo (its base64
+    // text is read on its own), and their D1 bytes go.
     const d1 = await upload('d1', png.slice(0, 5000));
     equal(storageOf(d1.data.id), 'd1', 'a D1 row before the mover');
-    const movable = () => sql("SELECT COUNT(*) AS n FROM uploads WHERE storage IN ('d1','kv')")[0].n;
-    const before = movable();
+    const count = s => sql(`SELECT COUNT(*) AS n FROM uploads WHERE storage='${s}'`)[0].n;
+    const movable = () => count('kv') + count('d1');
+    const before = movable(), expected = Math.min(3, Math.min(3, count('kv')) + Math.min(1, count('d1')));
     await fireCron();
-    check(movable() === Math.max(0, before - 3), 'one run moves 3 more photos');
+    check(movable() === before - expected, `one run moves ${expected} more photos (KV first, at most 1 D1)`);
     const moved = sql("SELECT u.id,b.id AS blob FROM uploads u LEFT JOIN upload_blobs b ON b.id=u.id WHERE u.storage='r2' AND u.created_at>" + (Date.now() - 3600000));
     check(moved.every(r => r.blob === null), 'moved rows keep no D1 copy');
     // The old KV copies go through kv_trash (the KV delete budget), and later runs delete them.

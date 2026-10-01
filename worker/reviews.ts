@@ -60,6 +60,9 @@ async function tradeOf(postId: number, now = Date.now()) {
 
 const blockedPair = 'NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?))';
 const AMOUNT_MAX = 1000000000;
+// The most an accepted 제시 can back on a post that never listed a price (decisions item 2, review fix):
+// 30만원, about a typical account sale; a higher trade still counts, with 거금 capped there.
+export const OFFER_BACKING_MAX = 300000;
 
 // 거래가 (WP43): 1,000원 steps from 1,000원 to 10억; a priced 판매 caps at 즉거가 and a 구매 with a MAX at
 // the MAX; 교환 stores none. Without one (an older client) it is the accepted 제시, else the post price.
@@ -102,15 +105,21 @@ export async function planTrade(post: any, u: User, partnerId: unknown, rawAmoun
     const authorBuys = post.kind === 'buy' || post.kind === 'proxy_request';
     const sellerId = authorBuys ? partner.id : post.author_id, buyerId = authorBuys ? post.author_id : partner.id;
     const id = crypto.randomUUID(), cutoff = now - ANSWER_DAYS * DAY;
-    // Backing: the highest price the post ever listed (the MAX of a 구매), or the highest 제시 its other member made.
-    const backing = `(SELECT MAX(x) FROM (SELECT price AS x FROM posts WHERE id=? UNION ALL SELECT price FROM post_price_history WHERE post_id=? UNION ALL SELECT amount FROM offers WHERE post_id=? AND sender_id=?))`;
+    // Backing: the highest price the post ever listed (the MAX of a 구매); without one, the partner's
+    // 제시 that is accepted at this moment, capped at OFFER_BACKING_MAX (backing_offer=1, shown apart in
+    // MemberPanel). A declined, withdrawn or released 제시 never backs anything, and an alt pair cannot
+    // add more than the cap per trade through a no-price post.
+    const listed = '(SELECT MAX(x) FROM (SELECT price AS x FROM posts WHERE id=? UNION ALL SELECT price FROM post_price_history WHERE post_id=?))';
+    const offered = "(SELECT MIN(MAX(amount),?) FROM offers WHERE post_id=? AND sender_id=? AND status='accepted')";
+    const backing = `COALESCE(${listed},${offered})`, backingOffer = `(${listed} IS NULL AND ${offered} IS NOT NULL)`;
+    const backingArgs = [post.id, post.id, OFFER_BACKING_MAX, post.id, partner.id];
     const tags = '(SELECT json_group_array(json_object(\'tier\',tier,\'season\',season)) FROM post_seasons WHERE post_id=?)';
     const statements = [
         db().prepare(`DELETE FROM trades WHERE post_id=? AND confirmed_at IS NULL AND author_id IS NOT NULL AND removed_at IS NULL AND created_at<? AND ${guard}`).bind(post.id, cutoff, ...guardArgs),
-        db().prepare(`INSERT OR IGNORE INTO trades(id,post_id,seller_id,buyer_id,price,created_at,author_id,kind,category,title,tags,backing)
-            SELECT ?,?,?,?,?,?,?,?,?,?,COALESCE(${tags},'[]'),${backing} WHERE ${guard} AND ${blockedPair}
+        db().prepare(`INSERT OR IGNORE INTO trades(id,post_id,seller_id,buyer_id,price,created_at,author_id,kind,category,title,tags,backing,backing_offer)
+            SELECT ?,?,?,?,?,?,?,?,?,?,COALESCE(${tags},'[]'),${backing},${backingOffer} WHERE ${guard} AND ${blockedPair}
                 AND (SELECT COUNT(*) FROM trade_log WHERE post_id=? AND event='ask')<?`)
-            .bind(id, post.id, sellerId, buyerId, price, now, u.id, post.kind, post.category, post.title, post.id, post.id, post.id, post.id, partner.id, ...guardArgs, u.id, otherId, otherId, u.id, post.id, ASK_LIMIT),
+            .bind(id, post.id, sellerId, buyerId, price, now, u.id, post.kind, post.category, post.title, post.id, ...backingArgs, ...backingArgs, ...guardArgs, u.id, otherId, otherId, u.id, post.id, ASK_LIMIT),
         db().prepare("INSERT INTO trade_log(post_id,actor_id,target_id,event,created_at) SELECT ?,?,?,'ask',? WHERE EXISTS(SELECT 1 FROM trades WHERE id=?)").bind(post.id, u.id, otherId, now, id),
         ...guardedMessageStatements(partner.conversation_id, u.id, TRADE_ASK_TEXT, 'review', id, 'EXISTS(SELECT 1 FROM trades WHERE id=?)', [id], now),
     ];
@@ -239,10 +248,11 @@ async function listReviews(userId: string, url: URL) {
     return json({ reviews, total: (count.results[0] as any)?.n || 0, page });
 }
 
-// The manager's view of a member's trades (latest 20, removed ones left out) with 거래가 and backing,
+// The manager's view of a member's trades (latest 20, removed ones left out) with 거래가 and backing
+// (backing_offer: it came from an accepted 제시),
 // for the member panel; an expired pending request is left out too.
 export function memberTradesStatement(userId: string, now = Date.now()) {
-    return db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,t.backing,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,COALESCE(NULLIF(t.title,''),p.title) AS title,o.nickname AS partner_nickname,o.deleted_at AS partner_deleted_at
+    return db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,t.backing,t.backing_offer,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,COALESCE(NULLIF(t.title,''),p.title) AS title,o.nickname AS partner_nickname,o.deleted_at AS partner_deleted_at
         FROM trades t LEFT JOIN posts p ON p.id=t.post_id LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
         WHERE (t.seller_id=? OR t.buyer_id=?) AND t.removed_at IS NULL AND (t.confirmed_at IS NOT NULL OR t.author_id IS NULL OR t.created_at>=?) ORDER BY t.created_at DESC LIMIT 20`).bind(userId, userId, userId, now - ANSWER_DAYS * DAY);
 }

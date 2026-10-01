@@ -153,16 +153,17 @@ jobs:
               exit 1
             fi
             if [ "$r2" != "true" ]; then
-              echo "::notice title=R2 미사용::이 계정은 R2에 가입되어 있지 않아(10042) 사진을 D1에 저장하는 방식으로 배포합니다."
+              echo "::notice title=R2 미사용::이 계정은 R2에 가입되어 있지 않아(10042) R2 없이 배포합니다. 사진은 KV(없으면 D1)에 저장합니다."
             fi
           fi
           echo "R2_ENABLED=$r2" >> "$GITHUB_ENV"
 
       # Photos go to KV while R2 is off (KV Free: 1GB). The namespace is found by its title, or created
       # once when R2 is off; nothing is ever deleted or replaced. With R2 on, an existing namespace is still
-      # bound so the R2 mover can copy its photos. Any failure leaves photos in D1 and the deploy goes on.
+      # bound so the R2 mover can copy its photos. The listing is retried, and a listing that still fails
+      # stops the deploy: dropping the binding of a namespace in use would make every KV photo disappear.
+      # Only a failed create (no namespace yet, nothing to lose) leaves photos in D1 and goes on.
       - name: Find or create the KV namespace for photos (optional)
-        continue-on-error: true
         env:
           USE_KV: ${{ vars.USE_KV }}
         run: |
@@ -184,10 +185,20 @@ jobs:
           }
           if [ "${USE_KV:-}" = "false" ]; then
             echo "KV disabled by repository variable USE_KV=false"
-          elif ! kv="$(find_kv)"; then
+            echo "KV_ID=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          listed=""
+          for attempt in 1 2 3; do
+            if kv="$(find_kv)"; then listed=1; break; fi
             kv=""
-            warn "KV 목록을 읽지 못했습니다. 토큰에 Workers KV Storage 권한이 있는지 확인해 주세요."
-          elif [ -z "$kv" ] && [ "$R2_ENABLED" != "true" ]; then
+            sleep 5
+          done
+          if [ -z "$listed" ]; then
+            echo "::error::KV 저장소 목록을 확인하지 못했습니다. 토큰에 Workers KV Storage 권한이 있는지 확인하거나, KV를 쓰지 않으려면 저장소 변수 USE_KV를 false로 지정하세요."
+            exit 1
+          fi
+          if [ -z "$kv" ] && [ "$R2_ENABLED" != "true" ]; then
             echo "Creating KV namespace $KV_TITLE"
             if ./node_modules/.bin/wrangler kv namespace create "$KV_TITLE" --update-config=false; then
               for attempt in 1 2 3 4 5; do
@@ -199,8 +210,8 @@ jobs:
             [ -n "$kv" ] || warn "KV 저장소 $KV_TITLE 을(를) 만들지 못했습니다."
           fi
           if [ -n "$kv" ] && ! [[ "$kv" =~ ^[0-9a-f]{32}$ ]]; then
-            warn "KV 저장소 ID 형식이 올바르지 않습니다."
-            kv=""
+            echo "::error::KV 저장소 ID 형식이 올바르지 않습니다($kv). KV를 쓰지 않으려면 저장소 변수 USE_KV를 false로 지정하세요."
+            exit 1
           fi
           echo "KV_ID=$kv" >> "$GITHUB_ENV"
 

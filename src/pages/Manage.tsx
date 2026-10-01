@@ -96,6 +96,12 @@ function Members() {
     </>;
 }
 
+// '다른 회원 글 #8 · 같은 사진 2장' (같은 매물 자동 신고): each '#8' opens that post.
+function detailsWithLinks(details: string | null | undefined) {
+    if (!details) return details;
+    return details.split(/(#\d+)/).map((part, i) => /^#\d+$/.test(part) ? <Link key={i} to={'/posts/' + part.slice(1)}>{part}</Link> : part);
+}
+
 function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
     const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null);
     if (!reports) return <SkeletonRows />;
@@ -105,11 +111,11 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
         <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
             <span className="grow">
                 <strong>{r.reason}</strong>
-                <span className="small">{r.details}</span>
+                <span className="small">{r.reason === '같은 매물 (자동)' ? detailsWithLinks(r.details) : r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
                 {!r.post_id && <DeletedPhotos images={r.post_images} />}
-                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
+                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{r.post_id ? <> · <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></> : !r.target_user_id && ' · 삭제된 글'}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
             <span className="report-actions">

@@ -23,14 +23,23 @@ function sql(command) {
         '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
     return JSON.parse(out.slice(out.indexOf('[')))[0].results;
 }
+// sql() blocks the event loop for seconds (wrangler d1 execute), so a keep-alive socket the local server
+// closed meanwhile can still look open: such a request is sent once more on a new socket (as verify-dup).
+async function send(url, init) {
+    try { return await fetch(url, init()); }
+    catch (error) {
+        if (error?.cause?.code !== 'UND_ERR_SOCKET') throw error;
+        return fetch(url, init());
+    }
+}
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data, raw) => {
-        const response = await fetch(base + '/api/' + path, {
+        const response = await send(base + '/api/' + path, () => ({
             method, signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(raw ? { 'Content-Type': raw.type } : data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: raw ? raw.bytes : data === undefined ? undefined : JSON.stringify(data),
-        });
+        }));
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         if (!(response.headers.get('content-type') || '').includes('json')) { await response.arrayBuffer(); return { status: response.status }; }
@@ -46,7 +55,7 @@ const UNUSED = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploa
 // A deleted post's photos are held for the manager until keep_until (WP45).
 const eligible = () => sql(`SELECT COUNT(*) AS n FROM uploads WHERE created_at<${Date.now() - DAY} AND COALESCE(touched_at,0)<${Date.now() - DAY} AND COALESCE(keep_until,0)<${Date.now()} AND ${UNUSED}`)[0].n;
 async function fireCron() {
-    const r = await fetch(base + '/cdn-cgi/handler/scheduled?cron=17+18+*+*+*', { signal: AbortSignal.timeout(30000) });
+    const r = await send(base + '/cdn-cgi/handler/scheduled?cron=17+18+*+*+*', () => ({ signal: AbortSignal.timeout(30000) }));
     await r.arrayBuffer();
     return r.status;
 }

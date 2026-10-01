@@ -25,12 +25,14 @@ type Offer = {
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
-type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number };
+// traded: a completed post that holds a trade record.
+type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean };
 // 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
 const priceDrop = (p: SavedPost) => p.price_drop && <span className="tag tag-drop">가격 내림</span>;
-type ListState = { tab: TabId; items: any[]; total: number; page: number };
+// capped: the count stopped at 301 ('300+'); full: the last page came back full (there may be more).
+type ListState = { tab: TabId; items: any[]; total: number; page: number; capped?: boolean; full?: boolean };
 
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
@@ -55,13 +57,15 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
 
 // A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
 // 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
-function SellerRow({ post, usage, now, busy, closeOnly, onBump, onComplete }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onComplete: () => void;
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onComplete }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onComplete: () => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
     const closed = post.status === 'closed';
+    // A post completed as '사이트 밖 거래 · 기록 없음' can still get its record within 7 days (the same sheet).
+    const recordable = closed && post.traded === false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
@@ -76,6 +80,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, onBump, onComplete }: {
         <div className="seller-actions">
             {!closed && <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
             {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
+            {recordable && <button type="button" className="btn btn-line btn-sm seller-status" onClick={onComplete}>거래 기록 요청</button>}
         </div>
     </li>;
 }
@@ -99,8 +104,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         let alive = true;
         const pages = isPostTab(tab) && loaded.current.tab === tab ? loaded.current.page : 1;
         const load: Promise<Omit<ListState, 'tab'>> = isPostTab(tab)
-            ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number }>(pagePath(tab, i + 1))))
-                .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages }))
+            ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(tab, i + 1))))
+                .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages, capped: !!rs[rs.length - 1].capped, full: rs[rs.length - 1].posts.length === PAGE_SIZE }))
             : api<any>(tab).then(d => ({ items: d.offers || d.applications || d.blocks || [], total: 0, page: 1 }));
         load.then(r => { if (alive) { loaded.current = { tab, page: r.page }; setData({ tab, ...r }); } })
             .catch(e => { if (alive) { toast.error(errorText(e)); loaded.current = { tab, page: 1 }; setData({ tab, items: [], total: 0, page: 1 }); } });
@@ -126,11 +131,11 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         setLoadingMore(true);
         const next = data.page + 1, current = tab;
         try {
-            const d = await api<{ posts: Post[]; total: number }>(pagePath(current, next));
+            const d = await api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(current, next));
             setData(prev => prev && prev.tab === current ? {
                 ...prev, items: uniquePosts([...prev.items, ...d.posts]), page: next,
                 // An empty page means the list shrank meanwhile: stop offering more.
-                total: d.posts.length ? d.total : prev.items.length,
+                total: d.posts.length ? d.total : prev.items.length, capped: !!d.capped && !!d.posts.length, full: d.posts.length === PAGE_SIZE,
             } : prev);
             if (loaded.current.tab === current) loaded.current = { tab: current, page: next };
         } catch (e) { toast.error(errorText(e)); }
@@ -149,7 +154,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
-    const moreButton = data && data.tab === tab && isPostTab(tab) && data.items.length < data.total
+    const moreButton = data && data.tab === tab && isPostTab(tab) && (data.items.length < data.total || (data.capped && data.full))
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
     return <div className="container page">
@@ -160,7 +165,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : tab === 'posts' ? <>
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)}
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)}
                         onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
@@ -179,6 +184,10 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} trial={b.grade_trial} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
-        <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={() => { if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now() }); void loadUsage(); }} />
+        <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={chatId => {
+            if (tradePost?.status === 'closed') { if (chatId) patchPost(tradePost.id, { traded: true }); }
+            else if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now(), traded: !!chatId });
+            void loadUsage();
+        }} />
     </div>;
 }

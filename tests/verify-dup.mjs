@@ -64,6 +64,23 @@ const ladder = [{ tier: 'challenger', season: 28 }, { tier: 'diamond', season: 3
     check(L.fieldsHashInput(acct({ phantom: '1', level: '2', gas: '3', closet: '4' })), 'unit: a fields hash from 4 distinctive fields');
     equal(L.photoKeys(['u1', 'u2'], new Map([['u1', { hash: 'a'.repeat(64), src_hash: 'b'.repeat(64) }]])), [['a'.repeat(16), 'b'.repeat(16)], ['u:u2']], 'unit: photo keys are 16 hex characters, or the upload id without a hash');
 }
+// The daily print fill stays far inside the Free plan's 10 ms of CPU: one run's PRINTS_PER_RUN (50) rows
+// of busy account posts (12 photos, 18 fields, 3 seasons), warm, best of 5 (wrangler dev cannot meter CPU).
+{
+    const details = JSON.stringify({ phantom: '214', humanSkins: '300', zombieSkins: '120', level: '88', gas: '12345', closet: '41', ownerCount: '2', recordStatus: '무전적',
+        nicknameTypes: '["두 글자"]', skinTags: '["유루미","코믹스"]', nicknameRanks: '["S"]', gold: '5000', coin: '300', crystal: '20', pass: '있음', link: '구글', mail: '있음', phone: '있음' });
+    const rows = Array.from({ length: 50 }, (_, i) => ({ post_id: i + 1, title_key: '', kind: 'sell', category: 'account', title: `[QA] 28챌 30다야 팬텀 214% 계정 판매 ${i}번 급처`, details,
+        images: JSON.stringify(Array.from({ length: 12 }, () => crypto.randomUUID())), tags: JSON.stringify([{ tier: 'challenger', season: 28 }, { tier: 'diamond', season: 30 }, { tier: 'gold', season: 31 }]) }));
+    await Promise.all(rows.map(L.printFill));
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+        const t = performance.now();
+        const out = await Promise.all(rows.map(L.printFill));
+        best = Math.min(best, performance.now() - t);
+        assert.equal(out.length, 50);
+    }
+    check(best < 8, `unit: filling 50 prints takes ${best.toFixed(2)} ms (< 8 ms; the Free plan gives 10 ms of CPU per run, 1,000 rows took about 100 ms)`);
+}
 
 // ---- Helpers for the API suites ----
 function sql(command) {
@@ -195,10 +212,11 @@ equal(top?.id, R2.id, 'listed first below 새 글 우선');
 await rel(`posts/${R2.id}`, 'DELETE');
 ageListings(rel, 6 * HOUR + 60000);
 setWallet(rel, 0, Date.now());
+const anchorR2 = sql(`SELECT MAX(anchor_at) AS a FROM post_prints WHERE user_id='${rel.user.id}' AND gone_at IS NOT NULL`)[0].a;
 const R3 = await created(rel, sale({ title: `[QA] 리스트 D ${run}`, images: photos.map(p => p.id) }), 'wallet empty');
 const T = sql(`SELECT MAX(created_at) AS t FROM post_events WHERE user_id='${rel.user.id}' AND kind IN ('fresh','bump')`)[0].t;
 const since = sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${rel.user.id}' AND kind='post' AND created_at>${T} AND post_id!=${R3.id}`)[0].n;
-equal([R3.placed, R3.bumpedAt], ['last', T - 360 * 60000 * (1 + since)], 'tokens 0: below the latest top time (stepped like a 4th new post)');
+equal([R3.placed, R3.bumpedAt], ['last', Math.min(T - 360 * 60000 * (1 + since), anchorR2)], 'tokens 0: below the latest top time (stepped like a 4th new post), never above the listing\'s own place');
 await rel(`posts/${R3.id}`, 'DELETE');
 ageListings(rel, 6 * HOUR + 60000);
 sql(`UPDATE post_events SET created_at=created_at-${3 * DAY} WHERE user_id='${rel.user.id}'`);
@@ -272,6 +290,19 @@ const fifth = await created(al, sale(), 'the 5th, wallet empty');
 const lastTop = sql(`SELECT MAX(created_at) AS t FROM post_events WHERE user_id='${al.user.id}' AND kind IN ('fresh','bump')`)[0].t;
 equal([fifth.placed, fifth.bumpedAt], ['last', lastTop - 360 * 60000], 'with the wallet empty: below the latest top time');
 equal((await al('me/usage')).data.freshToday, 3, 'usage.freshToday is 3');
+// A post the empty wallet placed low keeps that low place when it is deleted, so reposting it never
+// brings it back near the top for free (review fix: the print stored created_at).
+{
+    const lowBody = sale();
+    const low = await created(al, lowBody, 'a 6th, wallet empty: placed low');
+    const lowPlace = post(low.id).bumped_at;
+    check(low.placed === 'last' && lowPlace < post(low.id).created_at - HOUR, 'the 6th sits more than an hour below its creation time');
+    equal((await al(`posts/${low.id}`, 'DELETE')).status, 200, 'it is deleted');
+    equal(print(low.id).anchor_at, lowPlace, 'its print keeps the low place it held (not created_at)');
+    const again = await created(al, { ...lowBody }, 'the same title again within minutes');
+    check(again.relist && again.placed !== 'bump' && again.placed !== 'fresh' && again.bumpedAt <= lowPlace, `the relist lands at or below the low place (${again.placed}), not near the top`);
+    equal([await tokensOf(al), sql(`SELECT COUNT(*) AS n FROM post_events WHERE post_id=${again.id} AND kind='bump'`)[0].n], [0, 0], 'no 끌올 was spent and none was logged');
+}
 // Display: a fresh post reads as new, not '끌올'.
 const listed = (await guest(`posts?author=${al.user.id}&size=10`)).data.posts.find(p => p.id === fresh[0].id);
 equal([listed.bump_count, listed.bumped_at > Date.now()], [0, true], 'GET /posts: the fresh post has bump_count 0 and sits ahead of now');

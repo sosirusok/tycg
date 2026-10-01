@@ -1,8 +1,8 @@
 // 같은 매물 on the Worker (WP44): building a post's print, reading the author's prints for the matcher,
 // and the cross-account check that raises one pending '같은 매물 (자동)' report and never blocks.
 // The matching itself is pure (shared/listing.ts) and runs in JS over at most PRINTS_READ rows.
-import { db, hex, MANAGER_ID } from './http';
-import { listingFields, photoKeys, fieldsHashInput, sameListing, postTitleKey, type Print, type ListingFields, type Match } from '../shared/listing';
+import { db, MANAGER_ID } from './http';
+import { listingFields, photoKeys, fieldsHash, sameListing, postTitleKey, type Print, type Match } from '../shared/listing';
 import type { SeasonTag } from '../shared/market';
 
 const DAY = 86400000;
@@ -18,10 +18,7 @@ export type NewPrint = Print & { fields_hash: string | null; uploads: UploadHash
 
 const parse = (s: string | null | undefined, fallback: any) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
 
-export async function fieldsHash(f: ListingFields | null) {
-    const input = fieldsHashInput(f);
-    return input ? hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))).slice(0, 32) : null;
-}
+export { fieldsHash };
 
 // The print of a post being written: details is the stored JSON text, images the upload ids in order,
 // uploads the author's upload rows with their hashes.
@@ -60,12 +57,21 @@ const isOpen = (r: PrintRow) => r.gone_at === null && !!r.status && r.status !==
 // deleted within 7 days) with the latest place. excludeId leaves out the post being edited.
 export function findMatch(p: NewPrint, rows: PrintRow[], excludeId?: number) {
     let open: { row: PrintRow; match: Match } | null = null, gone: { row: PrintRow; match: Match } | null = null;
+    // A cheap test on the stored text first, so only rows that could match are parsed (CPU on the
+    // request path): one of this post's photo keys in the row's photos, fields of the same mode and
+    // category (fields are stored as {"m":…} first), or the same title key.
+    const keys = [...new Set(p.photos.flat())].map(k => JSON.stringify(k));
+    const mode = p.fields && p.fields.m !== 'none' ? `{"m":${JSON.stringify(p.fields.m)}` : null;
+    const could = (row: PrintRow) => keys.some(k => row.photos.includes(k))
+        || (!!mode && !!row.fields && row.category === p.category && row.fields.startsWith(mode))
+        || (!!p.title_key && (row.title_key || (row.title ? postTitleKey(row.title) : '')) === p.title_key);
     for (const row of rows) {
         if (row.post_id === excludeId) continue;
         const live = isOpen(row);
         if (!live && (row.gone_at === null || row.anchor_at === null)) continue;
         if (live && open) continue;
         if (!live && gone && gone.row.anchor_at! >= row.anchor_at!) continue;
+        if (!could(row)) continue;
         const match = sameListing(p, rowPrint(p.kind, row));
         if (!match) continue;
         if (live) open = { row, match };
@@ -126,13 +132,17 @@ export function crossHit(p: NewPrint, userId: string, results: { keys: string[];
     return same ? `다른 회원 글 #${same.post_id} · 같은 계정 정보` : null;
 }
 
-// One pending '같은 매물 (자동)' report by the manager about the member, unless one is already pending.
-// postSql selects the post id (the new post's lookup, or '?' with the id bound).
-export function reportStatement(postSql: string, postArgs: unknown[], userId: string, details: string, now: number) {
+// One pending '같은 매물 (자동)' report by the manager about the member. postSql selects the post id (the
+// new post's lookup, or '?' with the id bound). A cross-account flag is skipped while one is pending for
+// the member (회수 flags left aside); a 회수 flag ('거래완료 글 #N …', `soldKey` 'details LIKE' pattern)
+// is skipped only while one is pending for the same sold post.
+const SOLD_PREFIX = '거래완료 글 #';
+export function reportStatement(postSql: string, postArgs: unknown[], userId: string, details: string, now: number, soldKey?: string) {
+    const pending = soldKey ? 'details LIKE ?' : `details NOT LIKE '${SOLD_PREFIX}%'`;
     return db().prepare(`INSERT INTO reports(post_id,target_user_id,reporter_id,reason,details,status,created_at)
         SELECT n.id,?,'${MANAGER_ID}','${AUTO_REPORT}',?,'pending',? FROM ${postSql} n WHERE n.id IS NOT NULL AND EXISTS(SELECT 1 FROM users WHERE id='${MANAGER_ID}')
-        AND NOT EXISTS(SELECT 1 FROM reports WHERE target_user_id=? AND reason='${AUTO_REPORT}' AND status='pending')`)
-        .bind(userId, details, now, ...postArgs, userId);
+        AND NOT EXISTS(SELECT 1 FROM reports WHERE target_user_id=? AND reason='${AUTO_REPORT}' AND status='pending' AND ${pending})`)
+        .bind(userId, details, now, ...postArgs, userId, ...soldKey ? [soldKey] : []);
 }
 
 // Writes the print of a post (insert or replace), selected by postSql the same way.

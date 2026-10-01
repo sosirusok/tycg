@@ -112,7 +112,8 @@ try {
     stop(fallback);
     await fallbackExited;
 
-    // KV photos (WP45): the no-R2 config plus a local PHOTOS namespace, on a short-lived 8792 server
+    // KV photos (WP45): the no-R2 config plus a local PHOTOS namespace, on a short-lived server on 8791
+    // (reused once the server above has exited, so pnpm test only ever uses 8790 and 8791)
     // without assets (so the cron can be triggered). verify-kv runs twice: as is, then with
     // KV_TEST_FAIL=on (every KV put and delete throws). Then the R2 mover: the same server with both R2
     // and KV bound, for the mover part of verify-parity.
@@ -129,10 +130,10 @@ try {
         { suite: 'tests/verify-parity.mjs', config: moverConfig, vars: [], phase: 'mover' },
     ].filter(p => pick([p.suite]).length);
     for (const p of phases) {
-        const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8792', '--inspector-port', '0', '--test-scheduled',
+        const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
             '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'TEST_HOOKS:on', ...p.vars], { stdio: ['ignore', 'pipe', 'pipe'] });
-        await waitFor('http://127.0.0.1:8792', kvServer);
-        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8792', TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+        await waitFor('http://127.0.0.1:8791', kvServer);
+        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
         const kvExited = kvServer.exitCode === null ? once(kvServer, 'exit') : null;
         stop(kvServer);
         await kvExited;

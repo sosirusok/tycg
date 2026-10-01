@@ -380,9 +380,12 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const ownListing = !!listing && listing.author_id === me.id;
     // Quick replies: any trade chat before my first text message (never in an application chat or a
     // chat with the manager that is not about a post), hidden as soon as the composer has text.
+    // On a completed post only the author of a sale keeps '판완됐습니다'; the 'still selling' chips go.
     const replySet = listing && isTradeKind(listing.kind) ? KIND_REPLIES[listing.kind] : undefined;
+    const closedListing = listing?.status === 'closed';
+    const replies = closedListing ? (ownListing && !replySet ? SELLER_REPLIES.slice(1) : []) : replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES;
     const quick = loaded && !apps.length && !text && !blocked && !partner?.deleted && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
-        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? (replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES) : [];
+        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? replies : [];
     const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
     const nowMs = Date.now();
     const listingOpen = !!listing && listing.status !== 'closed';
@@ -390,6 +393,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const liveTrade = !!listing && trades.some(t => t.post_id === listing.id && (!!t.confirmed || !!t.removed || t.created_at > nowMs - ANSWER_MS));
     const recordable = !!listing && !listingOpen && !liveTrade && !suspended && !blocked && !partner?.deleted
         && (listing.closed_at ?? 0) > nowMs - ANSWER_MS && (ownListing || partner?.id === listing.author_id);
+    // A member who answered '거래 아님' in this chat gets the request as a line button, not the main action.
+    const deniedByMe = messages.some(m => m.sender_id === me.id && m.type === 'system' && m.body === '거래 아님');
     const acceptedHere = listing && listingOpen ? offers.find(o => o.post_id === listing.id && o.status === 'accepted') : undefined;
 
     return <section className={'chat-room' + (managerView ? ' with-panel' : '')} aria-label="대화">
@@ -424,7 +429,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 <span className="room-listing-actions" role="group" aria-label="거래 상태">
                     {acceptedHere && <button type="button" className="btn btn-line btn-sm" disabled={statusBusy} onClick={() => void release(acceptedHere)}>수락 취소</button>}
                     {ownListing && listingOpen ? <button type="button" className="btn btn-primary btn-sm" disabled={statusBusy} onClick={() => setTradeSheet(true)}>{closedLabel(listing.kind)}</button>
-                        : recordable ? <button type="button" className="btn btn-primary btn-sm" disabled={statusBusy} onClick={() => ownListing ? setTradeSheet(true) : void askRecord()}>거래 기록 요청</button>
+                        : recordable ? <button type="button" className={'btn btn-sm ' + (deniedByMe ? 'btn-line' : 'btn-primary')} disabled={statusBusy} onClick={() => ownListing ? setTradeSheet(true) : void askRecord()}>거래 기록 요청</button>
                         : !ownListing && !acceptedHere && <Link to={'/posts/' + listing.id} className="btn btn-line btn-sm">글 보기</Link>}
                 </span>
             </div>}

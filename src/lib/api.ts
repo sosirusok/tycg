@@ -78,7 +78,8 @@ export async function makeThumb(id: string): Promise<string | null> {
         await img.decode();
         const side = Math.min(img.naturalWidth, img.naturalHeight);
         if (!side) return null;
-        for (const [size, q] of [[176, 0.6], [176, 0.4], [144, 0.4]] as const) {
+        // Busy photos step down further (120px, then 96px) before the list falls back to the full photo.
+        for (const [size, q] of [[176, 0.6], [176, 0.4], [144, 0.4], [120, 0.4], [96, 0.3]] as const) {
             const canvas = document.createElement('canvas');
             canvas.width = canvas.height = size;
             canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
@@ -91,7 +92,8 @@ export async function makeThumb(id: string): Promise<string | null> {
 }
 
 // The author's open posts a photo is already in (같은 매물, WP44).
-export type UsedIn = { id: number; title: string; photos: number };
+// bumpAt: when that post can be bumped (null: now).
+export type UsedIn = { id: number; title: string; photos: number; bumpAt?: number | null };
 export type Uploaded = { id: string; reused?: boolean; usedIn: UsedIn[] };
 
 // SHA-256 hex of a file, or null where the browser cannot compute it (the hashes are advisory).

@@ -302,7 +302,8 @@ export const REVIEW_DAYS = 30;
 export const REVIEW_CARD_TEXT = '거래 후기 남기기';
 export const reviewName = (good: boolean | number) => good ? '좋아요' : '아쉬워요';
 // '거래 3회 · 후기 좋아요 2' on the profile and the detail page's author box.
-export const tradeStatsText = (trades: number, good: number) => `거래 ${trades}회 · 후기 좋아요 ${good}`;
+// '거래 12회 · 거금 340만원 · 후기 좋아요 9' (거금 only once there is any).
+export const tradeStatsText = (trades: number, good: number, deal = 0) => `거래 ${trades}회 · ${deal > 0 ? `거금 ${priceText(deal)} · ` : ''}후기 좋아요 ${good}`;
 // One 후기 as the profile tab and the chat card show it. `removed`: the manager deleted it (the chat
 // card of its author says so; lists and counts leave it out).
 export type Review = { id: number; trade_id: string; author_id: string; target_id: string; good: number; tags: string[]; text: string; created_at: number; removed?: number };

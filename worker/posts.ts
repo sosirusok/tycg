@@ -530,10 +530,12 @@ async function listPosts(req: Request, url: URL) {
     const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && s.get('featured') !== 'none';
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
-    // The count stops at 301 rows and joins users only for a search (it matches nicknames).
+    // The count stops at 301 rows (capped: '300+'; the profile and 내 글 keep paging while pages come back
+    // full) and joins users only for a search (it matches nicknames).
+    const countCap = ` LIMIT ${COUNT_CAP + 1}`;
     const r = (await db().batch([
         ...backfill,
-        db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause} LIMIT ${COUNT_CAP + 1})`).bind(...values),
+        db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
         db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
         ...withFeatured ? [db().prepare(cte.sql + featuredSelect + clause + ' ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
@@ -576,14 +578,20 @@ async function addPriceDrops(posts: any[], userId: string) {
 async function addOwnCounts(posts: any[]) {
     if (!posts.length) return;
     const ids = JSON.stringify(posts.map(p => p.id));
-    const [favs, chats] = await db().batch([
+    const [favs, chats, trades] = await db().batch([
         db().prepare('SELECT post_id AS id,COUNT(*) AS n FROM favorites WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id').bind(ids),
         db().prepare("SELECT CAST(reference_id AS INTEGER) AS id,COUNT(DISTINCT conversation_id) AS n FROM messages WHERE type='listing' AND reference_id IN (SELECT CAST(value AS TEXT) FROM json_each(?)) GROUP BY reference_id").bind(ids),
+        // traded: the completed post holds a trade record (confirmed, removed or still waiting), so 내 글
+        // offers '거래 기록 요청' only on the others (within 7 days of 완료).
+        db().prepare(`SELECT post_id AS id FROM trades WHERE post_id IN (SELECT value FROM json_each(?)) AND (confirmed_at IS NOT NULL OR removed_at IS NOT NULL OR author_id IS NULL OR created_at>?)`)
+            .bind(ids, Date.now() - 7 * DAY),
     ]);
     const count = (rows: any[], id: number) => Number(rows.find(row => Number(row.id) === id)?.n) || 0;
+    const traded = new Set((trades.results as { id: number }[]).map(t => Number(t.id)));
     for (const p of posts) {
         p.fav_count = count(favs.results, p.id);
         p.chat_count = count(chats.results, p.id);
+        if (p.status === 'closed') p.traded = traded.has(p.id);
     }
 }
 
@@ -833,7 +841,7 @@ function crossResults(r: D1Result[], from: number, cross: ReturnType<typeof cros
 // - The same listing open (or hidden) → 409, the only refusal.
 // - The same listing completed or deleted within 7 days → a relist (relist=1, bump_count=1): its old
 //   place inside the listing's 끌올 gap ('old'), else 1 끌올 ('bump'), else below the latest top time
-//   ('last', the stepped placement of the allowance, or the old place when there is none).
+//   ('last', the stepped placement of the allowance, never above the old place).
 // - Otherwise the 새 글 allowance: the first SITE_RULES.freshPerDay new posts of the KST day go 1 hour
 //   ahead of now ('fresh': 새 글 우선, no 끌올 meanwhile); from the next one 1 끌올 ('bump'), or with the
 //   wallet empty T − refill × (1 + new posts since T) below the latest 'fresh'/'bump' time T ('last').
@@ -859,8 +867,9 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
         const { open, gone } = findMatch(print, r[1].results as PrintRow[]);
         if (open) return duplicate(v.kind, open.row, open.match, perks, walletOf(c.bump_tokens, c.bump_at, perks, now), now);
         relist = gone?.row || null;
-        // A relist of a listing the author recorded as sold flags possible 회수 (the buyer is named on the trade).
-        if (relist && soldTo(relist, u.id)) sold = `거래완료 글 #${relist.post_id} (구매자 지정) · 같은 매물`;
+        // A relist of a listing the author recorded as sold flags possible 회수 (the buyer is named on the
+        // trade), when its photos or fields match (a title alone is too weak to flag).
+        if (relist && gone && gone.match.why !== 'title' && soldTo(relist, u.id)) sold = `거래완료 글 #${relist.post_id} (구매자 지정) · 같은 매물`;
         report = crossHit(print, u.id, crossResults(r, 2, cross, print));
     }
     // The insert repeats both counts so parallel requests cannot pass them. The follow-up rows select
@@ -876,7 +885,9 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const steppedArgs = [R, u.id, u.id, now - 48 * HOUR];
     const old = !!relist && now < relist.anchor_at! + gapMs;
     const [placeSql, placeArgs] = !strict ? ['?', [now]]
-        : relist ? [`CASE WHEN ? THEN ? WHEN ${walletNow}>=1 THEN ? ELSE COALESCE(${stepped},?) END`, [old ? 1 : 0, relist.anchor_at, ...walletArgs, now, ...steppedArgs, relist.anchor_at]]
+        // With the wallet empty a relist never rises above the listing's own place (review fix: reposts
+        // must not beat 끌올).
+        : relist ? [`CASE WHEN ? THEN ? WHEN ${walletNow}>=1 THEN ? ELSE MIN(COALESCE(${stepped},?),?) END`, [old ? 1 : 0, relist.anchor_at, ...walletArgs, now, ...steppedArgs, relist.anchor_at, relist.anchor_at]]
         : [`CASE WHEN ${freshCount}<? THEN ? WHEN ${walletNow}>=1 THEN ? ELSE COALESCE(${stepped},?) END`, [...freshArgs, rules.freshPerDay, now + HOUR, ...walletArgs, now, ...steppedArgs, now]];
     // A relist of a listing the manager had hidden is created hidden, with the reason kept.
     const hidden = relist?.gone_hidden ? 1 : 0, hiddenReason = hidden ? relist!.gone_reason + ' (같은 매물 다시 등록)' : '';
@@ -906,7 +917,7 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
         ] : [],
         db().prepare(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT ?,id,'post',?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(u.id, key, now, ...newArgs),
         printUpsert(newPost, newArgs, u.id, print),
-        ...sold ? [reportStatement(newPost, newArgs, u.id, sold, now)] : [],
+        ...sold ? [reportStatement(newPost, newArgs, u.id, sold, now, `거래완료 글 #${relist!.post_id} %`)] : [],
         ...report ? [reportStatement(newPost, newArgs, u.id, report, now)] : [],
         db().prepare(`SELECT ${spent} AS bump,${fresh} AS fresh,(SELECT bumped_at FROM posts WHERE id=${newPost}) AS bumped_at,(SELECT bump_tokens FROM users WHERE id=?) AS bump_tokens,(SELECT bump_at FROM users WHERE id=?) AS bump_at`)
             .bind(...eventArgs, ...eventArgs, ...newArgs, u.id, u.id),

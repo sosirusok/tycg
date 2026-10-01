@@ -96,7 +96,7 @@ async function asks(buyer, seller, postId) {
 const complete = (c, id, extra = {}) => c(`posts/${id}/status`, 'PATCH', { status: 'closed', ...extra });
 const stats = async c => { const u = (await guest('users/' + c.user.id)).data.user; return { trades: u.tradeCount, deal: u.dealSum, good: u.goodCount }; };
 const status = id => sql(`SELECT status FROM posts WHERE id=${id}`)[0].status;
-const tradeRow = id => sql(`SELECT id,author_id,price,backing,kind,title,confirmed_at,created_at FROM trades WHERE post_id=${id}`)[0];
+const tradeRow = id => sql(`SELECT id,author_id,price,backing,backing_offer,kind,title,confirmed_at,created_at FROM trades WHERE post_id=${id}`)[0];
 
 // --- 1. Two states ---
 const s = await register('s'), b = await register('b');
@@ -249,16 +249,30 @@ const s = await register('s'), b = await register('b');
     equal(tradeRow(F1).backing, null, 'no backing');
     equal((await o1(`trades/${t1.data.trade.id}/answer`, 'POST', { confirm: true })).status, 200, 'confirmed');
     equal(await stats(n1), { trades: 1, deal: 0, good: 0 }, 'trade_count 1, 거금 0');
-    // The same with a partner 제시 of 30만원: 거금 300,000.
+    // A partner 제시 the seller never accepted backs nothing (review fix: an alt's 10억 제시 must not inflate 거금).
+    const [n0, o0] = await pair('n0');
+    const F0 = await created(n0, sale(null));
+    equal((await o0('offers', 'POST', { postId: F0, amount: 300000 })).status, 201, 'the partner sends a 30만원 제시 that stays pending');
+    const t0 = await complete(n0, F0, { partnerId: o0.user.id, amount: 300000 });
+    equal([t0.status, tradeRow(F0).backing], [200, null], 'a 제시 that was not accepted is no backing');
+    // The same with the partner's 30만원 제시 accepted: 거금 300,000, marked as backed by a 제시.
     const [n2, o2] = await pair('n2');
     const F2 = await created(n2, sale(null));
     const offer = await o2('offers', 'POST', { postId: F2, amount: 300000 });
     equal(offer.status, 201, 'the partner sends a 30만원 제시 (a partner through the 제시 chat)');
+    equal((await n2(`offers/${offer.data.id}`, 'PATCH', { action: 'accepted' })).status, 200, 'the seller accepts it');
     const t2 = await complete(n2, F2, { partnerId: o2.user.id, amount: 100000000 });
     equal([t2.status, t2.data.chatId], [200, offer.data.chatId], 'completed at 1억 with the 제시 sender');
-    equal(tradeRow(F2).backing, 300000, 'the backing is the partner\'s highest 제시');
+    equal([tradeRow(F2).backing, tradeRow(F2).backing_offer], [300000, 1], 'the backing is the partner\'s accepted 제시 (backing_offer 1)');
     equal((await o2(`trades/${t2.data.trade.id}/answer`, 'POST', { confirm: true })).status, 200, 'confirmed');
     equal(await stats(n2), { trades: 1, deal: 300000, good: 0 }, '거금 300,000');
+    // An accepted 10억 제시 on a no-price post backs at most 30만원.
+    const [n4, o4] = await pair('n4');
+    const F4 = await created(n4, sale(null));
+    const big = await o4('offers', 'POST', { postId: F4, amount: 1000000000 });
+    equal((await n4(`offers/${big.data.id}`, 'PATCH', { action: 'accepted' })).status, 200, 'a 10억 제시 is accepted');
+    await complete(n4, F4, { partnerId: o4.user.id, amount: 1000000000 });
+    equal([tradeRow(F4).price, tradeRow(F4).backing], [1000000000, 300000], 'its backing is capped at 30만원');
     // 즉거가 60만 then 40만, completed at 40만: 거금 400,000 (backing 60만).
     const [n3, o3] = await pair('n3');
     const F3 = await created(n3, sale(600000));
