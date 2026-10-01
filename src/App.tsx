@@ -57,8 +57,11 @@ function Shell() {
     const lastKind = lastBoard('kind');
     const tradeHref = (lastKind && lastBoard(lastKind)) || '/trade?kind=sell';
     // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, post, chat room).
-    const hideBottomNav = page === 'write' || page === 'edit' || page === 'posts' || (page === 'chat' && !!parts[1]);
+    const inRoom = page === 'chat' && !!parts[1];
+    const hideBottomNav = page === 'write' || page === 'edit' || page === 'posts' || inRoom;
     useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
+    // On phones a chat room is full screen: the global header is hidden there (pages.css).
+    useEffect(() => { document.body.classList.toggle('in-room', inRoom); }, [inRoom]);
 
     // Tab title per screen. A post and a profile add their title or nickname once loaded.
     useEffect(() => {

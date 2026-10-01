@@ -1,4 +1,5 @@
-import { db, fail, requireUser, json, body, limit, memberColumns, withMember, WITHDRAWN, WITHDRAWN_NAME } from './http';
+import type { User } from '../shared/market';
+import { db, fail, requireUser, json, body, limit, memberColumns, withMember, isManager, ApiError, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 
 export async function blocked(a: string, b: string) {
@@ -44,6 +45,29 @@ const preview = "(SELECT CASE WHEN m.type='offer' THEN '가격 제시' WHEN m.bo
 
 // Partner details in chat lists; when a 6-month grade ends stays private. A withdrawn partner is
 // shown as plain 탈퇴회원 with `deleted`, so the room can close its composer.
+// The post a chat is about: the one on its latest post card, or on its latest 제시 when that came later
+// (a chat started with 제시하기 has no post card).
+const aboutPost = (c: string) => `(SELECT CASE WHEN m.type='listing' THEN CAST(m.reference_id AS INTEGER) ELSE (SELECT o.post_id FROM offers o WHERE o.id=m.reference_id) END
+    FROM messages m WHERE m.conversation_id=${c} AND m.type IN ('listing','offer') ORDER BY m.id DESC LIMIT 1)`;
+
+// That post for the bar pinned under the room header. A post the viewer can no longer see (deleted, hidden) gives null.
+async function chatListing(conversationId: string, u: User) {
+    const ref = await db().prepare(`SELECT ${aboutPost('?')} AS post_id`).bind(conversationId).first<{ post_id: number | null }>();
+    if (!ref?.post_id) return null;
+    try {
+        const p = await visiblePost(ref.post_id, u), details = parse(p.details, {} as Record<string, unknown>);
+        return {
+            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status, author_id: p.author_id,
+            price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
+            thumb: (parse(p.images, []) as string[])[0] ?? null,
+            currentOffer: details.currentOffer ? Number(details.currentOffer) || null : null,
+        };
+    } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+    }
+}
+
 function partner(row: any) {
     const { deleted_at, ...rest } = row;
     const m: Record<string, unknown> = withMember(rest);
@@ -62,12 +86,21 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         return json({ unread: r?.n || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
+        // ?filter=applications (manager only): the chats with an application still waiting.
+        const filter = url.searchParams.get('filter');
+        if (filter && filter !== 'applications') fail(400, '채팅 목록 조건을 확인해 주세요.');
+        if (filter && !isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
         // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
+        // The row also names the post the chat is about (title and first photo) while the viewer can see it.
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
             (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL AND type!='listing') AS unread,
-            (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications
-            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id) ORDER BY c.updated_at DESC LIMIT 100`)
-            .bind(u.id, u.id, u.id, u.id).all();
+            (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications,
+            lp.title AS last_post_title,json_extract(lp.images,'$[0]') AS last_post_thumb
+            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
+            LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.hidden=0 OR lp.author_id=? OR ?='manager')
+            WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)
+            ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=c.id AND a.status='pending')" : ''} ORDER BY c.updated_at DESC LIMIT 100`)
+            .bind(u.id, u.id, u.id, u.role, u.id, u.id).all();
         return json({ chats: r.results.map(partner) });
     }
     // Opening a chat from a post only checks the post and makes sure the chat exists. The post's
@@ -87,7 +120,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
         const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
-        return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b) } });
+        return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b), listing: await chatListing(c.id, u) } });
     }
     if (p[1] && p[2] === 'messages') {
         const c = await chatMember(p[1], u.id);
@@ -96,7 +129,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             const [r, seen, offers, applications] = await db().batch([
                 db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
                 db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
-                db().prepare('SELECT o.*,p.title FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?').bind(p[1]),
+                db().prepare('SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?').bind(p[1]),
                 db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
             ]);
             const messages = r.results.map((m: any) => ({ ...m, attachments: parse(m.attachments, []) }));
