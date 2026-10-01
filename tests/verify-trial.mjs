@@ -80,7 +80,7 @@ async function fireCron() {
     return r.status;
 }
 
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'trial-ip:%'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%' OR key LIKE 'trial-ip:%'");
 const manager = client('10.250.0.1');
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
 

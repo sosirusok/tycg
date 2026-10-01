@@ -68,7 +68,7 @@ async function register(name) {
     return c;
 }
 
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 const manager = client(), guest = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
 const grant = async (c, grade) => equal((await manager(`manage/users/${c.user.id}/grades`, 'POST', { grade, plan: 'permanent' })).status, 201, `manager grants ${grade}`);
