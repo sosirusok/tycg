@@ -1,6 +1,6 @@
 import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import { REPORT_REASONS } from '../shared/market';
-import { decorate, endOffersStatements, parse, postSelect } from './posts';
+import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { manageMembers } from './membership';
 import { deleteReview, deleteTrade } from './reviews';
@@ -58,7 +58,7 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         const now = Date.now();
         await db().batch([
             db().prepare('UPDATE posts SET hidden=?,hidden_reason=? WHERE id=?').bind(hidden, reason, post.id),
-            ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now) : [],
+            ...hidden ? endOffersStatements(post.id, post.author_id, "status IN('pending','accepted')", [], now, OFFERS_HIDDEN_TEXT) : [],
         ]);
         // The author hears about it in their chat with the manager. Best-effort: the author may have
         // blocked the manager (ensureChat then throws 403), and a failed notice never undoes the change.

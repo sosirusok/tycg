@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, STATUS_NAMES, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
+import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
-import { TradeSheet } from '../components/TradeSheet';
+import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 
 const TABS = [
@@ -44,7 +42,7 @@ const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).valu
 
 // 끌올 in the same states as the detail page: the wallet ('3/4'), or '15:40부터 가능' (the latest of
 // the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
-// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 거래완료 is allowed).
+// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
     if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined };
     const ready = bumpReadyAt(post, usage, now);
@@ -55,38 +53,29 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
     return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined };
 }
 
-// A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and 상태.
-function SellerRow({ post, usage, now, busy, closeOnly, onBump, onStatus }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onStatus: (status: string) => void;
+// A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and the one
+// 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
+function SellerRow({ post, usage, now, busy, closeOnly, onBump, onComplete }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; onBump: () => void; onComplete: () => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
-    // Without 대리 인증 a 대리(진행) post, and under 이용 정지 any post, can only be closed (the server refuses the rest).
-    const statuses = Object.entries(STATUS_NAMES).filter(([k]) => !closeOnly || k === post.status || k === 'closed');
+    const closed = post.status === 'closed';
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
             <Link to={href} className="seller-title">{post.title}</Link>
             <div className="seller-meta">
-                <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>
+                {closed && <span className="status status-closed">{closedLabel(post.kind)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 <b>{price}</b>
             </div>
             <span className="seller-stats">찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
         </div>
         <div className="seller-actions">
-            <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>
-            <DropdownMenu.Root modal={false}>
-                <DropdownMenu.Trigger className="btn btn-line btn-sm seller-status" disabled={busy}>상태<ChevronDown size={15} /></DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                    <DropdownMenu.Content className="menu status-menu" align="end" sideOffset={6}>
-                        <DropdownMenu.RadioGroup value={post.status} onValueChange={onStatus}>
-                            {statuses.map(([k, v]) => <DropdownMenu.RadioItem key={k} value={k} className="menu-item">{v}<DropdownMenu.ItemIndicator className="menu-check"><Check size={16} /></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>)}
-                        </DropdownMenu.RadioGroup>
-                    </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            {!closed && <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
+            {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
         </div>
     </li>;
 }
@@ -99,8 +88,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [loadingMore, setLoadingMore] = useState(false);
     const [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState<number | null>(null), [now, setNow] = useState(Date.now());
     const [clock] = useMinuteClock();
-    // '거래한 회원' after a post is set to 거래완료 here, as on the detail page (WP23).
-    const [tradePost, setTradePost] = useState<number | null>(null);
+    // The 완료 sheet for a row, as on the detail page (WP43).
+    const [tradePost, setTradePost] = useState<SheetPost | null>(null);
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -160,17 +149,6 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
-    async function setStatus(post: OwnPost, status: string) {
-        if (busy !== null || status === post.status) return;
-        setBusy(post.id);
-        try {
-            await api(`posts/${post.id}/status`, 'PATCH', { status });
-            patchPost(post.id, { status });
-            toast(`상태 변경: ${STATUS_NAMES[status]}`);
-            if (status === 'closed' && !suspended) setTradePost(post.id);
-        } catch (e) { toast.error(errorText(e)); }
-        finally { setBusy(null); void loadUsage(); }
-    }
     const moreButton = data && data.tab === tab && isPostTab(tab) && data.items.length < data.total
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
@@ -182,7 +160,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : tab === 'posts' ? <>
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)}
+                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
@@ -200,6 +179,6 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} trial={b.grade_trial} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
-        <TradeSheet postId={tradePost} onClose={() => setTradePost(null)} />
+        <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={() => { if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now() }); void loadUsage(); }} />
     </div>;
 }

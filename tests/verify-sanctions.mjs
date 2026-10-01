@@ -157,8 +157,9 @@ check(!(await listed(a, `author=${B}`)).includes(postB.data.id), 'B\'s post is g
 check(!(await listed(a, `q=${encodeURIComponent('제재 판매 B')}`)).includes(postB.data.id), 'B\'s post is gone from search');
 check((await listed(b, `author=${B}`)).includes(postB.data.id), 'B still sees their own post');
 check((await listed(guest, 'kind=sell&size=40')).includes(postA.data.id), 'other members\' posts stay listed');
-blockedWrite(await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'reserved' }), 'B setting the post to 예약중');
-equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'B can still close the post');
+equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'a legacy 예약중 request from B changes nothing');
+const closedB = await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'closed', partnerId: A, amount: 100000 });
+equal([closedB.status, 'trade' in closedB.data], [200, false], 'B can still complete the post; the partner and 거래가 are ignored under 이용 정지');
 
 const guestView = (await guest(`users/${B}`)).data.user;
 equal([guestView.suspended, guestView.suspended_until], [true, undefined], 'others see only that B is restricted');
@@ -180,7 +181,7 @@ const afterEnd = await b('posts', 'POST', sale('정지 끝난 뒤 새 글'));
 equal(afterEnd.status, 201, 'B can post once the end time has passed');
 const relisted = await listed(guest, `author=${B}`);
 check(relisted.includes(afterEnd.data.id) && relisted.includes(postB.data.id), 'B\'s posts are listed again');
-equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'open' })).status, 200, 'B can reopen the post once the suspension ends');
+equal((await b(`posts/${postB.data.id}/status`, 'PATCH', { status: 'open' })).data.error, '완료된 글은 되돌릴 수 없습니다.', 'a completed post stays completed after the suspension ends');
 equal((await manager(`manage/users/${B}`)).data.user.suspended_until, null, 'an ended suspension reads as none');
 
 // --- Clearing ---

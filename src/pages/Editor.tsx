@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, STATUS_NAMES, TRADE_KINDS,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, TRADE_KINDS,
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
@@ -191,6 +191,8 @@ export default function Editor({ id }: { id?: string }) {
         ]).then(([p, dr, usage]) => {
             if (!alive) return;
             if (p && p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
+            // A completed post is read-only (WP43).
+            if (p && p.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
             const base = p ? fromPost(p.post) : initial;
             post.current = p?.post || null;
             // An edit may keep the photos a post already has.
@@ -364,7 +366,7 @@ export default function Editor({ id }: { id?: string }) {
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), status: form.status, tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -564,10 +566,6 @@ export default function Editor({ id }: { id?: string }) {
                     </div>
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
                 </Section>
-
-                {id && <Section title="거래 상태">
-                    <div className="chip-row">{Object.entries(STATUS_NAMES).map(([k, v]) => <button type="button" key={k} className="chip" aria-pressed={form.status === k} onClick={() => patch({ status: k })}>{v}</button>)}</div>
-                </Section>}
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
                 {!id && freshLine && <p className="field-hint ed-fresh">{freshLine}</p>}

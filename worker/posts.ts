@@ -1,11 +1,12 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeColumns, withMember, setting, mayHaveBlocks, MANAGER_ID, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { SITE_RULES, perksOf, rulesOf, kstDayStart, titleKey, gapText, walletOf, type Perks } from '../shared/membership';
+import { planTrade } from './reviews';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -41,9 +42,9 @@ export async function latestSeason() {
     return Number.isInteger(v) && v >= LATEST_SEASON && v <= 200 ? v : LATEST_SEASON;
 }
 
-// One post also carries the author's '최근 접속' and '거래 3회 · 후기 좋아요 2' (WP23) for the detail
-// page's author box (lists leave them out).
-const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,${tradeColumns('u', 'author_')} FROM posts p `);
+// One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out);
+// GET /posts/:id adds the trade counts (tradeStats).
+const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at FROM posts p `);
 async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
@@ -92,7 +93,9 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
-        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_good_count; }
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; }
+        // A legacy 예약중 reads as 진행중 (WP43: two states).
+        if (p.status !== 'closed') p.status = 'open';
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -120,19 +123,20 @@ export function priceHistoryStatements(postId: number, newKind: string, newPrice
     ];
 }
 
-// Offers a status change ends: 거래완료 ends the pending offers and keeps the accepted one (the deal
-// happened); back to 거래중 ends the accepted one (the deal fell through) and keeps the pending ones.
-// 예약중 ends none. Bind the new status twice.
-export const STATUS_ENDS_OFFERS = "((status='pending' AND ?='closed') OR (status='accepted' AND ?='open'))";
-export const OFFERS_ENDED_TEXT = '글 상태가 바뀌어 제시가 마감되었습니다.';
+// 완료 (WP43) ends the pending offers; an accepted one survives only when its sender is the member the
+// author named as the partner (bind that id, or null for none).
+export const COMPLETE_ENDS_OFFERS = "(status='pending' OR (status='accepted' AND sender_id IS NOT ?))";
+export const OFFERS_ENDED_TEXT = '글이 완료되어 제시가 마감되었습니다.';
+// The line when the manager hides the post.
+export const OFFERS_HIDDEN_TEXT = '글이 숨김 처리되어 제시가 마감되었습니다.';
 
 // Cancels the post's offers that match `condition` and leaves a notice in each of their chats.
 // The notice and the chat bump come first, because they select the offers the UPDATE then cancels.
 // The post author sends the notice: they are a member of every such chat, also when the manager hides the post.
-export function endOffersStatements(postId: number, authorId: string, condition: string, args: unknown[], now: number) {
+export function endOffersStatements(postId: number, authorId: string, condition: string, args: unknown[], now: number, text = OFFERS_ENDED_TEXT) {
     return [
         db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT DISTINCT conversation_id,?,?,'system',NULL,'[]',? FROM offers WHERE post_id=? AND ${condition}`)
-            .bind(authorId, OFFERS_ENDED_TEXT, now, postId, ...args),
+            .bind(authorId, text, now, postId, ...args),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE post_id=? AND ${condition})`).bind(now, postId, ...args),
         db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE post_id=? AND ${condition}`).bind(now, postId, ...args),
     ];
@@ -281,9 +285,9 @@ async function validatePost(b: any, u: User, existing?: any) {
         const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
         if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 쓸 수 있습니다.');
     }
-    const status = b.status || 'open';
-    if (!['open', 'reserved', 'closed'].includes(status)) fail(400, '거래 상태를 확인해 주세요.');
-    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), status, accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0 };
+    // The status is never taken from the form (WP43): a new post starts 진행중, an edit keeps it, and only
+    // PATCH /posts/:id/status completes a post.
+    return { kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0 };
 }
 
 // Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
@@ -335,10 +339,12 @@ async function listPosts(req: Request, url: URL) {
     const u = await currentUser(req), s = url.searchParams;
     const author = s.get('author');
     const { where, values } = baseFilters(u, author, now) as { where: string[]; values: any[] };
-    for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'reserved', 'closed']]] as [string, string, string[]][]) {
+    for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
     }
+    // A legacy link asking for 예약중 lists the posts still in progress.
+    if (s.get('status') === 'reserved') where.push("p.status!='closed'");
     if (s.get('active') === '1') where.push("p.status!='closed'");
     if (s.get('mode') && ['fixed', 'offer', 'negotiate'].includes(s.get('mode')!)) {
         where.push("(CASE WHEN p.price_mode='legacy' THEN CASE WHEN p.price IS NULL THEN 'negotiate' ELSE 'fixed' END ELSE p.price_mode END)=?");
@@ -645,6 +651,7 @@ async function featurePost(req: Request, u: User, post: any) {
 // currentOffer '' or null removes 현젯.
 async function patchPrice(req: Request, u: User, post: any) {
     if (post.kind !== 'sell') fail(400, '판매 글만 가격을 수정할 수 있습니다.');
+    if (post.status === 'closed') fail(409, '완료된 글은 수정할 수 없습니다.');
     const b = await body(req), now = Date.now();
     const hasPrice = b.price !== undefined, hasOffer = b.currentOffer !== undefined;
     if (!hasPrice && !hasOffer) fail(400, '가격을 입력해 주세요.');
@@ -665,11 +672,46 @@ async function patchPrice(req: Request, u: User, post: any) {
     return json({ post: (await decorate([await rawPost(post.id)], u))[0] });
 }
 
+// PATCH /posts/:id/status {status:'closed', partnerId?, amount?} (WP43): 완료 is final and one batch.
+// The post closes (closed_at, and 게시판 상단 노출 ends), its pending 제시 end (an accepted one survives
+// only when its sender is the partner named), and with a partner the pending trade record and its
+// '거래 확인 요청' card follow, guarded on this very completion. Under 이용 정지 the post can still be
+// completed, without a trade record. 'open' (and a legacy 'reserved') is a no-op on an open post.
+async function completePost(req: Request, u: User, post: any) {
+    const b = await body(req);
+    if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
+    if (b.status !== 'closed') {
+        if (post.status === 'closed') fail(409, '완료된 글은 되돌릴 수 없습니다.');
+        return json({ ok: true });
+    }
+    if (post.status === 'closed') fail(409, '이미 완료된 글입니다.');
+    const now = Date.now();
+    const withPartner = !isSuspended(u.suspended_until, now) && typeof b.partnerId === 'string' && !!b.partnerId;
+    if (withPartner) await limit('trade:' + u.id, 20, 600000);
+    const guard = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=?)', guardArgs = [post.id, now];
+    const plan = withPartner ? await planTrade({ ...post, status: 'closed', closed_at: now }, u, b.partnerId, b.amount, now, guard, guardArgs) : null;
+    const keep = plan ? b.partnerId : null;
+    const r = await db().batch([
+        db().prepare("UPDATE posts SET status='closed',closed_at=?,updated_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, now, post.id),
+        ...endOffersStatements(post.id, post.author_id, `${COMPLETE_ENDS_OFFERS} AND ${guard}`, [keep, ...guardArgs], now),
+        ...plan ? plan.statements : [],
+    ]);
+    if (!r[0].meta.changes) fail(409, '이미 완료된 글입니다.');
+    // r[0] is the post, then the three statements that end the 제시, then the plan's DELETE and INSERT.
+    const recorded = plan ? !!r[5].meta.changes : false;
+    return json({ ok: true, closed_at: now, ...plan ? { trade: recorded ? plan.trade : null, chatId: plan.chatId } : {} });
+}
+
 export async function postsHandler(req: Request, p: string[], url: URL): Promise<Response> {
     const method = req.method;
     if (method === 'GET' && !p[1]) return listPosts(req, url);
     if (p[1] && method === 'GET' && !p[2]) {
         const u = await currentUser(req), post = await visiblePost(p[1], u);
+        // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43) for the author box; none for a withdrawn author.
+        if (!post.author_deleted_at) {
+            const stats = await tradeStats(post.author_id);
+            Object.assign(post, { author_trade_count: stats.trade_count, author_deal_sum: stats.deal_sum, author_good_count: stats.good_count });
+        }
         return json({ post: (await decorate([post], u))[0] });
     }
     const u = await requireUser(req);
@@ -699,22 +741,11 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
     if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
     if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);
-    if (p[2] === 'status' && method === 'PATCH') {
-        const b = await body(req);
-        if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
-        // Under 이용 정지 a post can only be closed (거래중 or 예약중 again reopens it to other members).
-        if (b.status !== 'closed') requireActive(u);
-        if (existing.kind === 'proxy_offer' && b.status !== 'closed' && !canOfferProxy(u)) fail(403, '대리 인증이 없으면 대리(진행) 글은 거래완료로만 바꿀 수 있습니다.');
-        const now = Date.now();
-        await db().batch([
-            // 거래완료 also ends 게시판 상단 노출.
-            db().prepare("UPDATE posts SET status=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?").bind(b.status, now, b.status, existing.id),
-            ...endOffersStatements(existing.id, existing.author_id, STATUS_ENDS_OFFERS, [b.status, b.status], now),
-        ]);
-        return json({ ok: true });
-    }
+    if (p[2] === 'status' && method === 'PATCH') return completePost(req, u, existing);
     if (!['POST', 'PUT'].includes(method) || p[2]) fail(405, '지원하지 않는 요청입니다.');
     if (method === 'POST' && p[1] || method === 'PUT' && !existing) fail(400, '게시글 번호를 확인해 주세요.');
+    // A completed post is read-only (WP43): delete, 다시 올리기 and 복사해서 새 글 stay.
+    if (existing && existing.status === 'closed') fail(409, '완료된 글은 수정할 수 없습니다.');
     const v = await validatePost(await body(req), u, existing), now = Date.now(), key = postTitleKey(v.title);
     if (!existing) {
         // Anti-flood ceilings, the same for every member (SITE_RULES): 거래중·예약중 posts (hidden
@@ -762,7 +793,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         const spent = `EXISTS(SELECT 1 FROM post_events WHERE post_id=${newPost} AND kind='bump')`;
         const r = await db().batch([
             db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},? WHERE ${guard}`)
-                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now, ...placeArgs, key, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+                .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, now, now, ...placeArgs, key, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
             ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
             ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
             db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
@@ -789,16 +820,15 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     }
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
-        // Editing never bumps. 거래완료 ends 게시판 상단 노출.
-        db().prepare("UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,status=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=?,featured_at=CASE WHEN ?='closed' THEN NULL ELSE featured_at END WHERE id=?")
-            .bind(v.kind, v.title, key, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, v.status, existing.id),
+        // Editing never bumps and never changes the status; a post completed meanwhile is left as it is.
+        db().prepare("UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,updated_at=? WHERE id=? AND status!='closed'")
+            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, now, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
         ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_images WHERE post_id=?').bind(existing.id),
         db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT ?,value FROM json_each(?)').bind(existing.id, v.images),
-        ...endOffersStatements(existing.id, existing.author_id, STATUS_ENDS_OFFERS, [v.status, v.status], now),
     ]);
     return json({ id: existing.id });
 }

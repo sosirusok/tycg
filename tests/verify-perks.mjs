@@ -363,20 +363,19 @@ check(home.length <= 6, 'home shelf holds at most 6');
 equal((await guest(`posts?kind=sell&q=B${run}`)).data.featured.map(p => p.id), [B], 'B is featured before its bump gets old');
 backdate([B], 73);
 equal((await guest(`posts?kind=sell&q=B${run}`)).data.featured, [], 'B leaves the box 72 hours after its last bump');
-equal((await setStatus(elite, E[0], 'reserved')).status, 200, 'an elite post is reserved');
-check(!(await guest(`posts?kind=sell&q=${run}`)).data.featured.some(p => p.id === E[0]), 'a 예약중 post drops out of the box');
-// A 예약중 post uses no slot and keeps featured_at, so featuring another post does not clear it.
+// Two states (WP43): completing a featured post ends its feature and frees the slot.
+equal((await setStatus(elite, E[0], 'closed')).status, 200, 'the featured post is completed');
+equal(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at, null, 'completing clears featured_at');
+check(!(await guest(`posts?kind=sell&q=${run}`)).data.featured.some(p => p.id === E[0]), 'a completed post drops out of the box');
+refused(await elite(`posts/${E[0]}/feature`, 'PUT', { active: true }), 409, '거래중인 글만 상단에 노출할 수 있습니다.', 'a completed post cannot be featured');
 const E3 = await created(elite, 'elite 3');
 const f3 = await elite(`posts/${E3}/feature`, 'PUT', { active: true });
-equal([f3.status, f3.data.replaced, f3.data.used], [200, null, 3], 'featuring a 4th post while one is 예약중 replaces nothing');
-check(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at !== null, 'the 예약중 post keeps featured_at');
+equal([f3.status, f3.data.replaced, f3.data.used], [200, null, 3], 'the freed slot takes a new post without replacing');
 equal((await elite('me/usage')).data.featured.length, 3, 'usage counts only the open featured posts');
-equal((await setStatus(elite, E[0], 'closed')).status, 200, 'the featured post is closed');
-equal(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at, null, 'closing clears featured_at');
-refused(await elite(`posts/${E[0]}/feature`, 'PUT', { active: true }), 409, '거래중인 글만 상단에 노출할 수 있습니다.', 'a closed post cannot be featured');
+// The editor never changes the status: a stale 'closed' in the form keeps the post open and featured.
 const editClosed = await elite(`posts/${E[1]}`, 'PUT', sale('elite closed by edit ' + run, { status: 'closed' }));
-equal(editClosed.status, 200, 'closing through the editor');
-equal(sql(`SELECT featured_at FROM posts WHERE id=${E[1]}`)[0].featured_at, null, 'closing through the editor clears featured_at');
+equal(editClosed.status, 200, 'saving through the editor');
+equal(sql(`SELECT status,featured_at IS NOT NULL AS featured FROM posts WHERE id=${E[1]}`)[0], { status: 'open', featured: 1 }, 'the editor leaves the post open and featured');
 
 // 5. Photos: 100 per post for every member; uploads 120 per 10 minutes and 300 per day.
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));

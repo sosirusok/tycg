@@ -46,13 +46,13 @@ export function guardedMessageStatements(conversationId: string, senderId: strin
     ];
 }
 
-// The trades between the two members of a chat (WP23) with their 후기, for its '거래 후기 남기기' cards. A
+// The trades between the two members of a chat (WP23, WP43) with their 후기, for its '거래 확인 요청' cards. A
 // chat is the one conversation of its pair, so the trades of the pair are the ones whose card is here.
 // A removed 후기 keeps only who wrote it (the card of its author then says it was removed).
 function pairTradeStatements(userA: string, userB: string) {
     const pair = '(t.seller_id=? AND t.buyer_id=?) OR (t.seller_id=? AND t.buyer_id=?)', args = [userA, userB, userB, userA];
     return [
-        db().prepare(`SELECT t.id,t.post_id,t.seller_id,t.buyer_id,t.created_at,t.author_id,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,(t.removed_at IS NOT NULL) AS removed,p.title
+        db().prepare(`SELECT t.id,t.post_id,t.seller_id,t.buyer_id,t.created_at,t.author_id,t.price,COALESCE(NULLIF(t.kind,''),p.kind) AS kind,(t.confirmed_at IS NOT NULL OR t.author_id IS NULL) AS confirmed,(t.removed_at IS NOT NULL) AS removed,COALESCE(NULLIF(t.title,''),p.title) AS title
             FROM trades t LEFT JOIN posts p ON p.id=t.post_id WHERE ${pair}`).bind(...args),
         db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,CASE WHEN r.removed_at IS NULL THEN r.tags ELSE '[]' END AS tags,CASE WHEN r.removed_at IS NULL THEN r.text ELSE '' END AS text,
             r.created_at,(r.removed_at IS NOT NULL) AS removed FROM reviews r JOIN trades t ON t.id=r.trade_id WHERE ${pair}`).bind(...args),
@@ -79,7 +79,7 @@ async function chatListing(conversationId: string, u: User) {
     try {
         const p = await visiblePost(ref.post_id, u), details = parse(p.details, {} as Record<string, unknown>);
         return {
-            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status, author_id: p.author_id,
+            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: p.status === 'closed' ? p.closed_at ?? p.updated_at : null, author_id: p.author_id,
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
             thumb: (parse(p.images, []) as string[])[0] ?? null,
             currentOffer: details.currentOffer ? Number(details.currentOffer) || null : null,

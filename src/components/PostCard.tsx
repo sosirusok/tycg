@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, KIND_NAMES, STATUS_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, tagName,
+    KIND_ICONS, KIND_NAMES, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, statusName, tagName,
     type Post, type SeasonTag,
 } from '../../shared/market';
 import { Link, navigate } from '../lib/router';
@@ -108,7 +108,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             <div className="post-card-meta">
                 <span className="post-card-kind">{showKind ? `[${KIND_NAMES[post.kind]}] ${subjectLabel(post)}` : subjectLabel(post)}</span>
                 <span className="post-card-time">{postTime(post)}</span>
-                {post.status !== 'open' && <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>}
+                {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {flag}
             </div>

@@ -53,6 +53,8 @@ export type Post = {
     price: number | null;
     price_history?: PriceHistoryEntry[];
     status: string;
+    // When the post was completed (WP43); null while 진행중 and for posts completed before the column.
+    closed_at?: number | null;
     created_at: number;
     updated_at: number;
     // Last 끌올 (equal to created_at until the first bump).
@@ -124,7 +126,22 @@ export const CATEGORIES = [
 
 export const KIND_NAMES: Record<TradeKind, string> = { buy: '구매', sell: '판매', exchange: '교환', proxy_request: '대리(구함)', proxy_offer: '대리(진행)' };
 export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'money-bag', exchange: 'handshake', proxy_request: 'key', proxy_offer: 'trophy' };
-export const STATUS_NAMES: Record<string, string> = { open: '거래중', reserved: '예약중', closed: '거래완료' };
+// Two states (WP43): 진행중 ('open') and 완료 ('closed', final). Each kind names them its own way;
+// screens that mix kinds use 거래중/거래완료. A legacy 'reserved' reads as open.
+export const STATUS_NAMES: Record<string, string> = { open: '거래중', closed: '거래완료' };
+export const STATUS_LABELS: Record<TradeKind, { open: string; closed: string }> = {
+    sell: { open: '판매중', closed: '판매완료' },
+    buy: { open: '구매중', closed: '구매완료' },
+    proxy_request: { open: '구하는중', closed: '구함완료' },
+    exchange: { open: '교환중', closed: '교환완료' },
+    proxy_offer: { open: '받는중', closed: '마감' },
+};
+export function statusName(kind: string, status: string) {
+    const labels = STATUS_LABELS[kind as TradeKind];
+    const st = status === 'closed' ? 'closed' : 'open';
+    return labels ? labels[st] : STATUS_NAMES[st];
+}
+export const closedLabel = (kind: string) => statusName(kind, 'closed');
 
 export function isProxyKind(kind: string) { return kind === 'proxy_request' || kind === 'proxy_offer'; }
 export function isTradeKind(kind: unknown): kind is TradeKind { return typeof kind === 'string' && (TRADE_KINDS as string[]).includes(kind); }

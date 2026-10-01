@@ -43,7 +43,7 @@ const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchPara
 const searchName = (labels: string[]) => { const name = labels.join(', '); return name.length > 32 ? name.slice(0, 31) + '…' : name; };
 
 // Only parameters that mean something for the current tab reach the API. closed=1 stays in the
-// address only; without it the request asks for open and reserved posts (active=1).
+// address only; without it the request asks for posts still in progress (active=1).
 function allowedKeys(ctx: Ctx) {
     const { kind, category } = ctx;
     // old=1 is '오래된 글 보기': posts not bumped in the last 30 days too.

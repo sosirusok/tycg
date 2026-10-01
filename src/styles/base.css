@@ -167,7 +167,6 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
 
 /* Status labels */
 .status { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: var(--r-4); font-size: var(--fs-12); font-weight: 600; }
-.status-reserved { background: var(--ink-2); color: var(--white); }
 .status-closed { background: var(--fill); color: var(--ink-3); }
 
 /* Tabs */
