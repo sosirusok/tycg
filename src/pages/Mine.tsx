@@ -25,8 +25,9 @@ type Offer = {
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
-// traded: a completed post that holds a trade record.
-type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean };
+// traded: a completed post that holds a trade record. askable: '거래 기록 요청' can still be sent for it
+// (not hidden, no live record, under the post's 3 requests).
+type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean };
 // 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
@@ -65,7 +66,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onCom
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
     const closed = post.status === 'closed';
     // A post completed as '사이트 밖 거래 · 기록 없음' can still get its record within 7 days (the same sheet).
-    const recordable = closed && post.traded === false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
+    const recordable = closed && post.traded === false && post.askable !== false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
@@ -166,7 +167,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
                         closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)}
-                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null })} />)}</ul>
+                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>

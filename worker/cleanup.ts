@@ -26,12 +26,14 @@ export const RETENTION_PER_RUN = 100;
 // 60 days (an edit makes a new one), which bounds them to about 60 days of posts in D1.
 const THUMB_OPEN_DAYS = 60;
 const THUMBS_PER_RUN = 2000;
-// KV deletes: at most 100 a run, and only while settings 'sys:kv_deletes' ('<UTC date>:<n>') is under 900
-// for the UTC day (KV Free allows 1,000 deletes a day and resets at 00:00 UTC). While only the daily cron
-// runs them, a run must keep up with what one run can queue (100 unused photos plus the mover's copies).
-// KV operations do not count toward the 50 subrequests. Tick B (WP52) may take this over with a smaller
-// number per run.
-export const KV_DELETES_PER_RUN = 100;
+// KV deletes: at most 30 a run, and only while settings 'sys:kv_deletes' ('<UTC date>:<n>') is under 900
+// for the UTC day (KV Free allows 1,000 deletes a day and resets at 00:00 UTC). The Workers limits page
+// counts KV, R2 and D1 calls as subrequests (50 per invocation on Free; its 1,000 'to internal services'
+// is not relied on), and the rest of a run takes at most 15 calls, so 30 keeps the run at 45 or less.
+// They run after the main write batch, so a failing KV call never holds back the rest of the cleanup.
+// kv_trash keys still count toward the KV size guard while they wait. Tick B (WP52) may take this over
+// with more runs a day.
+export const KV_DELETES_PER_RUN = 30;
 export const KV_DELETES_PER_DAY = 900;
 // The R2 mover: once a bucket is bound, at most 3 photos a run are copied into R2: KV ones first, and at
 // most 1 D1 photo (its base64 text, up to about 1.9 MB, is read on its own and decoded, which costs CPU).
@@ -67,10 +69,10 @@ const removable = (now: number) => {
 // events older than the caps look back, posts the previous Worker wrote without bumped_at or
 // title_key, grade-end reminders, photos that no post, chat message or draft has used for a day, photo
 // retention, old thumbnails, the KV delete budget and the R2 mover.
-// The Workers Free plan allows 50 subrequests per invocation, so the whole run is set-based: one read
-// call, at most 2 title-key calls, one D1 photo read and 3 R2 puts for the mover, one write batch, one R2
-// delete and the print fill (≤ 10 D1 or R2 calls and about 40 statements), plus at most 100 KV deletes
-// and 3 KV reads, whatever the number of rows. CPU (10 ms on Free) is kept low by the small JS row
+// The Workers Free plan allows 50 subrequests per invocation (KV, R2 and D1 calls included), so the whole
+// run is set-based: one read call, at most 2 title-key calls, 3 reads (KV or one D1 photo) and 3 R2 puts
+// for the mover, one write batch, one R2 delete, at most 30 KV deletes and one statement that records
+// them, the print fill and the meter row (≤ 45 calls), whatever the number of rows. CPU (10 ms on Free) is kept low by the small JS row
 // counts: 50 prints, 1 D1 photo and the title keys.
 export async function cleanup(now = Date.now()) {
     const kv = hasKv(), mover = hasBucket();
@@ -122,10 +124,6 @@ export async function cleanup(now = Date.now()) {
     const writes: D1PreparedStatement[] = [];
     const remindAt = writes.length;
     if (due.length) writes.push(...remindGradeEnds(due, now));
-    // KV deletes under the day's budget, one by one; only the ids that went leave kv_trash.
-    const used = counterValue(got<{ value: string }>('kvCount')[0]?.value, now);
-    const trash = got<{ id: string }>('trash').map(t => t.id).slice(0, Math.max(0, Math.min(KV_DELETES_PER_RUN, KV_DELETES_PER_DAY - used)));
-    const kvDeleted = trash.length ? await deleteKvKeys(trash) : [];
     // The R2 mover: copy first, then switch the row only if it still has the old store; the old copy goes
     // after (the D1 bytes in the same batch, the KV key through kv_trash).
     const moved: Photo[] = [];
@@ -164,18 +162,23 @@ export async function cleanup(now = Date.now()) {
             db().prepare("UPDATE posts SET images=json_array(json_extract(images,'$[0]')) WHERE id IN (SELECT value FROM json_each(?)) AND status='closed' AND json_array_length(images)>1").bind(ids),
         );
     }
-    if (kvDeleted.length) {
-        writes.push(
-            db().prepare('DELETE FROM kv_trash WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(kvDeleted)),
-            db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:kv_deletes',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`)
-                .bind(`${utcDate(now)}:${used + kvDeleted.length}`, now),
-        );
-    }
     const w = writes.length ? await db().batch(writes) : [];
     const gone = removedAt >= 0 ? w[removedAt].results as Photo[] : [];
     // A photo deleted while it was being copied leaves an R2 object nobody uses: it goes with the rest.
     const orphans = moved.filter((_, i) => !w[movedFirst + i]?.results.length).map(m => m.id);
     await deleteR2Photos([...gone.filter(p => p.storage === 'r2').map(p => p.id), ...orphans]);
+    // KV deletes under the day's budget, one by one and after the main batch has committed; only the ids
+    // that went leave kv_trash, recorded with the day's counter in one small batch.
+    const used = counterValue(got<{ value: string }>('kvCount')[0]?.value, now);
+    const trash = got<{ id: string }>('trash').map(t => t.id).slice(0, Math.max(0, Math.min(KV_DELETES_PER_RUN, KV_DELETES_PER_DAY - used)));
+    const kvDeleted = trash.length ? await deleteKvKeys(trash) : [];
+    if (kvDeleted.length) {
+        await db().batch([
+            db().prepare('DELETE FROM kv_trash WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(kvDeleted)),
+            db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:kv_deletes',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`)
+                .bind(`${utcDate(now)}:${used + kvDeleted.length}`, now),
+        ]);
+    }
     // Last, on its own: the print fill, so a slow fill can never keep the work above from committing.
     const prints = await fillPrints(got<UnfilledPrint>('prints'));
     if (prints) await prints.run();

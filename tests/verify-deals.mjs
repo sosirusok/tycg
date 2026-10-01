@@ -177,11 +177,29 @@ const s = await register('s'), b = await register('b');
     }
     refused(await sd(`posts/${R}/trade`, 'POST', { partnerId: c.user.id }), 429, '거래 기록 요청은 한 글에 3번까지입니다.', 'a 4th request');
     refused(await c(`posts/${R}/trade`, 'POST', {}), 429, '3번까지', 'the partner asking a 4th time');
+    // With the 3 requests used, no screen offers '거래 기록 요청' any more.
+    equal((await sd(`posts/${R}/partners`)).data.canAsk, false, 'the partners call says no request is left');
+    equal((await sd(`chats/${chat}`)).data.chat.listing.canAsk, false, "the chat's pinned post says so too");
+    equal((await c(`chats/${chat}`)).data.chat.listing.canAsk, false, 'also for the member who answered 거래 아님');
+    const own = (await sd(`posts?author=${sd.user.id}&counts=1&size=20&page=1`)).data.posts.find(p => p.id === R);
+    equal([own.traded, own.askable], [false, false], '내 글 marks the post as not askable');
     const panel = (await manager(`manage/users/${sd.user.id}`)).data;
     equal(panel.tradeCounts, { confirmed: 0, pending: 0, denied: 3 }, 'the member panel shows 확인 거래 0 · 확인 대기 0 · 거래 아님 3');
 
-    // An 8-day-old request reads expired, and a new one replaces it.
+    // A post the manager has hidden completes without a trade record or a card.
     const d = await register('d');
+    const H = await created(sd, sale());
+    const hChat = await asks(d, sd, H);
+    equal((await sd(`posts/${H}/partners`)).data.canAsk, true, 'an open post still has its requests');
+    equal((await manager('manage/visibility', 'POST', { postId: H, hidden: true, reason: '도배·중복 글' })).status, 200, 'the manager hides H');
+    const hidden = await complete(sd, H, { partnerId: d.user.id });
+    equal([hidden.status, hidden.data.trade], [200, undefined], 'completing the hidden post with a partner records nothing');
+    equal([status(H), tradeRow(H)], ['closed', undefined], 'H is closed without a trade row');
+    check(!(await d(`chats/${hChat}/messages`)).data.messages.some(m => m.type === 'review'), 'no 거래 확인 요청 card is sent');
+    equal((await sd(`posts/${H}/partners`)).data.canAsk, false, 'a hidden post offers no request');
+    refused(await sd(`posts/${H}/trade`, 'POST', { partnerId: d.user.id }), 409, '숨김 처리된 글입니다.', 'a later request on the hidden post');
+
+    // An 8-day-old request reads expired, and a new one replaces it.
     const X = await created(sd, sale());
     await asks(d, sd, X);
     const old = (await complete(sd, X, { partnerId: d.user.id })).data.trade;

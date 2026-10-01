@@ -7,7 +7,8 @@ import { Avatar, CIcon, Modal, NameLine } from './ui';
 
 type Partner = { id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; conversation_id: string; accepted_amount: number | null; chat_at: number; restricted?: boolean };
 // The post as the sheet needs it: the detail page, 내 글 and the chat's pinned bar all have these.
-export type SheetPost = { id: number; kind: string; title: string; price: number | null; price_mode?: string; status: string; thumb: string | null };
+// hidden: the manager hid the post, so it completes without a trade record (as under 이용 정지).
+export type SheetPost = { id: number; kind: string; title: string; price: number | null; price_mode?: string; status: string; thumb: string | null; hidden?: boolean };
 const OUTSIDE = '';
 const SHOWN = 5;
 const dayText = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -19,7 +20,8 @@ const dayText = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZon
 // and 사이트 밖). The button completes the post (final) and, with a member picked, asks them to
 // confirm the trade. On a post already completed (within 7 days, no record yet) the same sheet asks
 // for the record only. X and the overlay change nothing. `post` null keeps it closed.
-export function CompleteSheet({ post, preselect, suspended = false, onClose, onDone }: { post: SheetPost | null; preselect?: string; suspended?: boolean; onClose: () => void; onDone?: (chatId: string | null) => void }) {
+export function CompleteSheet({ post, preselect, suspended: restricted = false, onClose, onDone }: { post: SheetPost | null; preselect?: string; suspended?: boolean; onClose: () => void; onDone?: (chatId: string | null) => void }) {
+    const suspended = restricted || !!post?.hidden;
     const [partners, setPartners] = useState<Partner[] | null>(null), [pick, setPick] = useState(OUTSIDE), [amount, setAmount] = useState('');
     const [more, setMore] = useState(false), [busy, setBusy] = useState(false);
     const close = useRef(onClose);
@@ -33,7 +35,7 @@ export function CompleteSheet({ post, preselect, suspended = false, onClose, onD
     useEffect(() => {
         setPartners(null); setPick(OUTSIDE); setMore(false); setAmount('');
         if (!post) return;
-        // Under 이용 정지 the post can only be completed, without a trade record.
+        // Under 이용 정지, or on a hidden post, it can only be completed, without a trade record.
         if (suspended) { setPartners([]); return; }
         let alive = true;
         api<{ partners: Partner[] }>(`posts/${post.id}/partners`).then(d => {

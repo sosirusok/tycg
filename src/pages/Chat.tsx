@@ -19,10 +19,10 @@ import { CompleteSheet } from '../components/CompleteSheet';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
-type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
+type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // The post the chat is about, pinned under the room header.
-type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null };
+type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null; canAsk?: boolean; hidden?: boolean };
 type ChatFilter = 'all' | 'applications';
 // A trade between the two members (WP23, WP43) with the 후기 each of them left, for the '거래 확인 요청' card.
 // author_id asked for it; it is confirmed once the other member answered '확인' (or left their 후기);
@@ -391,7 +391,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const listingOpen = !!listing && listing.status !== 'closed';
     // The trade record this chat holds for the post, when one is confirmed, removed or still waiting.
     const liveTrade = !!listing && trades.some(t => t.post_id === listing.id && (!!t.confirmed || !!t.removed || t.created_at > nowMs - ANSWER_MS));
-    const recordable = !!listing && !listingOpen && !liveTrade && !suspended && !blocked && !partner?.deleted
+    // canAsk (from the server): not hidden and under the post's 3 requests, so the button never only fails.
+    const recordable = !!listing && !listingOpen && !liveTrade && !suspended && !blocked && !partner?.deleted && listing.canAsk !== false
         && (listing.closed_at ?? 0) > nowMs - ANSWER_MS && (ownListing || partner?.id === listing.author_id);
     // A member who answered '거래 아님' in this chat gets the request as a line button, not the main action.
     const deniedByMe = messages.some(m => m.sender_id === me.id && m.type === 'system' && m.body === '거래 아님');
@@ -478,7 +479,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             </form>
         </div>
         {partner && me.role !== 'manager' && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={partner.id} nickname={partner.nickname} conversationId={id} />}
-        <CompleteSheet post={tradeSheet && listing ? { id: listing.id, kind: listing.kind, title: listing.title, price: listing.price, price_mode: listing.price_mode, status: listing.status, thumb: listing.thumb } : null} preselect={partner?.id} suspended={suspended}
+        <CompleteSheet post={tradeSheet && listing ? { id: listing.id, kind: listing.kind, title: listing.title, price: listing.price, price_mode: listing.price_mode, status: listing.status, thumb: listing.thumb, hidden: listing.hidden } : null} preselect={partner?.id} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { stick.current = true; void refreshListing(); void poll(false, true).then(() => activity.current()); }} />
         {managerView && partner && <>
             <aside className="room-panel"><MemberPanel inChat userId={partner.id} version={panelVersion} onChange={() => void poll()} /></aside>
@@ -494,9 +495,10 @@ function ListingCard({ postId, title }: { postId: number; title: string }) {
 function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void; onMark: (o: Offer) => void }) {
     if (!offer) return <div className="sys-msg">가격 제시</div>;
     const received = offer.sender_id !== me.id;
-    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯, unless it already is.
+    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯, unless it already is
+    // or the post is completed (a completed post's price no longer changes).
     // Each poll brings the post's own 현젯 with its 제시, so this holds when the bar shows another post too.
-    const markable = received && offer.post_author_id === me.id && offer.post_kind === 'sell' && offer.post_price !== null && offer.amount < offer.post_price
+    const markable = received && offer.post_author_id === me.id && offer.post_kind === 'sell' && offer.post_status !== 'closed' && offer.post_price !== null && offer.amount < offer.post_price
         && (offer.status === 'pending' || offer.status === 'accepted') && offer.post_current_offer !== offer.amount;
     return <div className="event-card">
         <span className="muted small">{received ? '받은 제시' : '보낸 제시'} · <Link to={'/posts/' + offer.post_id}>{offer.title}</Link></span>

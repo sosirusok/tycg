@@ -6,7 +6,7 @@ import {
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
-import { planTrade } from './reviews';
+import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
@@ -577,21 +577,26 @@ async function addPriceDrops(posts: any[], userId: string) {
 // favorites_post and messages_listing indexes (migration 0010_trade_count_indexes).
 async function addOwnCounts(posts: any[]) {
     if (!posts.length) return;
-    const ids = JSON.stringify(posts.map(p => p.id));
-    const [favs, chats, trades] = await db().batch([
+    const ids = JSON.stringify(posts.map(p => p.id)), weekAgo = Date.now() - 7 * DAY;
+    const recent = JSON.stringify(posts.filter(p => p.status === 'closed' && (p.closed_at ?? p.updated_at) > weekAgo).map(p => p.id));
+    const [favs, chats, trades, asked] = await db().batch([
         db().prepare('SELECT post_id AS id,COUNT(*) AS n FROM favorites WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id').bind(ids),
         db().prepare("SELECT CAST(reference_id AS INTEGER) AS id,COUNT(DISTINCT conversation_id) AS n FROM messages WHERE type='listing' AND reference_id IN (SELECT CAST(value AS TEXT) FROM json_each(?)) GROUP BY reference_id").bind(ids),
         // traded: the completed post holds a trade record (confirmed, removed or still waiting), so 내 글
         // offers '거래 기록 요청' only on the others (within 7 days of 완료).
         db().prepare(`SELECT post_id AS id FROM trades WHERE post_id IN (SELECT value FROM json_each(?)) AND (confirmed_at IS NOT NULL OR removed_at IS NOT NULL OR author_id IS NULL OR created_at>?)`)
-            .bind(ids, Date.now() - 7 * DAY),
+            .bind(ids, weekAgo),
+        // askable: '거래 기록 요청' is left (ASK_LIMIT per post, on the trade_log_post index), read only for
+        // the posts completed in the last 7 days (the only ones that can ask).
+        db().prepare("SELECT post_id AS id FROM trade_log WHERE post_id IN (SELECT value FROM json_each(?)) AND event='ask' GROUP BY post_id HAVING COUNT(*)>=?").bind(recent, ASK_LIMIT),
     ]);
     const count = (rows: any[], id: number) => Number(rows.find(row => Number(row.id) === id)?.n) || 0;
     const traded = new Set((trades.results as { id: number }[]).map(t => Number(t.id)));
+    const spent = new Set((asked.results as { id: number }[]).map(t => Number(t.id)));
     for (const p of posts) {
         p.fav_count = count(favs.results, p.id);
         p.chat_count = count(chats.results, p.id);
-        if (p.status === 'closed') p.traded = traded.has(p.id);
+        if (p.status === 'closed') { p.traded = traded.has(p.id); p.askable = !p.hidden && !p.traded && !spent.has(p.id); }
     }
 }
 
@@ -700,8 +705,9 @@ async function patchPrice(req: Request, u: User, post: any) {
 // PATCH /posts/:id/status {status:'closed', partnerId?, amount?} (WP43): 완료 is final and one batch.
 // The post closes (closed_at, and 게시판 상단 노출 ends), its pending 제시 end (an accepted one survives
 // only when its sender is the partner named), and with a partner the pending trade record and its
-// '거래 확인 요청' card follow, guarded on this very completion. Under 이용 정지 the post can still be
-// completed, without a trade record. 'open' (and a legacy 'reserved') is a no-op on an open post.
+// '거래 확인 요청' card follow, guarded on this very completion (and on the post not being hidden). Under
+// 이용 정지, or on a post the manager has hidden, the post can still be completed, without a trade
+// record. 'open' (and a legacy 'reserved') is a no-op on an open post.
 async function completePost(req: Request, u: User, post: any) {
     const b = await body(req);
     if (!['open', 'reserved', 'closed'].includes(b.status)) fail(400, '거래 상태를 확인해 주세요.');
@@ -711,10 +717,12 @@ async function completePost(req: Request, u: User, post: any) {
     }
     if (post.status === 'closed') fail(409, '이미 완료된 글입니다.');
     const now = Date.now();
-    const withPartner = !isSuspended(u.suspended_until, now) && typeof b.partnerId === 'string' && !!b.partnerId;
+    const withPartner = !isSuspended(u.suspended_until, now) && !post.hidden && typeof b.partnerId === 'string' && !!b.partnerId;
     if (withPartner) await limit('trade:' + u.id, 20, 600000);
     const guard = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=?)', guardArgs = [post.id, now];
-    const plan = withPartner ? await planTrade({ ...post, status: 'closed', closed_at: now }, u, b.partnerId, b.amount, now, guard, guardArgs) : null;
+    // The record also needs the post visible: hiding it while this request runs blocks the record.
+    const tradeGuard = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0)';
+    const plan = withPartner ? await planTrade({ ...post, status: 'closed', closed_at: now }, u, b.partnerId, b.amount, now, tradeGuard, guardArgs) : null;
     const keep = plan ? b.partnerId : null;
     const r = await db().batch([
         db().prepare("UPDATE posts SET status='closed',closed_at=?,updated_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, now, post.id),

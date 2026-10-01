@@ -63,7 +63,7 @@ const chatId = (await buyer('chats', 'POST', { postId: withPhoto })).data.id;
 equal((await buyer('chats/' + chatId)).data.chat.listing, null, 'no post card yet: listing is null');
 equal((await buyer(`chats/${chatId}/messages`, 'POST', { body: '아직 판매중인가요?', postId: withPhoto })).status, 201, 'first message about the post');
 const listing = (await buyer('chats/' + chatId)).data.chat.listing;
-equal({ ...listing }, { id: withPhoto, title: `[QA] 채팅 글 ${run}`, kind: 'sell', price: 400000, status: 'open', closed_at: null, author_id: seller.user.id, price_mode: 'fixed', thumb: photo, currentOffer: 200000 }, 'listing names the post with thumb and 현젯');
+equal({ ...listing }, { id: withPhoto, title: `[QA] 채팅 글 ${run}`, kind: 'sell', price: 400000, status: 'open', closed_at: null, author_id: seller.user.id, canAsk: false, hidden: false, price_mode: 'fixed', thumb: photo, currentOffer: 200000 }, 'listing names the post with thumb and 현젯');
 equal((await seller('chats/' + chatId)).data.chat.listing?.id, withPhoto, 'the seller sees the same listing');
 const row = (await buyer('chats')).data.chats.find(c => c.id === chatId);
 equal([row.last_post_title, row.last_post_thumb], [`[QA] 채팅 글 ${run}`, photo], 'list row has the post title and photo');

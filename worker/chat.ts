@@ -1,6 +1,7 @@
 import type { User } from '../shared/market';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
+import { ASK_LIMIT, askCount } from './reviews';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -78,8 +79,12 @@ async function chatListing(conversationId: string, u: User) {
     if (!ref?.post_id) return null;
     try {
         const p = await visiblePost(ref.post_id, u), details = parse(p.details, {} as Record<string, unknown>);
+        const closedAt = p.status === 'closed' ? p.closed_at ?? p.updated_at : null;
+        // canAsk: '거래 기록 요청' is still possible on this completed post (within 7 days, not hidden, under
+        // the 3 asks a post has), so the room hides the button once it would only fail.
+        const canAsk = closedAt !== null && closedAt > Date.now() - 7 * 86400000 && !p.hidden && await askCount(p.id) < ASK_LIMIT;
         return {
-            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: p.status === 'closed' ? p.closed_at ?? p.updated_at : null, author_id: p.author_id,
+            id: p.id, title: p.title, kind: p.kind, price: p.price, status: p.status === 'closed' ? 'closed' : 'open', closed_at: closedAt, author_id: p.author_id, canAsk, hidden: !!p.hidden,
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
             thumb: (parse(p.images, []) as string[])[0] ?? null,
             currentOffer: details.currentOffer ? Number(details.currentOffer) || null : null,
@@ -174,7 +179,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
                 db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
                 // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
-                db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
+                db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,p.status AS post_status,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
                 db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
                 ...withTrades ? pairTradeStatements(c.user_a, c.user_b) : [],
             ]);

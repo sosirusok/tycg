@@ -128,11 +128,11 @@ export function Detail({ id }: { id: string }) {
     const closedAt = post?.status === 'closed' ? post.closed_at ?? post.updated_at : null;
     // Retention (WP45): 90 days after 완료 only the 대표 photo stays.
     const trimmed = closedAt !== null && closedAt < now - 90 * 24 * HOUR && post?.images.length === 1;
-    const closedMine = mine && closedAt !== null && closedAt > now - 7 * 24 * HOUR && !suspended;
+    const closedMine = mine && closedAt !== null && closedAt > now - 7 * 24 * HOUR && !suspended && !post?.hidden;
     useEffect(() => {
         if (!closedMine) { setRecordable(false); return; }
         let alive = true;
-        api<{ partners: unknown[]; trade: { expired?: number } | null }>(`posts/${id}/partners`).then(d => { if (alive) setRecordable((!d.trade || !!d.trade.expired) && d.partners.length > 0); }).catch(() => { if (alive) setRecordable(false); });
+        api<{ partners: unknown[]; trade: { expired?: number } | null; canAsk?: boolean }>(`posts/${id}/partners`).then(d => { if (alive) setRecordable(d.canAsk !== false && (!d.trade || !!d.trade.expired) && d.partners.length > 0); }).catch(() => { if (alive) setRecordable(false); });
         return () => { alive = false; };
     }, [closedMine, id, tradeSheet]);
     useEffect(() => { if (post) setPageTitle(post.title); }, [post?.title]);
@@ -340,7 +340,7 @@ export function Detail({ id }: { id: string }) {
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
-        {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null } : null} suspended={suspended}
+        {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
             footer={<><button className="btn btn-line" onClick={() => setConfirmDelete(false)}>취소</button><button className="btn btn-danger-solid" onClick={remove}>삭제</button></>} />

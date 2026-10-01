@@ -15,7 +15,7 @@ import { blocked, guardedMessageStatements } from './chat';
 const DAY = 86400000;
 const PAGE_SIZE = 20;
 const ANSWER_DAYS = 7;
-const ASK_LIMIT = 3;
+export const ASK_LIMIT = 3;
 // The lines a trade leaves in the chat of its two members.
 export const TRADE_ASK_TEXT = '거래 확인 요청';
 export const TRADE_CONFIRMED_TEXT = '거래 확인 완료';
@@ -58,6 +58,11 @@ async function tradeOf(postId: number, now = Date.now()) {
     return t;
 }
 
+// How many times '거래 기록 요청' was sent for the post (ASK_LIMIT each).
+export async function askCount(postId: number): Promise<number> {
+    return (await db().prepare("SELECT COUNT(*) AS n FROM trade_log WHERE post_id=? AND event='ask'").bind(postId).first<{ n: number }>())?.n ?? 0;
+}
+
 const blockedPair = 'NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?))';
 const AMOUNT_MAX = 1000000000;
 // The most an accepted 제시 can back on a post that never listed a price (decisions item 2, review fix):
@@ -98,8 +103,7 @@ export async function planTrade(post: any, u: User, partnerId: unknown, rawAmoun
     if (author ? isSuspended(partner.suspended_until) : await db().prepare('SELECT 1 FROM users WHERE id=? AND suspended_until>?').bind(otherId, now).first()) fail(409, '이용 제한 회원과는 거래를 기록할 수 없습니다.');
     const existing = await tradeOf(post.id, now);
     if (existing && !existing.expired) fail(409, '이미 거래가 기록된 글입니다.');
-    const asks = await db().prepare("SELECT COUNT(*) AS n FROM trade_log WHERE post_id=? AND event='ask'").bind(post.id).first<{ n: number }>();
-    if ((asks?.n ?? 0) >= ASK_LIMIT) fail(429, '거래 기록 요청은 한 글에 3번까지입니다.');
+    if (await askCount(post.id) >= ASK_LIMIT) fail(429, '거래 기록 요청은 한 글에 3번까지입니다.');
     const price = tradeAmount(post, rawAmount, partner.accepted_amount);
     // The member who is not the post author: the seller of a 구매 or 대리(구함) post, else the buyer.
     const authorBuys = post.kind === 'buy' || post.kind === 'proxy_request';
@@ -287,10 +291,13 @@ export async function reviewsHandler(req: Request, p: string[], url: URL): Promi
     if (p[0] === 'users' && p[1] && p[2] === 'reviews' && !p[3] && method === 'GET') return listReviews(p[1], url);
     if (p[0] === 'posts' && p[1] && p[2] === 'partners' && !p[3] && method === 'GET') {
         const u = await requireUser(req), post = await authorPost(p[1], u);
-        const [partners, trade] = await Promise.all([partnersOf(post), tradeOf(post.id)]);
+        const [partners, trade, asks] = await Promise.all([partnersOf(post), tradeOf(post.id), askCount(post.id)]);
         // Whether a partner is under 이용 정지 stays private; `restricted` only says the record cannot be asked.
+        // canAsk: '거래 기록 요청' can still be sent for this post (not hidden, no live record, under 3 asks),
+        // so the screens offer it only then.
         const now = Date.now();
-        return json({ partners: partners.map(({ suspended_until, ...x }) => ({ ...x, ...isSuspended(suspended_until, now) ? { restricted: true } : {} })), trade: trade || null });
+        const canAsk = !post.hidden && (!trade || !!trade.expired) && asks < ASK_LIMIT;
+        return json({ partners: partners.map(({ suspended_until, ...x }) => ({ ...x, ...isSuspended(suspended_until, now) ? { restricted: true } : {} })), trade: trade || null, canAsk });
     }
     if (p[0] === 'posts' && p[1] && p[2] === 'trade' && !p[3] && method === 'POST') return createTrade(req, await requireUser(req), p[1]);
     if (p[0] === 'trades' && p[1] && p[2] === 'answer' && !p[3] && method === 'POST') return answerTrade(req, await requireUser(req), p[1]);

@@ -358,11 +358,14 @@ export function Board() {
         else void navigate(writeHref);
     });
     const submit = (e: FormEvent) => { e.preventDefault(); update({ q: q.trim() }); };
-    const totalPages = !data ? 0 : data.capped ? Math.floor(COUNT_CAP / PAGE_SIZE) : Math.ceil(data.total / PAGE_SIZE);
+    // Past the 300+ count the pager keeps going while pages come back full (as the profile and 내 글 do),
+    // so every post of a busy board stays reachable.
+    const full = !!data && !data.error && data.posts.length >= PAGE_SIZE;
+    const totalPages = !data ? 0 : data.capped ? Math.max(Math.floor(COUNT_CAP / PAGE_SIZE), full ? page + 1 : page) : Math.ceil(data.total / PAGE_SIZE);
     const totalText = data ? (data.capped ? COUNT_CAP + '+' : data.total.toLocaleString()) : '';
     // Boards list the last 30 days; after the last page the member can go on into older posts, on the
     // same page number so the posts already seen stay on top. A search already covers every post.
-    const showOld = !!data && !data.error && !data.capped && query.get('old') !== '1' && !query.get('q') && page >= totalPages;
+    const showOld = !!data && !data.error && query.get('old') !== '1' && !query.get('q') && page >= totalPages;
     const openOld = () => { const next = new URLSearchParams(query); next.set('old', '1'); void navigate('/trade?' + next.toString()); };
     const title = kind === 'all' ? (params.get('q') ? '검색 결과' : '전체') : KIND_NAMES[kind];
     const highlight = readTags(query.get('tags'));
