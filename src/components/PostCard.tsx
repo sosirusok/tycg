@@ -121,7 +121,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             <div className="post-card-bottom">
                 <PriceLine post={post} />
                 {!hideAuthor && <div className="post-card-author">
-                    <NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact />
+                    <NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} compact />
                 </div>}
             </div>
         </div>
@@ -142,6 +142,6 @@ export function MiniCard({ post }: { post: Post }) {
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
         <PriceLine post={post} />
         {/* The time sits on the meta line, as on PostCard, so the author row holds only the name line. */}
-        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /></div>
+        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} compact /></div>
     </Link>;
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, longDate, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
-import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
+import { BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -19,7 +19,7 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 // tradeCount, goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
 type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
-type ReviewRow = Review & { nickname: string; role: string; grade: string; badges: string[]; author_deleted?: boolean };
+type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean };
 type ProfileTab = 'active' | 'closed' | 'reviews';
 // GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
 type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
@@ -112,7 +112,9 @@ export default function ProfilePage({ id }: { id?: string }) {
         } catch (e) { if (gen === listGen.current) toast.error(errorText(e)); }
         finally { setLoadingMore(false); }
     }
-    const grade = gradeInfo(user.grade);
+    // A 플러스 무료 체험 is the member's own business: others (the manager aside) see 일반.
+    const trialing = !!user.grade_trial && !!user.grade_expires_at;
+    const grade = gradeInfo(user.grade_trial && !mine && me?.role !== 'manager' ? 'normal' : user.grade);
     // The next grade up for sale and the first thing it adds, on the owner's own grade card.
     const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
     const usageLine = usage && usage.perks.bumpsPerDay !== null && usage.perks.openPosts !== null
@@ -123,7 +125,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="profile-head">
             <Avatar name={user.nickname} size="lg" />
             <div className="grow">
-                <NameLine nickname={user.nickname} grade={user.grade} role={user.role} badges={user.badges} size="lg" />
+                <NameLine nickname={user.nickname} grade={user.grade} trial={user.grade_trial} role={user.role} badges={user.badges} size="lg" />
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
@@ -158,11 +160,13 @@ export default function ProfilePage({ id }: { id?: string }) {
             </div>
             <div className="card card-pad">
                 <div className="card-title-row"><h2 className="card-title">등급</h2>
-                    {mine && user.role !== 'manager' && grade.rank < 3 && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청</button>}</div>
+                    {mine && user.role !== 'manager' && grade.rank < 3 && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 || trialing ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청</button>}</div>
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
                     <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
                     {/* The end date of a 6-month grade reaches only the member and the manager. */}
-                    {user.grade_expires_at && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
+                    {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
+                    {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
+                        : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
                     {mine && usageLine && <p className="grade-usage">{usageLine}</p>}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
                     {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
@@ -230,7 +234,7 @@ function ReviewList({ userId }: { userId: string }) {
         <p className="muted small" style={{ marginBottom: 12 }}>{total}건</p>
         <ul className="review-list">{rows.map(r => <li key={r.id}>
             <div className="review-head">
-                {r.author_deleted ? <NameLine nickname={r.nickname} compact /> : <Link to={'/profile/' + r.author_id} className="review-who"><NameLine nickname={r.nickname} grade={r.grade} role={r.role} badges={r.badges} compact /></Link>}
+                {r.author_deleted ? <NameLine nickname={r.nickname} compact /> : <Link to={'/profile/' + r.author_id} className="review-who"><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} compact /></Link>}
                 <time className="review-date">{dateText(r.created_at)}</time>
             </div>
             <div className="review-line">

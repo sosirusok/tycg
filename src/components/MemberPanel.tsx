@@ -6,7 +6,7 @@ import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
 import { Modal, NameLine } from './ui';
 
-type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null };
+type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null; source?: string };
 type Revoke = { name: string; description?: string; task: () => Promise<unknown>; done: string };
 type Sanction = { id: number; days: number | null; reason: string; created_at: number };
 // A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
@@ -66,7 +66,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     return <div className="member-panel">
         <div className="mp-head">
-            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
             <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span>
         </div>
         {pending.length > 0 && !inChat && <div className="mp-block">
@@ -95,7 +95,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         {u.role !== 'manager' && <div className="mp-block">
             <h4>등급 <span className="muted small">현재 {gradeInfo(u.grade).name}{u.grade_expires_at ? ` · ${longDate(u.grade_expires_at)}까지` : ''}</span></h4>
             {active.length > 0 ? active.map(g => <div key={g.id} className="mp-row">
-                <span className="grow">{gradeInfo(g.grade).name} <span className="muted small">{g.expires_at ? `${longDate(g.expires_at)}까지` : '영구'}</span></span>
+                <span className="grow">{gradeInfo(g.grade).name}{g.source === 'trial' ? ' 체험' : ''} <span className="muted small">{g.expires_at ? `${longDate(g.expires_at)}까지` : '영구'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRevoke({ name: `${gradeInfo(g.grade).name} 등급`, task: () => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), done: '등급 회수 완료' })}>회수</button>
             </div>) : <p className="muted small">지급 내역 없음</p>}
             {!u.deleted_at && <div className="mp-grant">
@@ -146,7 +146,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         </div>}
         <Modal open={!!revoke} onClose={() => { if (!busy) setRevoke(null); }} title={revoke ? `${u.nickname}님 ${revoke.name} 회수` : ''} description={revoke?.description}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRevoke(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (revoke) void run(revoke.task, revoke.done); }}>회수</button></>}>
-            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
         </Modal>
         <Modal open={suspendForm} onClose={() => { if (!busy) setSuspendForm(false); }} title={`${u.nickname}님 이용 정지`}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setSuspendForm(false)}>취소</button>
@@ -161,7 +161,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         </Modal>
         <Modal open={clearing} onClose={() => { if (!busy) setClearing(false); }} title={`${u.nickname}님 이용 정지 해제`}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setClearing(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(suspend(null), '이용 정지 해제')}>해제</button></>}>
-            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
         </Modal>
         <Modal open={!!removingTrade} onClose={() => { if (!busy) setRemovingTrade(null); }} title="거래 삭제" description="거래 횟수와 이 거래의 후기가 빠집니다."
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemovingTrade(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (removingTrade) void run(() => api(`manage/trades/${removingTrade.id}`, 'DELETE'), '삭제 완료'); }}>삭제</button></>}>
@@ -173,7 +173,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         </Modal>
         <Modal open={resetting} onClose={() => { if (!busy) setResetting(false); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setResetting(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void issue()}>발급</button></>}>
-            <NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} />
+            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
         </Modal>
         <Modal open={!!temp} onClose={() => setTemp('')} title="임시 비밀번호"
             footer={<button type="button" className="btn btn-primary" onClick={() => void copy()}>복사</button>}>

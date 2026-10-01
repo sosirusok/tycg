@@ -69,7 +69,10 @@ const pick = list => only.length ? list.filter(f => only.some(w => f.includes(w)
 try {
     await completed(child([wrangler, 'd1', 'migrations', 'apply', 'DB', '--local', '--config', 'wrangler.jsonc'], { stdio: 'inherit' }), 90000);
     // Rate limits and settings from earlier local runs must not leak into this run.
-    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings;'], { stdio: 'ignore' }), 60000);
+    // The 플러스 무료 체험 window (0016_plus_trial) starts now and is closed right away, so the suites
+    // keep 일반 sign-ups; verify-trial opens it for itself.
+    const trialSettings = `INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now()}',0),('sys:trial_end','-1',0);`;
+    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings; ' + trialSettings + " UPDATE settings SET value='-1' WHERE key='sys:trial_end';"], { stdio: 'ignore' }), 60000);
     // POST_LIMITS=relaxed lifts the post caps (open posts, posts per day, same title) on this server only,
     // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
@@ -93,7 +96,7 @@ try {
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
 } catch (error) {

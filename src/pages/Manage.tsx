@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, applicationTitle, kstDateTime, type Application } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
@@ -11,10 +11,10 @@ import { MemberPanel } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
 
 type TabId = 'applications' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
-type App = Application & { nickname: string; username: string; grade: string; badges: string[] };
-type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; badges: string[]; reason: string; details: string; status: string; created_at: number;
+type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
+type Report = { id: number; post_id: number | null; title: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
     // A member report: the reported member and the chat it came from.
-    target_user_id: string | null; conversation_id: string | null; target_nickname?: string; target_role?: string; target_grade?: string; target_badges?: string[]; target_deleted?: boolean; target_suspended?: boolean };
+    target_user_id: string | null; conversation_id: string | null; target_nickname?: string; target_role?: string; target_grade?: string; target_grade_trial?: boolean; target_badges?: string[]; target_deleted?: boolean; target_suspended?: boolean };
 type EvidenceMessage = { id: number; sender_id: string; nickname: string; body: string; type: string; photos: number; created_at: number };
 type Notice = { id: number; title: string; body: string; created_at: number };
 
@@ -63,7 +63,7 @@ function Applications({ onChange }: { onChange: () => void }) {
         <div className="mt-16">{apps === null ? <SkeletonRows count={3} height={72} /> : apps.length ? <ul className="simple-list">{apps.map(a => <li key={a.id}>
             <span className="grow">
                 <strong>{applicationTitle(a)}</strong>
-                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} badges={a.badges} /></button><span className="muted">@{a.username} · {relativeTime(a.created_at)}</span></span>
+                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">@{a.username} · {relativeTime(a.created_at)}</span></span>
             </span>
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
@@ -87,7 +87,7 @@ function Members() {
         <form className="search-input" onSubmit={submit} role="search"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="닉네임 또는 아이디" aria-label="회원 검색" /></form>
         <div className="chip-row mt-12">{[['', '전체'], ['badged', '인증 보유'], ['graded', '등급 보유']].map(([id, label]) => <button type="button" key={id} className="chip chip-sm" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}</div>
         <div className="mt-16">{users === null ? <SkeletonRows count={4} height={60} /> : users.length ? <ul className="simple-list">{users.map(u => <li key={u.id}>
-            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.suspended && ' · 이용 정지 중'}</span></span>
+            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.suspended && ' · 이용 정지 중'}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
         </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
@@ -105,8 +105,8 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
                 <strong>{r.reason}</strong>
                 <span className="small">{r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
-                {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
-                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
+                {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
+                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{!r.target_user_id && <> · {r.post_id ? <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link> : '삭제된 글'}</>}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
             <span className="report-actions">
@@ -166,6 +166,47 @@ function Notices() {
     </>;
 }
 
+type TrialInfo = { start: number | null; end: number | null; open: boolean; granted: number; active: number; applied: number };
+const KST = 9 * 3600000;
+// 'YYYY-MM-DDTHH:mm' on the Korean calendar for a datetime-local input, and back (to the end of that minute).
+const kstInput = (t: number) => new Date(t + KST).toISOString().slice(0, 16);
+const fromKstInput = (v: string) => { const t = Date.parse(v + ':00Z'); return Number.isFinite(t) ? t - KST + 59999 : NaN; };
+
+// '플러스 무료 체험': the sign-up window, the counts, 종료일 변경 (up to 90 days ahead) and 지금 마감.
+function TrialCard() {
+    const { refreshConfig } = useApp();
+    const [info, setInfo] = useState<TrialInfo | null>(null);
+    const [sheet, setSheet] = useState<'' | 'end' | 'close'>(''), [end, setEnd] = useState(''), [endRunning, setEndRunning] = useState(false), [busy, setBusy] = useState(false);
+    useEffect(() => { api<TrialInfo>('manage/trial').then(setInfo).catch(e => toast.error(errorText(e))); }, []);
+    async function save(data: Record<string, unknown>, done: string) {
+        setBusy(true);
+        try { setInfo(await api<TrialInfo>('manage/trial', 'PUT', data)); setSheet(''); refreshConfig(); toast(done); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    if (!info) return null;
+    const now = Date.now();
+    return <section className="card card-pad trial-admin">
+        <h2 className="card-title">플러스 무료 체험</h2>
+        <p>가입 기간 {info.start ? kstDateTime(info.start) : '-'} ~ {info.end && info.end > 0 ? kstDateTime(info.end) : '-'}</p>
+        <p className="muted small">체험 받은 회원 {info.granted}명 · 지금 체험 중 {info.active}명 · 체험 후 등급 신청 {info.applied}명</p>
+        <div className="row mt-8">
+            <button type="button" className="btn btn-line btn-sm" onClick={() => { setEnd(kstInput(Math.max(info.end && info.end > now ? info.end : now + 86400000, now))); setSheet('end'); }}>종료일 변경</button>
+            <button type="button" className="btn btn-line btn-sm" disabled={!info.open} onClick={() => { setEndRunning(false); setSheet('close'); }}>지금 마감</button>
+        </div>
+        <Modal open={sheet === 'end'} onClose={() => { if (!busy) setSheet(''); }} title="종료일 변경"
+            footer={<button className="btn btn-primary btn-lg btn-block" disabled={busy || !end} onClick={() => save({ end: fromKstInput(end) }, '저장 완료')}>저장</button>}>
+            <label className="field"><span className="field-label">종료 일시</span>
+                <input className="input" type="datetime-local" value={end} min={kstInput(now)} max={kstInput(now + 90 * 86400000)} onChange={e => setEnd(e.target.value)} />
+                <span className="field-hint">한국 시간 · 90일 이내</span></label>
+        </Modal>
+        <Modal open={sheet === 'close'} onClose={() => { if (!busy) setSheet(''); }} title="지금 마감"
+            footer={<button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => save({ close: true, endRunning }, '마감 완료')}>마감</button>}>
+            <label className="check"><input type="checkbox" checked={endRunning} onChange={e => setEndRunning(e.target.checked)} />진행 중인 체험도 지금 끝내기</label>
+        </Modal>
+    </section>;
+}
+
 function Settings() {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
@@ -177,7 +218,7 @@ function Settings() {
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
-    return <form className="settings-form" onSubmit={save}>
+    return <><TrialCard /><form className="settings-form" onSubmit={save}>
         <label className="field"><span className="field-label">등급 입금 안내</span>
             <textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={notice} onChange={e => setNotice(e.target.value)} placeholder="예: 국민은행 000000-00-000000 (예금주 ○○○)" />
             <span className="field-hint">신청 창 입금 안내에 표시. 비우면 ‘채팅으로 안내’로 표시.</span></label>
@@ -185,5 +226,5 @@ function Settings() {
             <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={32} max={200} value={season} onChange={e => setSeason(e.target.value)} /><span>시즌</span></div>
             <span className="field-hint">새 시즌 오픈 시 변경. 글쓰기, 검색 시즌 목록에 반영. 낮출 수 없음.</span></label>
         <div><button className="btn btn-primary" disabled={busy}>저장</button></div>
-    </form>;
+    </form></>;
 }

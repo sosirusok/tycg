@@ -358,7 +358,7 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
-        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} />
+        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
             {(trades > 0 || good > 0) && <span className="author-stats">{tradeStatsText(trades, good)}</span>}
             {seen && <span className="author-stats author-seen">{seen}</span>}</span>
         <ChevronRight size={18} className="muted" />

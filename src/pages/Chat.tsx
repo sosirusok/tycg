@@ -17,10 +17,10 @@ import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { TradeSheet } from '../components/TradeSheet';
 
-type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
+type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
-type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
+type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // The post the chat is about, pinned under the room header.
 type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
 type ChatFilter = 'all' | 'applications';
@@ -108,7 +108,7 @@ export default function Chat({ id }: { id?: string }) {
                         <Avatar name={c.nickname} />
                         {/* Time top-right and the unread count bottom-right of the text column; the post's photo sits outside it. */}
                         <span className="chat-item-main">
-                            <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} role={c.role} badges={c.badges} compact /><time className="chat-item-time">{relativeTime(c.updated_at)}</time></span>
+                            <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} trial={c.grade_trial} role={c.role} badges={c.badges} compact /><time className="chat-item-time">{relativeTime(c.updated_at)}</time></span>
                             {c.last_post_title && <span className="chat-item-post">{c.last_post_title}</span>}
                             <span className="chat-item-last">{c.pending_applications > 0 && me.role === 'manager' && <b className="app-flag">신청 {c.pending_applications}</b>}<span className="chat-item-text">{c.last_message || '새 채팅'}</span>{c.unread > 0 && <b className="unread">{c.unread > 99 ? '99+' : c.unread}</b>}</span>
                         </span>
@@ -369,7 +369,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 <Link to="/chat" className="icon-btn room-back" aria-label="채팅 목록"><ArrowLeft size={22} /></Link>
                 {partner?.deleted ? <span className="room-who"><Avatar name={partner.nickname} size="sm" /><span>{partner.nickname}</span></span>
                     : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><span className="room-who-text">
-                        <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} compact />
+                        <NameLine nickname={partner.nickname} grade={partner.grade} trial={partner.grade_trial} role={partner.role} badges={partner.badges} compact />
                         {partner.last_seen_at && <span className="room-seen">{lastSeenText(partner.last_seen_at)}</span>}
                     </span></Link> : <span className="grow" />}
                 <span className="grow" />
@@ -523,7 +523,7 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction, next }:
     if (!app) return <div className="sys-msg">{fallback}</div>;
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
-        <div className="row"><CIcon name={app.kind === 'badge' ? BADGES.find(b => b.id === app.target)?.icon || 'identification-card' : gradeInfo(app.target).icon} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
+        <div className="row"><CIcon name={app.kind === 'badge' ? BADGES.find(b => b.id === app.target)?.icon || 'identification-card' : gradeInfo(app.target).icon} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} trial={partner.grade_trial} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <div className="chip-row" role="group" aria-label="반려 사유 선택">{REJECT_NOTES.map(n => <button type="button" key={n} className="chip chip-sm" aria-pressed={note === n} onClick={() => setNote(n)}>{n}</button>)}</div>

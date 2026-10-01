@@ -1,17 +1,75 @@
-import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, MANAGER_ID, WITHDRAWN } from './http';
+import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement } from './reviews';
 import {
     PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
-    type ApplicationKind, type BadgeId, type GradeId, type PlanId,
+    type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
 import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
 
 export async function siteConfig() {
     await initManager();
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null };
+    // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
+    const w = await trialWindow(), open = trialOpen(w);
+    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null } };
+}
+
+const DAY = 86400000;
+
+// The member's own 플러스 무료 체험 state: when it ends, whether the sign-up popup is still due
+// (trial running and never closed), whether the one-time end band is due (the trial ended, no grade
+// replaced it and the band was not closed yet: reminded_at=-1 on the trial row), and whether the
+// per-address cap kept the trial from this account (shown for a day after sign-up).
+export async function trialState(u: User, capped = false): Promise<TrialState> {
+    const now = Date.now();
+    const r = await db().prepare(`SELECT u.trial_at,u.trial_popup_at,u.created_at,t.expires_at,t.reminded_at FROM users u
+        LEFT JOIN user_grades t ON t.user_id=u.id AND t.source='trial' WHERE u.id=? ORDER BY t.id DESC LIMIT 1`).bind(u.id).first<any>();
+    if (!r) return { endsAt: null, popup: false, ended: false, capped };
+    const has = r.expires_at !== null && r.expires_at !== undefined;
+    return {
+        endsAt: has ? r.expires_at : null,
+        popup: has && r.trial_popup_at === null && r.expires_at > now,
+        ended: has && r.expires_at <= now && r.reminded_at !== -1 && gradeInfo(u.grade).rank === 0,
+        capped: capped || (r.trial_at === -1 && r.created_at > now - DAY),
+    };
+}
+
+// POST me/trial-popup (the popup was closed or '첫 글 쓰기' was tapped) and POST me/trial-ended-seen
+// (the end band was closed). Both only stamp the member's own rows.
+export async function trialMeHandler(req: Request, p: string[]): Promise<Response | null> {
+    if (req.method !== 'POST' || (p[1] !== 'trial-popup' && p[1] !== 'trial-ended-seen') || p[2]) return null;
+    const u = await requireUser(req), now = Date.now();
+    if (p[1] === 'trial-popup') await db().prepare('UPDATE users SET trial_popup_at=? WHERE id=? AND trial_popup_at IS NULL').bind(now, u.id).run();
+    else await db().prepare("UPDATE user_grades SET reminded_at=-1 WHERE user_id=? AND source='trial' AND expires_at<=?").bind(u.id, now).run();
+    return json({ ok: true });
+}
+
+// The manager's '플러스 무료 체험' card: the window, how many members got a trial, how many are in
+// one now and how many applied for a grade after it. PUT {end} moves the end (KST time between now
+// and 90 days ahead); PUT {close: true, endRunning} closes the window now and, with endRunning, ends
+// every running trial too. The start never moves.
+async function manageTrial(req: Request) {
+    const now = Date.now();
+    if (req.method === 'PUT') {
+        const b = await body(req);
+        const end = b.close === true ? now - 1 : Number(b.end);
+        if (b.close !== true && (!Number.isInteger(end) || end < now || end > now + 90 * DAY)) fail(400, '종료일은 지금부터 90일 안으로 정해 주세요.');
+        await db().batch([
+            db().prepare("INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_end',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(end), now),
+            ...b.close === true && b.endRunning === true ? [db().prepare("UPDATE user_grades SET expires_at=? WHERE source='trial' AND expires_at>?").bind(now, now)] : [],
+        ]);
+        clearTrialCache();
+    }
+    const w = await trialWindow(true);
+    const r = await db().prepare(`SELECT (SELECT COUNT(*) FROM users WHERE trial_at>0) AS granted,
+        (SELECT COUNT(*) FROM user_grades WHERE source='trial' AND expires_at>?) AS active,
+        (SELECT COUNT(DISTINCT a.user_id) FROM applications a JOIN users u ON u.id=a.user_id WHERE u.trial_at>0 AND a.kind='grade' AND a.created_at>=u.trial_at) AS applied`).bind(now).first<any>();
+    return json({
+        start: Number.isFinite(w.start) ? w.start : null, end: Number.isFinite(w.end) ? w.end : null, open: trialOpen(w, now),
+        granted: r?.granted ?? 0, active: r?.active ?? 0, applied: r?.applied ?? 0,
+    });
 }
 
 // Only the manager grants grades (the DB triggers in 0009_manager_only refuse any other granted_by).
@@ -199,6 +257,10 @@ function tempPassword(length = 10) {
 // manageHandler has already called requireManager; the grant paths check again on their own.
 export async function manageMembers(req: Request, u: User, p: string[], url: URL): Promise<Response | null> {
     const method = req.method;
+    if (p[1] === 'trial' && !p[2] && (method === 'GET' || method === 'PUT')) {
+        requireManager(u);
+        return manageTrial(req);
+    }
     if (p[1] === 'applications' && method === 'GET') {
         const status = url.searchParams.get('status');
         const where = status && ['pending', 'approved', 'rejected', 'cancelled'].includes(status) ? 'WHERE a.status=?' : '';

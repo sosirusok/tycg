@@ -131,7 +131,7 @@ export function ApplyModal() {
                     return <div key={g.id} className={'grade-row' + (current ? ' is-current' : '')}>
                         <CIcon name={g.icon} size={32} />
                         <div className="grade-row-name">
-                            <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">현재</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
+                            <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
                             {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
                         </div>
                         <div className="grade-row-plans">

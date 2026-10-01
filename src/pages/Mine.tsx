@@ -21,7 +21,7 @@ const isPostTab = (t: TabId) => t === 'posts' || t === 'favorites' || t === 'rec
 
 type Offer = {
     id: string; post_id: number; title: string; amount: number; status: string; sender_id: string; sender_name: string; recipient_name: string; conversation_id: string; created_at: number;
-    sender_grade: string; sender_badges: string[]; recipient_grade: string; recipient_badges: string[];
+    sender_grade: string; sender_grade_trial?: boolean; sender_badges: string[]; recipient_grade: string; recipient_grade_trial?: boolean; recipient_badges: string[];
 };
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
@@ -192,7 +192,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
                     : <EmptyState icon="file" title={tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={<Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
                 : tab === 'offers' ? (items.length ? <ul className="simple-list">{(items as Offer[]).map(o => <li key={o.id}>
-                    <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? <>보낸 제시 · <NameLine nickname={o.recipient_name} grade={o.recipient_grade} badges={o.recipient_badges} /></> : <>받은 제시 · <NameLine nickname={o.sender_name} grade={o.sender_grade} badges={o.sender_badges} /></>}<span className="nowrap">{' '}· {relativeTime(o.created_at)}</span></span></span>
+                    <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? <>보낸 제시 · <NameLine nickname={o.recipient_name} grade={o.recipient_grade} trial={o.recipient_grade_trial} badges={o.recipient_badges} /></> : <>받은 제시 · <NameLine nickname={o.sender_name} grade={o.sender_grade} trial={o.sender_grade_trial} badges={o.sender_badges} /></>}<span className="nowrap">{' '}· {relativeTime(o.created_at)}</span></span></span>
                     <b>{priceText(o.amount)}</b><span className="event-status">{OFFER_STATUS[o.status] || o.status}</span>
                     <Link to={'/chat/' + o.conversation_id} className="btn btn-line btn-xs">채팅</Link>
                 </li>)}</ul> : <EmptyState icon="message" title="제시 내역이 없습니다" />)
@@ -201,7 +201,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
                     {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
                 </li>)}</ul> : <EmptyState icon="file" title="신청 내역이 없습니다" action={me.role !== 'manager' ? <button className="btn btn-primary" onClick={() => openApply()}>인증/등급 신청하기</button> : undefined} />)
-                : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
+                : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} trial={b.grade_trial} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
         <TradeSheet postId={tradePost} onClose={() => setTradePost(null)} />

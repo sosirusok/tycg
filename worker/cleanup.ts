@@ -44,14 +44,15 @@ export async function cleanup(now = Date.now()) {
     return { removed, reminded };
 }
 
-// A 6-month grade that ends within 7 days gets one manager chat message. A renewal moves the end
+// A 6-month grade that ends within 7 days gets one manager chat message. A 플러스 무료 체험 never does
+// (its reminders stay in the app: the member's status line and the home end band). A renewal moves the end
 // date, so the grant is reminded again before the new date. Grants outlived by another grant of the
 // same or a higher grade are skipped. Best-effort per member: ensureChat throws when the member
 // blocked the manager, and the grant is still marked, so one member never stops the loop or gets
 // retried every day.
 async function remindGradeEnds(now: number) {
     const r = await db().prepare(`SELECT g.id,g.user_id,g.grade,g.expires_at FROM user_grades g
-        WHERE g.expires_at>? AND g.expires_at<=? AND (g.reminded_at IS NULL OR g.reminded_at<g.expires_at-?)
+        WHERE g.source='manager' AND g.expires_at>? AND g.expires_at<=? AND (g.reminded_at IS NULL OR g.reminded_at<g.expires_at-?)
         AND NOT EXISTS(SELECT 1 FROM user_grades o WHERE o.user_id=g.user_id AND o.id!=g.id AND o.rank>=g.rank AND (o.expires_at IS NULL OR o.expires_at>g.expires_at))
         ORDER BY g.expires_at LIMIT 50`).bind(now, now + 7 * DAY, 7 * DAY).all<{ id: number; user_id: string; grade: string; expires_at: number }>();
     let sent = 0;

@@ -27,6 +27,8 @@ export type User = {
     postCount?: number;
     grade: GradeId;
     grade_expires_at: number | null;
+    // 플러스 무료 체험 (WP41): the grade is 'plus', but no chip is shown.
+    grade_trial?: boolean;
     badges: BadgeId[];
     // The session user's own 이용 정지 end (WP22); other members' profiles carry only `suspended`.
     suspended_until?: number | null;
@@ -43,6 +45,7 @@ export type Post = {
     nickname: string;
     role: string;
     author_grade: GradeId;
+    author_grade_trial?: boolean;
     author_badges: BadgeId[];
     kind: TradeKind;
     title: string;

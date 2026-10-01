@@ -4,7 +4,7 @@ import { priceText } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Avatar, Modal, NameLine } from './ui';
 
-type Partner = { id: string; nickname: string; role: string; grade: string; badges: string[]; conversation_id: string; accepted_amount: number | null };
+type Partner = { id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; conversation_id: string; accepted_amount: number | null };
 
 // '거래한 회원' (WP23), opened after the author sets a post to 거래완료 on the detail page, in 내 글 or
 // from the chat's pinned bar (with that chat's partner preselected), and later from the detail page's
@@ -51,7 +51,7 @@ export function TradeSheet({ postId, preselect, onClose, onDone }: { postId: num
                 <input type="radio" name="trade-partner" value={p.id} checked={pick === p.id} onChange={() => setPick(p.id)} />
                 <Avatar name={p.nickname} size="sm" />
                 <span className="apply-option-body">
-                    <NameLine nickname={p.nickname} grade={p.grade} role={p.role} badges={p.badges} compact />
+                    <NameLine nickname={p.nickname} grade={p.grade} trial={p.grade_trial} role={p.role} badges={p.badges} compact />
                     {p.accepted_amount !== null && <span className="apply-need">제시 수락 · {priceText(p.accepted_amount)}</span>}
                 </span>
                 <span className="radio-dot" aria-hidden="true" />

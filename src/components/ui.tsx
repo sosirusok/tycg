@@ -23,10 +23,11 @@ export function VerifiedMark({ size = 15 }: { size?: number }) {
 
 // Text-only grade chip: plus is a gray outline, premium a brand outline, elite brand solid,
 // 관리자 an ink outline and 매니저 ink solid. The Fluent grade icons stay on the apply modal and profile grade card.
-export function GradeChip({ grade, role }: { grade?: GradeId | string | null; role?: string }) {
+// A 플러스 무료 체험 (trial) shows no chip anywhere; the member sees their own status line instead.
+export function GradeChip({ grade, role, trial }: { grade?: GradeId | string | null; role?: string; trial?: boolean | null }) {
     if (role === 'manager') return <span className="grade grade-manager">매니저</span>;
     const info = gradeInfo(grade);
-    if (info.id === 'normal') return null;
+    if (info.id === 'normal' || trial) return null;
     return <span className={'grade grade-' + info.id}>{info.name}</span>;
 }
 
@@ -42,8 +43,8 @@ export function Verified({ badges }: { badges?: BadgeId[] | string[] }) {
 // words apart for screen readers and copying. Nothing trails the last part, so text glued after it stays put.
 // compact keeps everything on one line for list rows, chat and the header menu: the nickname
 // ellipsizes first and the badges use their short names.
-export function NameLine({ nickname, grade, role, badges, size = '', compact = false }: { nickname: string; grade?: string | null; role?: string; badges?: string[]; size?: '' | 'lg'; compact?: boolean }) {
-    const chip = GradeChip({ grade, role });
+export function NameLine({ nickname, grade, trial, role, badges, size = '', compact = false }: { nickname: string; grade?: string | null; trial?: boolean | null; role?: string; badges?: string[]; size?: '' | 'lg'; compact?: boolean }) {
+    const chip = GradeChip({ grade, role, trial });
     return <span className={'name-line' + (size ? ' name-line-' + size : '') + (compact ? ' compact' : '')}>
         <span className="nick">{nickname}</span>
         {chip && <>{' '}{chip}</>}

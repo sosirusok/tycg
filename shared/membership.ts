@@ -134,3 +134,37 @@ export const kstDayStart = (now: number) => now - ((now + 9 * 3600000) % 8640000
 
 // Same-title check: letters and digits only, so '28 챌린저 계정 팝니다' and '28챌린저  계정팝니다!' match.
 export const titleKey = (t: string) => t.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+// 플러스 7일 무료 체험 (WP41): a real 플러스 row with source 'trial' that ends exactly 7 days after
+// sign-up. Every 플러스 usage benefit applies; the public chip is left out while it lasts.
+export const TRIAL_DAYS = 7;
+export const TRIAL_MS = TRIAL_DAYS * 86400000;
+// The member's own trial state (GET auth/me and the sign-up response).
+export type TrialState = { endsAt: number | null; popup: boolean; ended: boolean; capped: boolean };
+
+// The popup's benefit rows, from the 플러스 limits the Worker enforces right now. Later packages
+// append a row once their feature ships (자동 끌올, 제목·글자색·링크 미리보기).
+export type TrialRow = { icon: string; title: string; text: string };
+export const TRIAL_ROWS: TrialRow[] = [
+    { icon: 'megaphone', title: `끌올 하루 ${PERKS.plus.bumpsPerDay}번`, text: `같은 글 ${PERKS.plus.bumpGapHours}시간마다 끌올 (일반 ${PERKS.normal.bumpGapHours}시간)` },
+];
+
+const kstParts = (t: number) => {
+    const d = new Date(t + KST);
+    return { month: d.getUTCMonth() + 1, day: d.getUTCDate(), time: `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}` };
+};
+// '10월 8일 18:40' on the Korean calendar.
+export function kstDateTime(t: number) {
+    const p = kstParts(t);
+    return `${p.month}월 ${p.day}일 ${p.time}`;
+}
+// The KST calendar date as 'YYYY-MM-DD' (daily keys such as the one-modal-a-day rule).
+export const kstDate = (t: number) => new Date(t + KST).toISOString().slice(0, 10);
+
+// The member's own status line: '플러스 체험 · 10월 8일까지', and in the last 24 hours
+// '플러스 체험 · 내일 18:40 종료' or '플러스 체험 · 오늘 18:40 종료'.
+export function trialStatus(endsAt: number, now = Date.now()) {
+    const p = kstParts(endsAt);
+    if (endsAt - now > 86400000) return `플러스 체험 · ${p.month}월 ${p.day}일까지`;
+    return `플러스 체험 · ${kstDayStart(endsAt) === kstDayStart(now) ? '오늘' : '내일'} ${p.time} 종료`;
+}

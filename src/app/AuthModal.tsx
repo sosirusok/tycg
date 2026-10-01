@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '../../shared/market';
+import type { TrialState } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Modal } from '../components/ui';
 import { useApp } from './state';
@@ -21,10 +22,11 @@ export function AuthModal() {
         if (busy || register && password !== confirm) return;
         setBusy(true); setError('');
         try {
-            const d = await api<{ user: User }>('auth/' + (register ? 'register' : 'login'), 'POST', { username, password, nickname });
+            const d = await api<{ user: User; trial?: TrialState | null }>('auth/' + (register ? 'register' : 'login'), 'POST', { username, password, nickname });
             setPassword(''); setConfirm('');
-            finishAuth(d.user);
-            if (register) toast('가입 완료');
+            finishAuth(d.user, d.trial);
+            // The trial popup that follows already confirms the sign-up.
+            if (register && !d.trial?.popup) toast('가입 완료');
         } catch (err) { setError(errorText(err)); }
         finally { setBusy(false); }
     }

@@ -1,13 +1,14 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
     digest, tokenOf, sessionCookie, memberColumns, tradeColumns, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
-    MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME,
+    MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME, trialWindow, trialOpen, grantTrial,
 } from './http';
 import { postsHandler } from './posts';
 import { filesHandler } from './files';
 import { chatHandler } from './chat';
 import { communityHandler } from './community';
-import { membershipHandler } from './membership';
+import { membershipHandler, trialState, trialMeHandler } from './membership';
+import { kstDate } from '../shared/membership';
 import { manageHandler } from './manage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
@@ -92,9 +93,30 @@ async function withdraw(req: Request) {
     return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
 }
 
+// 플러스 무료 체험 at sign-up, while the window is open. At most 5 trials per hashed address per KST
+// day (the counter is only read here, so a 6th sign-up is never refused); a capped account is marked
+// trial_at=-1 so the catch-up in currentUser never grants it later. Sign-up never fails because of
+// the trial. Returns whether the cap applied.
+async function signUpTrial(id: string, ip: string, createdAt: number) {
+    try {
+        if (!trialOpen(await trialWindow(true), createdAt)) return false;
+        try { await limit('trial-ip:' + ip + ':' + kstDate(createdAt), 5, DAY); }
+        catch (e) {
+            if (!(e instanceof ApiError && e.status === 429)) throw e;
+            await db().prepare('UPDATE users SET trial_at=-1 WHERE id=? AND trial_at IS NULL').bind(id).run();
+            return true;
+        }
+        await grantTrial(id, Date.now());
+    } catch (e) { console.warn('Trial not granted', e instanceof Error ? e.message : 'unknown'); }
+    return false;
+}
+
 async function authHandler(req: Request, p: string[]) {
     const method = req.method;
-    if (p[1] === 'me' && method === 'GET') return json({ user: await currentUser(req) });
+    if (p[1] === 'me' && method === 'GET') {
+        const user = await currentUser(req);
+        return json({ user, trial: user ? await trialState(user) : null });
+    }
     if (method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
     if (p[1] === 'logout') {
         await db().prepare('DELETE FROM sessions WHERE token=?').bind(await digest(tokenOf(req))).run();
@@ -111,7 +133,7 @@ async function authHandler(req: Request, p: string[]) {
     await limit('auth-ip:' + ip, 40, 600000);
     await limit('auth-user:' + username + ':' + ip, 15, 600000);
     await initManager();
-    let id: string;
+    let id: string, capped = false;
     if (p[1] === 'register') {
         // 'deleted_' ids are what 회원 탈퇴 leaves behind.
         if (username === MANAGER_USERNAME || username.startsWith('deleted_')) fail(409, '이미 사용 중인 아이디입니다.');
@@ -119,15 +141,17 @@ async function authHandler(req: Request, p: string[]) {
         await assertNicknameFree(nickname, '');
         const salt = random(), hash = await storedHash(b.password, salt);
         id = crypto.randomUUID();
+        const createdAt = Date.now();
         try {
             // The key is checked again inside the insert, so two look-alike sign-ups at once cannot both pass.
             const r = await db().prepare('INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?)')
-                .bind(id, username, nickname, key, hash, salt, 'member', '', Date.now(), key).run();
+                .bind(id, username, nickname, key, hash, salt, 'member', '', createdAt, key).run();
             if (!r.meta.changes) fail(409, '비슷한 닉네임이 이미 있습니다.');
         } catch (e) {
             if (String(e).includes('UNIQUE')) fail(409, String(e).includes('users.nickname') ? '이미 사용 중인 닉네임입니다.' : '이미 사용 중인 아이디입니다.');
             throw e;
         }
+        capped = await signUpTrial(id, ip, createdAt);
     } else if (p[1] === 'login') {
         const found = await db().prepare('SELECT id,salt,password_hash FROM users WHERE username=?').bind(username).first<any>();
         if (!await passwordMatches(b.password, found)) fail(401, '아이디 또는 비밀번호가 맞지 않습니다.');
@@ -140,8 +164,8 @@ async function authHandler(req: Request, p: string[]) {
         db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()),
         db().prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').bind(await digest(token), id, Date.now() + SESSION_DAYS * 86400000),
     ]);
-    const user = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(id).first<any>();
-    return json({ user: withMember(user) }, 200, { 'Set-Cookie': sessionCookie(req, token) });
+    const user = withMember(await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(id).first<any>());
+    return json({ user, trial: await trialState(user, capped) }, 200, { 'Set-Cookie': sessionCookie(req, token) });
 }
 
 async function usersHandler(req: Request, p: string[]) {
@@ -251,7 +275,12 @@ export async function handleApi(req: Request) {
             case 'chats': { const r = await chatHandler(req, p, url); if (r) return r; break; }
             case 'config': case 'applications': { const r = await membershipHandler(req, p); if (r) return r; break; }
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
-            case 'me': if (p[1] === 'usage' && method === 'GET') return await usageHandler(req); break;
+            case 'me': {
+                if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
+                const r = await trialMeHandler(req, p);
+                if (r) return r;
+                break;
+            }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }

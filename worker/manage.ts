@@ -11,7 +11,7 @@ function reportRow(row: any) {
     const { target_deleted_at, target_suspended_until, ...rest } = row;
     const out: Record<string, any> = withMember(withMember(rest), 'target_');
     if (!out.target_user_id) {
-        for (const key of ['target_nickname', 'target_role', 'target_grade', 'target_grade_expires_at', 'target_badges']) delete out[key];
+        for (const key of ['target_nickname', 'target_role', 'target_grade', 'target_grade_expires_at', 'target_grade_trial', 'target_badges']) delete out[key];
         return out;
     }
     delete out.target_grade_expires_at;

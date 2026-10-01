@@ -1,13 +1,15 @@
-import { lazy, Suspense, useEffect, useLayoutEffect } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
-import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound } from 'lucide-react';
+import { House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound, X } from 'lucide-react';
 import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
 import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
 import { AppProvider, setPageTitle, useApp } from './app/state';
 import { Avatar, CIcon, EmptyState, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
+import { TrialPopup } from './app/TrialPopup';
+import { trialStatus } from '../shared/membership';
 import { Home } from './pages/Home';
 import { Board } from './pages/Board';
 import { Detail } from './pages/Detail';
@@ -45,6 +47,22 @@ function rememberBoard(params: URLSearchParams) {
         sessionStorage.setItem(LAST + kind, '/trade?' + q.toString());
         sessionStorage.setItem(LAST + 'kind', kind);
     } catch { /* not remembered */ }
+}
+
+// A sign-up the per-address cap kept from the trial gets one closable line under the header, once
+// per browser session.
+const CAPPED_KEY = 'zg:trial-capped';
+function CappedNotice() {
+    const { trial } = useApp();
+    const [closed, setClosed] = useState(() => { try { return sessionStorage.getItem(CAPPED_KEY) === '1'; } catch { return false; } });
+    if (!trial?.capped || closed) return null;
+    const close = () => { setClosed(true); try { sessionStorage.setItem(CAPPED_KEY, '1'); } catch { /* not remembered */ } };
+    return <div className="header-notice" role="status">
+        <div className="container header-notice-inner">
+            <p>같은 곳에서 가입한 계정이 많아 무료 체험이 적용되지 않았습니다.</p>
+            <button type="button" className="icon-btn" aria-label="닫기" onClick={close}><X size={18} /></button>
+        </div>
+    </div>;
 }
 
 function Shell() {
@@ -120,7 +138,8 @@ function Shell() {
                         <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                             <DropdownMenu.Content className="menu" align="end" sideOffset={8}>
-                                <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} role={me.role} badges={me.badges} compact /></div>
+                                <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} trial={me.grade_trial} role={me.role} badges={me.badges} compact />
+                                    {me.grade_trial && me.grade_expires_at && <span className="menu-sub">{trialStatus(me.grade_expires_at)}</span>}</div>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/profile/' + me.id)}>내 프로필</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/posts')}>내 거래</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/favorites')}>찜한 글</DropdownMenu.Item>
@@ -135,6 +154,7 @@ function Shell() {
                 </div>
             </div>
         </header>
+        <CappedNotice />
         <main id="main">
             <Suspense fallback={<div className="container page"><SkeletonRows /></div>}>
                 {page === '' ? <Home />
@@ -168,6 +188,7 @@ function Shell() {
         </nav>}
         <AuthModal />
         <ApplyModal />
+        <TrialPopup />
     </>;
 }
 

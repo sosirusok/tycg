@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ChevronRight, Search } from 'lucide-react';
+import { ChevronRight, Search, X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
 import { gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
@@ -53,8 +53,25 @@ function FeaturedShelf() {
     </section>;
 }
 
+// The home band once a 플러스 무료 체험 has ended (shown once: closing it stamps the trial row).
+function TrialEndBand() {
+    const { trial, setTrial, openApply } = useApp();
+    const close = () => {
+        if (trial) setTrial({ ...trial, ended: false });
+        api('me/trial-ended-seen', 'POST', {}).catch(() => {});
+    };
+    return <section className="home-band" aria-label="플러스 무료 체험">
+        <span className="home-band-text">
+            <strong>플러스 무료 체험이 끝났습니다.</strong>
+            <span>설정은 그대로 남고, 플러스를 신청하면 바로 다시 켜집니다.</span>
+        </span>
+        <button type="button" className="btn btn-primary btn-sm home-band-cta" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>플러스 신청</button>
+        <button type="button" className="home-band-x" aria-label="닫기" onClick={close}><X size={20} /></button>
+    </section>;
+}
+
 export function Home() {
-    const { me, ready } = useApp();
+    const { me, ready, config, trial, openAuth } = useApp();
     const [q, setQ] = useState('');
     const [notices, setNotices] = useState<Notice[]>([]);
     useEffect(() => { api<{ notices: Notice[] }>('notices').then(d => setNotices(d.notices.slice(0, 4))).catch(() => {}); }, []);
@@ -75,7 +92,16 @@ export function Home() {
         </section>
 
         <div className="container">
-            {promo && <Link to="/guide#grade" className="promo">
+            {me && trial?.ended ? <TrialEndBand />
+                // Guests while the sign-up event runs: the band in the promo's place opens 회원가입.
+                : ready && !me && config.trial?.open ? <button type="button" className="promo" onClick={() => openAuth('register')}>
+                    <span className="promo-text">
+                        <span className="promo-eyebrow">신규 가입 이벤트</span>
+                        <strong>가입하면 플러스 7일 무료</strong>
+                    </span>
+                    <span className="promo-cta">회원가입<ChevronRight size={18} /></span>
+                </button>
+                : promo && <Link to="/guide#grade" className="promo">
                 <span className="promo-text">
                     <span className="promo-eyebrow">등급 혜택</span>
                     <strong>프리미엄부터 게시판 상단 노출</strong>

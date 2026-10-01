@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { suspendUntilText, type User } from '../shared/market';
-import { BADGES, type BadgeId } from '../shared/membership';
+import { BADGES, TRIAL_MS, type BadgeId } from '../shared/membership';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -77,7 +77,7 @@ export async function initManager() {
 // `alias` is the users table alias in the surrounding query. 회원 탈퇴 keeps the grade and badge
 // rows (the manager's record of each grant), so a withdrawn member simply shows none of them.
 export function memberColumns(alias: string, prefix = '') {
-    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at) FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
+    return `(SELECT json_object('grade',g.grade,'expires_at',g.expires_at,'trial',g.source='trial') FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>strftime('%s','now')*1000) ORDER BY g.rank DESC,(g.expires_at IS NULL) DESC,g.expires_at DESC LIMIT 1) AS ${prefix}grade_info,`
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
@@ -107,7 +107,8 @@ export function sortBadges(list: unknown): BadgeId[] {
     return BADGES.map(b => b.id).filter(id => values.includes(id));
 }
 
-// Replaces the raw member columns with `grade`, `grade_expires_at` and `badges`.
+// Replaces the raw member columns with `grade`, `grade_expires_at`, `grade_trial` and `badges`.
+// grade_trial marks a 플러스 무료 체험: every 플러스 benefit applies, and the chip is not shown.
 export function withMember<T extends Record<string, any>>(row: T, prefix = ''): T {
     const info = parseJson(row[prefix + 'grade_info'], null);
     const out: Record<string, any> = { ...row };
@@ -115,6 +116,7 @@ export function withMember<T extends Record<string, any>>(row: T, prefix = ''): 
     delete out[prefix + 'badges_json'];
     out[prefix + 'grade'] = info?.grade || 'normal';
     out[prefix + 'grade_expires_at'] = info?.expires_at ?? null;
+    out[prefix + 'grade_trial'] = !!info?.trial;
     out[prefix + 'badges'] = sortBadges(parseJson(row[prefix + 'badges_json'], []));
     return out as T;
 }
@@ -137,17 +139,63 @@ export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
-    const { session_expires_at, last_seen_at, ...user } = row;
+    const { session_expires_at, last_seen_at, trial_at, ...user } = row;
     const writes: D1PreparedStatement[] = [];
     if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
     if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
         writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
     }
     if (writes.length) await db().batch(writes);
+    // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
+    // Worker still served has no trial yet. Only members with no grade row at all, once per isolate.
+    if (trial_at === null && user.grade_info === null && user.role !== 'manager' && !catchUpTried.has(user.id)) {
+        const w = await trialWindow();
+        if (user.created_at >= w.start && user.created_at <= w.end && user.created_at + TRIAL_MS > now) {
+            if (catchUpTried.size > 5000) catchUpTried.clear();
+            catchUpTried.add(user.id);
+            if (await grantTrial(user.id, now, true)) {
+                const g = await db().prepare(`SELECT ${memberColumns('u')} FROM users u WHERE u.id=?`).bind(user.id).first<any>();
+                if (g) Object.assign(user, g);
+            }
+        }
+    }
     return withMember(user) as User;
+}
+
+// 플러스 무료 체험 window (settings 'sys:trial_start' and 'sys:trial_end', written by 0016_plus_trial
+// and the manager's card). A missing value means closed. Cached for 60 s per isolate; the manager's
+// change clears it. Grants never trust the cache: their SQL reads the settings again.
+type TrialWindow = { start: number; end: number; at: number };
+let trialCache: TrialWindow | null = null;
+const catchUpTried = new Set<string>();
+export function clearTrialCache() { trialCache = null; catchUpTried.clear(); }
+export async function trialWindow(fresh = false): Promise<TrialWindow> {
+    const now = Date.now();
+    if (!fresh && trialCache && now - trialCache.at < 60000) return trialCache;
+    const r = await db().prepare("SELECT key,CAST(value AS INTEGER) AS value FROM settings WHERE key IN ('sys:trial_start','sys:trial_end')").all<{ key: string; value: number }>();
+    const get = (k: string) => r.results.find(x => x.key === k)?.value;
+    trialCache = { start: get('sys:trial_start') ?? Infinity, end: get('sys:trial_end') ?? -Infinity, at: now };
+    return trialCache;
+}
+export const trialOpen = (w: TrialWindow, now = Date.now()) => now >= w.start && now <= w.end;
+
+// The account's creation time lies inside the window, read from settings in the same statement
+// (the user_grades_trial_rule trigger checks exactly this).
+const IN_TRIAL_WINDOW = "u.created_at>=COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='sys:trial_start'),9e18) AND u.created_at<=COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='sys:trial_end'),-1)";
+
+// Grants the trial: one batch whose WHERE mirrors the trigger, so it inserts nothing instead of
+// aborting, then stamps users.trial_at only when the trial row exists. The catch-up path also
+// requires that the member has no grade row at all. Returns whether a trial row was written.
+export async function grantTrial(userId: string, now = Date.now(), catchUp = false) {
+    const r = await db().batch([
+        db().prepare(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,source) SELECT u.id,'plus',1,u.created_at+${TRIAL_MS},'${MANAGER_ID}',?,'trial' FROM users u
+            WHERE u.id=? AND u.trial_at IS NULL AND u.deleted_at IS NULL AND u.role!='manager' AND ${IN_TRIAL_WINDOW} AND NOT EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND ${catchUp ? '1' : "g.source='trial'"})`).bind(now, userId),
+        db().prepare("UPDATE users SET trial_at=? WHERE id=? AND trial_at IS NULL AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND source='trial')").bind(now, userId, userId),
+    ]);
+    return r[0].meta.changes > 0;
 }
 
 export async function requireUser(r: Request) {
