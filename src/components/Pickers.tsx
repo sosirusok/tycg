@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type InputHTMLAttributes } from 'react';
 import { X } from 'lucide-react';
-import { NICK_RANKS, SKIN_OPTIONS, TIERS, seasonsOf, tagName, type SeasonTag } from '../../shared/market';
+import { NICK_RANKS, NICK_TYPES, SKIN_OPTIONS, TIERS, seasonsOf, tagName, type SeasonTag } from '../../shared/market';
 import { useApp } from '../app/state';
 import { useMoreRight } from './ui';
 
@@ -70,6 +70,15 @@ export function RankPicker({ value, onChange, multiple = false }: { value: strin
                 onClick={e => { if (!multiple && value.includes(rank)) { e.preventDefault(); onChange([]); } }} />
             {rank}
         </label>)}
+    </div>;
+}
+
+// 닉 종류 as toggle chips. multiple picks any number (kept in list order); otherwise one at a time,
+// and a second tap clears it.
+export function NickTypePicker({ value, onChange, multiple = false }: { value: string[]; onChange: (v: string[]) => void; multiple?: boolean }) {
+    const toggle = (type: string) => { const on = !value.includes(type); onChange(NICK_TYPES.filter(t => t === type ? on : multiple && value.includes(t))); };
+    return <div className="chip-row nick-type-chips" role="group" aria-label="닉 종류">
+        {NICK_TYPES.map(type => <button type="button" key={type} className="chip chip-sm" aria-pressed={value.includes(type)} onClick={() => toggle(type)}>{type}</button>)}
     </div>;
 }
 

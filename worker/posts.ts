@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { db, fail, currentUser, requireUser, json, body, limit, textField, memberColumns, withMember, setting, WITHDRAWN_NAME } from './http';
 import {
-    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, SKIN_TAGS,
-    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
+    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
+    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { perksOf, kstDayStart, titleKey } from '../shared/membership';
@@ -168,6 +168,8 @@ function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     if (details[key('recordPreference')] && !RECORD_PREFERENCES.includes(details[key('recordPreference')] as typeof RECORD_PREFERENCES[number]))
         fail(400, `${label('recordPreference')}: 확인해 주세요.`);
     selectedDetails(details, key('nicknameRanks'), NICK_RANKS, label('nicknameRanks'));
+    // One key on 구매 and on the wanted side of 교환, so no prefix.
+    selectedDetails(details, WANTED_NICK_TYPES_FIELD.id, NICK_TYPES, WANTED_NICK_TYPES_FIELD.label);
     selectedDetails(details, key('skinTags'), SKIN_TAGS, label('skinTags'), true);
 }
 
@@ -177,6 +179,30 @@ const uniqueTags = (list: SeasonTag[]) => [...new Map(list.map(t => [t.tier + ':
 // SQL filter for one season table: any (or all) of the chosen tier-season pairs.
 function seasonFilter(table: string, tags: SeasonTag[], all: boolean) {
     return (all ? '(SELECT COUNT(*)' : 'EXISTS (SELECT 1') + ` FROM ${table} s JOIN json_each(?) j ON s.tier=json_extract(j.value,'$.tier') AND s.season=json_extract(j.value,'$.season') WHERE s.post_id=p.id)` + (all ? '=' + tags.length : '');
+}
+
+// Tier words as cafe titles write them ('28챌', '30ㄷㅇ', '현플', '28시즌 다이아몬드').
+const TIER_WORDS: Record<string, string> = {
+    다이아몬드: 'diamond', 다이아: 'diamond', 다야: 'diamond', ㄷㅇ: 'diamond',
+    플래티넘: 'platinum', 플래: 'platinum', 플레: 'platinum', 플: 'platinum',
+    챌린저: 'challenger', 챌: 'challenger', 챔피언: 'champion', 챔: 'champion', 마스터: 'master', 마: 'master',
+    골드: 'gold', 골: 'gold', 실버: 'silver', 실: 'silver', 브론즈: 'bronze', 브: 'bronze', 아이언: 'iron',
+};
+const TIER_SHORTHAND = new RegExp(`^(현|\\d{1,2})\\s*(?:시즌\\s*)?(${Object.keys(TIER_WORDS).join('|')})$`);
+// A bare tier word as the whole search finds every season of that tier; one syllable ('마', '골')
+// or jamo ('ㄷㅇ') alone stays a plain text search.
+const BARE_TIER_WORDS = ['다이아몬드', '다이아', '다야', '플래티넘', '플래', '챌린저', '챔피언', '마스터', '골드', '실버', '브론즈', '아이언'];
+
+// The ladder a whole search names: '28챌' is 28시즌 챌린저, '현플' the latest season's 플래티넘,
+// '다야' any season of 다이아몬드. A season outside the tier's range names nothing. The latest
+// season is read only for a search that has the shorthand's shape.
+async function tierSearch(q: string): Promise<{ tier: string; season: number | null } | null> {
+    if (BARE_TIER_WORDS.includes(q)) return { tier: TIER_WORDS[q], season: null };
+    const m = TIER_SHORTHAND.exec(q);
+    if (!m) return null;
+    const latest = await latestSeason();
+    const tier = TIERS.find(t => t.id === TIER_WORDS[m[2]])!, season = m[1] === '현' ? latest : Number(m[1]);
+    return season >= tier.min && season <= latest ? { tier: tier.id, season } : null;
 }
 
 async function validatePost(b: any, u: User, existing?: any) {
@@ -197,11 +223,11 @@ async function validatePost(b: any, u: User, existing?: any) {
     if (b.kind === 'sell' && price !== null && price < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
     const mode = price !== null ? 'fixed' : b.kind === 'sell' ? 'offer' : 'negotiate';
     const details: Record<string, string> = {};
-    let fields: DetailField[] = category === 'account' && b.kind === 'buy' ? BUYER_DETAIL_FIELDS : DETAIL_FIELDS[category];
+    let fields: DetailField[] = category === 'account' && b.kind === 'buy' ? [...BUYER_DETAIL_FIELDS, WANTED_NICK_TYPES_FIELD] : DETAIL_FIELDS[category];
     if (b.kind === 'exchange') {
         if (!['account', 'clan'].includes(b.details?.wantedCategory)) fail(400, '구하는 교환 대상을 선택해 주세요.');
         fields = [...fields, { id: 'wantedCategory', label: '구하는 대상' }];
-        if (b.details.wantedCategory === 'account') fields = [...fields, ...BUYER_DETAIL_FIELDS.map(f => ({ ...f, id: 'wanted' + f.id[0].toUpperCase() + f.id.slice(1) }))];
+        if (b.details.wantedCategory === 'account') fields = [...fields, ...BUYER_DETAIL_FIELDS.map(f => ({ ...f, id: 'wanted' + f.id[0].toUpperCase() + f.id.slice(1) })), WANTED_NICK_TYPES_FIELD];
     }
     if (b.kind === 'sell') fields = [...fields, { id: 'currentOffer', label: '현젯', type: 'number' }];
     for (const f of fields) {
@@ -220,6 +246,7 @@ async function validatePost(b: any, u: User, existing?: any) {
         numericDetail(details, 'ownerCount', label('ownerCount'), 1, 9999);
         numericDetail(details, 'nicknameChars', label('nicknameChars'), 1, 20);
         numericDetail(details, 'phantom', label('phantom'), 0, 5000);
+        selectedDetails(details, 'nicknameTypes', NICK_TYPES, label('nicknameTypes'));
         selectedDetails(details, 'skinTags', SKIN_TAGS, label('skinTags'), true);
     }
     if (category === 'account' && b.kind === 'buy') validateBuyerDetails(details);
@@ -298,10 +325,14 @@ async function listPosts(req: Request, url: URL) {
     if (q) {
         // A skin's short name or in-game name (악주, 뱀동, 악몽의 주인 …) also finds posts that list that skin.
         const skins = skinsForWord(q);
+        // A whole search that names a ladder ('28챌', '현플', '다야') also finds posts with that ladder record.
+        const ladder = await tierSearch(q);
         where.push("(instr(lower(p.title),lower(?))>0 OR instr(lower(p.body),lower(?))>0 OR instr(lower(replace(p.details,' ','')),lower(replace(?,' ','')))>0 OR instr(lower(u.nickname),lower(?))>0"
-            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '') + ')');
+            + (skins.length ? " OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.skinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value) OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedSkinTags'),'[]')) own JOIN json_each(?) w ON own.value=w.value)" : '')
+            + (ladder ? ` OR p.id IN (SELECT post_id FROM post_seasons WHERE tier=?${ladder.season === null ? '' : ' AND season=?'})` : '') + ')');
         values.push(q, q, q, q);
         if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
+        if (ladder) values.push(ladder.tier, ...ladder.season === null ? [] : [ladder.season]);
     }
     for (const [key, op] of [['min', '>='], ['max', '<=']]) {
         const n = s.get(key);
@@ -380,6 +411,26 @@ async function listPosts(req: Request, url: URL) {
         if (!NICK_RANKS.includes(wantedRank as typeof NICK_RANKS[number])) fail(400, '닉 등급 검색 조건을 확인해 주세요.');
         where.push("(json_array_length(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedNicknameRanks'),'[]')) WHERE value=?))");
         values.push(wantedRank);
+    }
+    // 닉 종류 on 판매 and the offered side of 교환: posts with any chosen type. Takes a JSON list or
+    // comma-separated words (nicknameTypes=여사,귀욤).
+    const typesParam = s.get('nicknameTypes');
+    if (typesParam) {
+        const chosen = typesParam.trim().startsWith('[') ? parse(typesParam, null) : typesParam.split(',').map(v => v.trim()).filter(Boolean);
+        if (!Array.isArray(chosen) || chosen.length > NICK_TYPES.length || chosen.some(v => typeof v !== 'string' || !(NICK_TYPES as readonly string[]).includes(v))) fail(400, '닉 종류 검색 조건을 확인해 주세요.');
+        if (chosen.length) {
+            where.push("EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.nicknameTypes'),'[]')) own JOIN json_each(?) w ON own.value=w.value)");
+            values.push(JSON.stringify([...new Set(chosen)]));
+        }
+    }
+    // "My account" 닉 종류: buyers who chose no type or chose mine. myNicknameType is for 구매,
+    // wantedMyNicknameType for the wanted side of 교환; both read wantedNicknameTypes.
+    for (const param of ['myNicknameType', 'wantedMyNicknameType']) {
+        const v = s.get(param);
+        if (!v) continue;
+        if (!(NICK_TYPES as readonly string[]).includes(v)) fail(400, '닉 종류 검색 조건을 확인해 주세요.');
+        where.push("(json_array_length(COALESCE(json_extract(p.details,'$.wantedNicknameTypes'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.wantedNicknameTypes'),'[]')) WHERE value=?))");
+        values.push(v);
     }
     for (const key of ['skinTags', 'wantedSkinTags', 'nicknameRanks', 'wantedNicknameRanks']) {
         if (!s.get(key)) continue;

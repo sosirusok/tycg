@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, RECORD_PREFERENCES, STATUS_NAMES, TRADE_KINDS,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, STATUS_NAMES, TRADE_KINDS,
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
@@ -10,7 +10,7 @@ import { api, errorText, imageUrl, uploadPhoto } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
-import { IntegerInput, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 type Form = {
     kind: TradeKind; category: string; title: string; body: string;
@@ -330,6 +330,10 @@ export default function Editor({ id }: { id?: string }) {
     const { kind, category, details: d } = form;
     const account = category === 'account', buying = kind === 'buy', wanted = d.wantedCategory === 'clan' ? 'clan' : 'account';
     const ranksOf = (key: string) => parseList(d[key], NICK_RANKS);
+    // 닉 종류: nicknameTypes on 판매 and the offered side of 교환, wantedNicknameTypes on 구매 and the wanted side.
+    const nickTypes = (key: 'nicknameTypes' | 'wantedNicknameTypes') => <div className="field"><span className="field-label">닉 종류</span>
+        <NickTypePicker multiple value={parseList(d[key], NICK_TYPES)} onChange={v => setDetail(key, v.length ? JSON.stringify(v) : '')} />
+    </div>;
     const hasWanted = form.wantedTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
 
     const sellerAccount = <div className="grid-gap-16">
@@ -340,6 +344,7 @@ export default function Editor({ id }: { id?: string }) {
             <Num label="닉네임 글자 수" value={d.nicknameChars || ''} onChange={v => setDetail('nicknameChars', v)} unit="글자" max={20} placeholder="예: 2" />
             <div className="field"><span className="field-label">닉 등급</span><RankPicker value={d.nicknameRank ? [d.nicknameRank] : []} onChange={v => setDetail('nicknameRank', v[0] || '')} /></div>
         </div>
+        {nickTypes('nicknameTypes')}
         <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
         <div className="ed-grid ed-grid-3">
             <Num label="팬텀" value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={5000} placeholder="예: 225" />
@@ -374,6 +379,7 @@ export default function Editor({ id }: { id?: string }) {
                 <RankPicker multiple value={ranksOf(k('nicknameRanks'))} onChange={v => setDetail(k('nicknameRanks'), v.length ? JSON.stringify(v) : '')} />
                 <span className="field-hint">등급 중복 선택 가능</span>
             </div>
+            {nickTypes('wantedNicknameTypes')}
             <div className="field"><span className="field-label">원하는 래더</span>
                 {prefix ? <SeasonPicker value={form.wantedTags} onChange={wantedTags => patch({ wantedTags })} /> : <SeasonPicker value={form.tags} onChange={tags => patch({ tags })} />}
             </div>

@@ -257,6 +257,9 @@ export function expandSkins(chosen: string[]) {
 }
 
 export const NICK_RANKS = ['R', 'S', 'A', 'B', '잡'] as const;
+// 닉 종류 as nickname trades name them ('S급 여사', '남사닉 필수', '두 글자 무받침 영어').
+export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '무받침', '연예인'] as const;
+export function nickTypesText(types: readonly string[]) { return types.join('/'); }
 
 export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;
 
@@ -286,9 +289,13 @@ export const BUYER_DETAIL_FIELDS: DetailField[] = [
     { id: 'nicknameRanks', label: '원하는 닉 등급' },
     { id: 'skinTags', label: '우대 스킨' },
 ];
+// Buyers' 닉 종류 has one key on 구매 and on the wanted side of 교환 (the offered side keeps nicknameTypes),
+// so it is not in BUYER_DETAIL_FIELDS, whose ids get the 'wanted' prefix on 교환.
+export const WANTED_NICK_TYPES_FIELD: DetailField = { id: 'wantedNicknameTypes', label: '닉 종류' };
 
 DETAIL_FIELDS.account.push(
     { id: 'nicknameChars', label: '닉네임 글자 수', type: 'number' },
+    { id: 'nicknameTypes', label: '닉 종류' },
     ...Object.entries(ACCOUNT_CHOICES).filter(([id]) => id !== 'recordStatus').map(([id, f]) => ({ id, label: f.label })),
     { id: 'skinTags', label: '우대 스킨' },
 );
@@ -314,12 +321,19 @@ export function rankText(ranks: readonly string[]) {
 // Short condition list for cards, most-scanned first: owners, record, nickname, skins,
 // then the cafe flags as one token ('전비변O·영전·보멜X·미통'), then currency. Cards show
 // only the first few items, so the nickname grade and skins must come before the flags.
-// Each item is one data word with no '·' between spaced words ('2글자 S급 닉').
+// Each item is one data word with no '·' between spaced words ('2글자 여사 S급 닉').
+// The nickname is one item: a seller's own (nicknameChars, nicknameTypes, nicknameRank) or a
+// buyer's wish (nicknameCharsMin/Max, wantedNicknameTypes, nicknameRanks); a record holds one of the two.
+// The wanted side of 교환 arrives unprefixed, so its 닉 종류 is nicknameTypes there. A full 교환
+// record (it has wantedCategory) is the offered side, so its wantedNicknameTypes is left out.
 export function accountSummary(d: Record<string, string>) {
     const wantedRanks = parseList(d.nicknameRanks, NICK_RANKS);
     const min = d.nicknameCharsMin, max = d.nicknameCharsMax;
     const wantedChars = min && max ? (min === max ? `${min}글자` : `${min}~${max}글자`) : min ? `${min}글자 이상` : max ? `${max}글자 이하` : '';
-    const nick = (chars: string, rank: string) => chars || rank ? [chars, rank, '닉'].filter(Boolean).join(' ') : '';
+    const types = [...new Set([...parseList(d.nicknameTypes, NICK_TYPES), ...d.wantedCategory ? [] : parseList(d.wantedNicknameTypes, NICK_TYPES)])];
+    const chars = d.nicknameChars ? `${d.nicknameChars}글자` : wantedChars;
+    const ranks = d.nicknameRank ? [d.nicknameRank] : wantedRanks;
+    const nick = chars || types.length || ranks.length ? [chars, nickTypesText(types), ranks.length ? rankText(ranks) : '', '닉'].filter(Boolean).join(' ') : '';
     const skins = skinDisplay(skinTags(d.skinTags));
     const flags = [
         d.passwordChange === '가능' && (d.phoneChange === '가능' || d.phoneChange === '영전') ? '전비변O' : '',
@@ -331,8 +345,7 @@ export function accountSummary(d: Record<string, string>) {
         d.ownerCount ? `${d.ownerCount}대주` : '',
         d.maxOwners ? `${d.maxOwners}대주 이하` : '',
         d.recordStatus || d.recordPreference || '',
-        nick(wantedChars, wantedRanks.length ? rankText(wantedRanks) : ''),
-        nick(d.nicknameChars ? `${d.nicknameChars}글자` : '', d.nicknameRank ? rankText([d.nicknameRank]) : ''),
+        nick,
         skins.length ? skins[0] + (skins.length > 1 ? ` 외 ${skins.length - 1}` : '') : '',
         flags,
         d.phantom ? `팬텀 ${d.phantom}%` : '',

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import {
-    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
+    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -9,7 +9,7 @@ import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/rou
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
-import { IntegerInput, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
 
@@ -37,10 +37,10 @@ function allowedKeys(ctx: Ctx) {
     const keys = ['kind', 'category', 'q', 'closed', 'page', 'sort', 'badge'];
     if (kind === 'all') return ['q', 'closed', 'page', 'badge'];
     if (kind === 'exchange') keys.push('wantedCategory');
-    if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyRecord');
+    if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord');
     if (kind !== 'exchange') keys.push('min', 'max');
     if (category === 'account' || category === 'ladder') keys.push('tags', 'match');
-    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord'] : ['maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS]));
+    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS]));
     return keys;
 }
 
@@ -58,6 +58,9 @@ const CONDITION_KEYS = ['passwordChange', 'phoneChange', 'backupEmail', 'integra
 const conditionOn = (params: URLSearchParams, c: typeof CONDITIONS[number]) => Object.entries(c.values).every(([k, v]) => params.get(k) === v);
 const conditionOff = (c: typeof CONDITIONS[number]) => Object.fromEntries(Object.keys(c.values).map(k => [k, '']));
 const MY_RECORDS = ['무전적', '전적 있음'] as const;
+
+// 닉 종류 filter values: a JSON list in the address (like 우대 스킨).
+const readTypes = (raw: string | null) => parseList(raw || '', NICK_TYPES);
 
 function readTags(raw: string | null): SeasonTag[] {
     try { const v = JSON.parse(raw || '[]'); return validTags(v, 999) ? v : []; } catch { return []; }
@@ -86,13 +89,14 @@ function Group({ title, children, hint }: { title: string; children: ReactNode; 
 // '내 계정으로 찾기' on 구매 and on the wanted side of 교환: buyers' posts that my account fits.
 function MyAccount({ params, update, prefix }: { params: URLSearchParams; update: (v: Record<string, string>) => void; prefix: '' | 'wanted' }) {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
-    const owners = key('ownerCountOfMine'), chars = key('nicknameChars'), rank = key('nicknameRank'), record = key('myRecord');
+    const owners = key('ownerCountOfMine'), chars = key('nicknameChars'), rank = key('nicknameRank'), record = key('myRecord'), type = key('myNicknameType');
     return <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 글만 표시">
         <div className="grid-gap-8">
             <LazyNumber label="내 계정 대주 수" value={params.get(owners) || ''} onCommit={v => update({ [owners]: v })} placeholder="내 계정 대주 수" unit="대주" integer min={1} max={9999} />
             <Segmented name="내 계정 전적" options={MY_RECORDS} value={params.get(record) || ''} onChange={v => update({ [record]: v })} />
             <LazyNumber label="내 닉네임 글자 수" value={params.get(chars) || ''} onCommit={v => update({ [chars]: v })} placeholder="내 닉네임 글자 수" unit="글자" integer min={1} max={20} />
             <RankPicker value={params.get(rank) ? [params.get(rank)!] : []} onChange={v => update({ [rank]: v[0] || '' })} />
+            <NickTypePicker value={params.get(type) ? [params.get(type)!] : []} onChange={v => update({ [type]: v[0] || '' })} />
         </div>
     </Group>;
 }
@@ -139,6 +143,7 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
             <div className="grid-gap-8">
                 <LazyNumber label="닉네임 글자 수" value={params.get('nicknameChars') || ''} onCommit={v => update({ nicknameChars: v })} placeholder="글자 수" unit="글자" integer min={1} max={20} />
                 <RankPicker value={params.get('nicknameRank') ? [params.get('nicknameRank')!] : []} onChange={v => update({ nicknameRank: v[0] || '' })} />
+                <NickTypePicker multiple value={readTypes(params.get('nicknameTypes'))} onChange={v => update({ nicknameTypes: v.length ? JSON.stringify(v) : '' })} />
             </div>
         </Group>}
         {account && !buying && <Group title="팬텀">
@@ -172,10 +177,14 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     add('wantedOwnerCountOfMine', `내 계정 ${params.get('wantedOwnerCountOfMine')}대주`);
     add('wantedNicknameChars', `내 닉 ${params.get('wantedNicknameChars')}글자`);
     add('wantedNicknameRank', `내 닉 ${rankText([params.get('wantedNicknameRank') || ''])}`);
+    add('wantedMyNicknameType', `내 닉 ${params.get('wantedMyNicknameType')}`);
     add('wantedMyRecord', `내 계정 ${params.get('wantedMyRecord')}`);
     const buying = ctx.kind === 'buy';
     add('nicknameChars', `${buying ? '내 닉 ' : '닉 '}${params.get('nicknameChars')}글자`);
     add('nicknameRank', `${buying ? '내 닉 ' : '닉 '}${rankText([params.get('nicknameRank') || ''])}`);
+    add('myNicknameType', `내 닉 ${params.get('myNicknameType')}`);
+    const types = readTypes(params.get('nicknameTypes'));
+    for (const type of types) chips.push({ key: 'type-' + type, label: '닉 ' + type, clear: () => { const rest = types.filter(v => v !== type); update({ nicknameTypes: rest.length ? JSON.stringify(rest) : '' }); } });
     add('maxOwners', `${params.get('maxOwners')}대주 이하`);
     add('ownerCountOfMine', `내 계정 ${params.get('ownerCountOfMine')}대주`);
     add('recordStatus', params.get('recordStatus') || '');

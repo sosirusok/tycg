@@ -3,7 +3,7 @@ import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } fr
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, parseList, priceText, rankText, skinDisplay, skinTags, tagName, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, STATUS_NAMES, categoryName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, tagName, wonToMan,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -51,7 +51,9 @@ function nicknameRange(d: Record<string, string>, prefix = '') {
 // Seller-side account facts (판매, and the offered side of 교환).
 function offeredBlocks(post: Post): ReactNode[] {
     const d = post.details;
-    const nick = [d.nicknameChars ? d.nicknameChars + '글자' : '', d.nicknameRank ? rankText([d.nicknameRank]) : ''].filter(Boolean).join(' · ');
+    // '2글자 여사 · S급': the 닉 종류 follows the length.
+    const lengthAndTypes = [d.nicknameChars ? d.nicknameChars + '글자' : '', nickTypesText(parseList(d.nicknameTypes, NICK_TYPES))].filter(Boolean).join(' ');
+    const nick = [lengthAndTypes, d.nicknameRank ? rankText([d.nicknameRank]) : ''].filter(Boolean).join(' · ');
     return [
         ...specBlock([
             ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['팬텀', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
@@ -72,7 +74,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
     return [
         ...specBlock([
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['전적', d[key('recordPreference')]],
-            ['닉 글자 수', nicknameRange(d, prefix)], ['닉 등급', ranks.length ? rankText(ranks) : ''],
+            ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
         ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d[key('skinTags')]))),
