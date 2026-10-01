@@ -175,6 +175,11 @@ export function exchangeLabel(category: string, wantedCategory?: string) {
 }
 
 export type DetailField = { id: string; label: string; type?: 'number' | 'text' | 'date'; placeholder?: string };
+// 스킨 수 as cafe titles write it: 팬텀 % ('팬텀 214%', '3팬텀' = 300%). The same range on 판매 (phantom),
+// on 구매 (phantomMin, the least a buyer accepts) and on the matching searches.
+export const PHANTOM_MAX = 5000;
+export const PHANTOM_LABEL = '스킨 수 (팬텀 %)';
+export const PHANTOM_HINT = '3팬텀 = 300%';
 
 const PROXY_FIELDS: DetailField[] = [
     { id: 'mode', label: '종목', placeholder: '예: 래더 솔큐, 엘프고' },
@@ -193,7 +198,7 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
         { id: 'humanSkins', label: '인간 스킨 수', type: 'number' },
         { id: 'zombieSkins', label: '좀비 스킨 수', type: 'number' },
         { id: 'closet', label: '옷장', type: 'number' },
-        { id: 'phantom', label: '팬텀', type: 'number' },
+        { id: 'phantom', label: PHANTOM_LABEL, type: 'number', placeholder: '예: 225' },
         { id: 'rides', label: '라이드' },
         { id: 'emblems', label: '주요 엠블럼' },
         { id: 'gas', label: '가스', type: 'number' },
@@ -348,6 +353,8 @@ export const RECORD_PREFERENCES = ['무전적', '전적 있어도 괜찮음'] as
 
 export const BUYER_DETAIL_FIELDS: DetailField[] = [
     { id: 'maxOwners', label: '대주 수', type: 'number' },
+    // The least 스킨 수 a buyer accepts, in 팬텀 % (3팬텀 = 300%); wantedPhantomMin on 교환.
+    { id: 'phantomMin', label: PHANTOM_LABEL, type: 'number' },
     { id: 'recordPreference', label: '전적' },
     { id: 'nicknameCharsMin', label: '닉네임 최소 글자 수', type: 'number' },
     { id: 'nicknameCharsMax', label: '닉네임 최대 글자 수', type: 'number' },
@@ -383,7 +390,7 @@ export function rankText(ranks: readonly string[]) {
     return [graded.length ? graded.join('/') + '급' : '', ranks.includes('잡') ? '잡' : ''].filter(Boolean).join('/');
 }
 
-// Short condition list for cards, most-scanned first: owners, record, nickname, skins,
+// Short condition list for cards, most-scanned first: owners, record, a buyer's 팬텀 minimum, nickname, skins,
 // then the cafe flags as one token ('전비변O·영전·보멜X·미통'), then currency. Cards show
 // only the first few items, so the nickname grade and skins must come before the flags.
 // Each item is one data word with no '·' between spaced words ('2글자 여사 S급 닉').
@@ -410,6 +417,8 @@ export function accountSummary(d: Record<string, string>) {
         d.ownerCount ? `${d.ownerCount}대주` : '',
         d.maxOwners ? `${d.maxOwners}대주 이하` : '',
         d.recordStatus || d.recordPreference || '',
+        // A buyer's least 스킨 수 decides who can answer, so it comes before the nickname wish.
+        d.phantomMin ? `팬텀 ${d.phantomMin}% 이상` : '',
         nick,
         skins.length ? skins[0] + (skins.length > 1 ? ` 외 ${skins.length - 1}` : '') : '',
         flags,

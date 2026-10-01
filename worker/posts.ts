@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, digest, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import {
-    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
+    CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
@@ -188,6 +188,7 @@ function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
     const label = (name: string) => fieldLabel(BUYER_DETAIL_FIELDS, name);
     numericDetail(details, key('maxOwners'), label('maxOwners'), 1, 9999);
+    numericDetail(details, key('phantomMin'), label('phantomMin'), 0, PHANTOM_MAX);
     numericDetail(details, key('nicknameCharsMin'), label('nicknameCharsMin'), 1, 20);
     numericDetail(details, key('nicknameCharsMax'), label('nicknameCharsMax'), 1, 20);
     if (details[key('nicknameCharsMin')] && details[key('nicknameCharsMax')] && Number(details[key('nicknameCharsMin')]) > Number(details[key('nicknameCharsMax')]))
@@ -272,7 +273,7 @@ async function validatePost(b: any, u: User, existing?: any) {
         const label = (id: string) => fieldLabel(DETAIL_FIELDS.account, id);
         numericDetail(details, 'ownerCount', label('ownerCount'), 1, 9999);
         numericDetail(details, 'nicknameChars', label('nicknameChars'), 1, 20);
-        numericDetail(details, 'phantom', label('phantom'), 0, 5000);
+        numericDetail(details, 'phantom', label('phantom'), 0, PHANTOM_MAX);
         selectedDetails(details, 'nicknameTypes', NICK_TYPES, label('nicknameTypes'));
         selectedDetails(details, 'skinTags', SKIN_TAGS, label('skinTags'), true);
     }
@@ -400,7 +401,7 @@ async function listPosts(req: Request, url: URL) {
         return Number(value);
     };
     // Minimums for account numbers. A bad value is a search error, never the price message.
-    for (const [key, path, max] of [['level', 'level', 999], ['skins', 'humanSkins', 9999], ['gas', 'gas', 1000000000], ['minerals', 'minerals', 1000000000], ['phantom', 'phantom', 5000]] as [string, string, number][]) {
+    for (const [key, path, max] of [['level', 'level', 999], ['skins', 'humanSkins', 9999], ['gas', 'gas', 1000000000], ['minerals', 'minerals', 1000000000], ['phantom', 'phantom', PHANTOM_MAX]] as [string, string, number][]) {
         const n = queryInteger(key, 0, max);
         if (n !== null) { where.push(`CAST(json_extract(p.details,'$.${path}') AS INTEGER)>=?`); values.push(n); }
     }
@@ -446,6 +447,14 @@ async function listPosts(req: Request, url: URL) {
             where.push(`(json_extract(p.details,'$.${key}') IS NULL OR json_extract(p.details,'$.${key}')='' OR json_extract(p.details,'$.${key}')=?)`);
             values.push(RECORD_PREFERENCES[1]);
         }
+    }
+    // "My account" 스킨 수: buyers who set no minimum or a minimum my 팬텀 % reaches. myPhantom is for
+    // 구매, wantedMyPhantom for the wanted side of 교환.
+    for (const [param, key] of [['myPhantom', 'phantomMin'], ['wantedMyPhantom', 'wantedPhantomMin']]) {
+        const mine = queryInteger(param, 0, PHANTOM_MAX);
+        if (mine === null) continue;
+        where.push(`(json_extract(p.details,'$.${key}') IS NULL OR CAST(json_extract(p.details,'$.${key}') AS INTEGER)<=?)`);
+        values.push(mine);
     }
     const wantedCategory = s.get('wantedCategory');
     if (wantedCategory) {

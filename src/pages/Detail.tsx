@@ -57,7 +57,7 @@ function offeredBlocks(post: Post): ReactNode[] {
     const nick = [lengthAndTypes, d.nicknameRank ? rankText([d.nicknameRank]) : ''].filter(Boolean).join(' · ');
     return [
         ...specBlock([
-            ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['팬텀', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
+            ['대주 수', num(d.ownerCount, '대주')], ['전적', d.recordStatus], ['스킨 수 (팬텀)', d.phantom ? d.phantom + '%' : ''], ['닉네임', nick],
             ['가스', num(d.gas)], ['미네랄', num(d.minerals)],
             ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['레벨', num(d.level)], ['연구실', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
@@ -74,7 +74,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
     const ranks = parseList(d[key('nicknameRanks')], NICK_RANKS);
     return [
         ...specBlock([
-            ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['전적', d[key('recordPreference')]],
+            ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['스킨 수 (팬텀)', d[key('phantomMin')] ? d[key('phantomMin')] + '% 이상' : ''], ['전적', d[key('recordPreference')]],
             ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
         ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),

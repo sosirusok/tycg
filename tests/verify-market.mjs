@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
 
 // Run against the compiled local Worker after applying local D1 migrations.
 // TEST_BASE_URL defaults to http://127.0.0.1:8790. This suite never targets a live site.
@@ -244,6 +245,36 @@ try {
     check(!await finds(buyId, { ...buyFilter, recordPreference: '전적 있어도 괜찮음' }),
         'buyer record search respects the selected requirement');
 
+    // 스킨 수 (팬텀 %), WP47: a buyer's least 팬텀 % (phantomMin), shown on cards as '팬텀 300% 이상',
+    // and '내 계정 팬텀 %' (myPhantom) finding buyers whose minimum my account reaches or who set none.
+    const phantomBuy = {
+        ...common, kind: 'buy', title: `[로컬 QA] ${run}-buy 팬텀 300`, price: 500000,
+        details: { maxOwners: '3', phantomMin: '300' },
+    };
+    const phantom300 = await create(seller, phantomBuy, 'purchase with a 스킨 수 minimum');
+    const phantom200 = await create(seller, { ...phantomBuy, title: `[로컬 QA] ${run}-buy 팬텀 200`, details: { maxOwners: '4', phantomMin: '0200' } }, 'purchase with a lower 스킨 수 minimum');
+    const stored300 = await read(phantom300);
+    equal(stored300.details.phantomMin, '300', 'purchase stores the 스킨 수 minimum');
+    equal((await read(phantom200)).details.phantomMin, '200', 'the 스킨 수 minimum is stored as a plain number');
+    const market = await build({ configFile: false, logLevel: 'silent', root: cwd, build: { lib: { entry: 'shared/market.ts', formats: ['es'], fileName: 'market' }, write: false, minify: false } });
+    const M = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(market) ? market[0] : market).output[0].code).toString('base64'));
+    // Cards show the first 4 items (CARD_ITEMS in src/components/PostCard.tsx).
+    const card = M.accountSummary(stored300.details);
+    check(card.slice(0, 4).includes('팬텀 300% 이상'), 'the buy card summary shows 팬텀 300% 이상: ' + card.join(', '));
+    check(M.accountSummary(storedBuy.details).slice(0, 4).every(item => !item.startsWith('팬텀')), 'a buy card without a minimum shows no 팬텀 item');
+    check(M.accountSummary({ phantom: '214' }).includes('팬텀 214%'), 'the sale card summary stays 팬텀 214%');
+    equal(M.BUYER_DETAIL_FIELDS.find(f => f.id === 'phantomMin')?.label, '스킨 수 (팬텀 %)', 'the buyer field is labelled 스킨 수 (팬텀 %)');
+    equal(M.DETAIL_FIELDS.account.find(f => f.id === 'phantom')?.label, '스킨 수 (팬텀 %)', 'the sale field is labelled 스킨 수 (팬텀 %)');
+    const phantomFilter = { kind: 'buy', category: 'account', q: run + '-buy' };
+    const mine250 = (await search({ ...phantomFilter, myPhantom: '250' })).map(post => post.id);
+    check(mine250.includes(phantom200), 'myPhantom=250 lists a buyer wanting 200% or more');
+    check(mine250.includes(buyId), 'myPhantom=250 lists a buyer with no 스킨 수 minimum');
+    check(!mine250.includes(phantom300), 'myPhantom=250 leaves out a buyer wanting 300% or more');
+    check(await finds(phantom300, { ...phantomFilter, myPhantom: '300' }), 'myPhantom includes its boundary');
+    for (const bad of ['-1', '1.5', 'abc', '5001']) {
+        equal((await guest('posts?' + new URLSearchParams({ kind: 'buy', myPhantom: bad }))).status, 400, 'invalid myPhantom rejected: ' + bad);
+    }
+
     check(await finds(saleId, { ...saleFilter, skinTags: JSON.stringify(['아람', '유루미']) }),
         'skin search uses any matching selected skin');
     check(!await finds(saleId, { ...saleFilter, skinTags: JSON.stringify(['아람']) }),
@@ -295,7 +326,7 @@ try {
                     ...(wanted === 'account' ? {
                         wantedMaxOwners: '47', wantedRecordPreference: '무전적',
                         wantedNicknameCharsMin: '3', wantedNicknameCharsMax: '4',
-                        wantedNicknameRanks: JSON.stringify(['S']), wantedSkinTags: JSON.stringify(['아람']),
+                        wantedNicknameRanks: JSON.stringify(['S']), wantedSkinTags: JSON.stringify(['아람']), wantedPhantomMin: '300',
                     } : {}),
                 },
             }, 'exchange ' + offered + ' to ' + wanted);
@@ -307,6 +338,10 @@ try {
                 equal([stored.details.wantedNicknameCharsMin, stored.details.wantedNicknameCharsMax], ['3', '4'],
                     'exchange stores desired nickname range');
                 equal(JSON.parse(stored.details.wantedNicknameRanks), ['S'], 'exchange stores desired nickname ranks');
+                equal(stored.details.wantedPhantomMin, '300', 'exchange stores the wanted 스킨 수 minimum');
+                const filter = { kind: 'exchange', category: offered, wantedCategory: wanted, q: run };
+                check(await finds(id, { ...filter, wantedMyPhantom: '300' }), 'wantedMyPhantom=300 finds an exchange wanting 300% or more');
+                check(!await finds(id, { ...filter, wantedMyPhantom: '250' }), 'wantedMyPhantom=250 leaves out an exchange wanting 300% or more');
                 if (offered === 'account') {
                     equal([stored.details.ownerCount, stored.details.nicknameChars, stored.details.nicknameRank], ['120', '2', 'R'],
                         'offered account facts are independent from wanted account requirements');
@@ -337,6 +372,9 @@ try {
         ['negative current offer rejected', { details: { currentOffer: '-1000' } }],
         ['fractional current offer rejected', { details: { currentOffer: '1.5' } }],
         ['buyer ownership limit validated', { kind: 'buy', details: { maxOwners: '0' } }],
+        ['negative buyer 스킨 수 rejected', { kind: 'buy', details: { phantomMin: '-1' } }],
+        ['buyer 스킨 수 beyond the limit rejected', { kind: 'buy', details: { phantomMin: '5001' } }],
+        ['wanted 스킨 수 validated', { kind: 'exchange', details: { wantedCategory: 'account', wantedPhantomMin: '-1' } }],
         ['buyer record choice validated', { kind: 'buy', details: { recordPreference: '알아서' } }],
         ['reversed buyer nickname range rejected', { kind: 'buy', details: { nicknameCharsMin: '4', nicknameCharsMax: '2' } }],
         ['buyer nickname rank JSON validated', { kind: 'buy', details: { nicknameRanks: 'invalid' } }],

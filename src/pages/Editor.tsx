@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, TRADE_KINDS,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RECORD_PREFERENCES, TRADE_KINDS,
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
@@ -85,7 +85,7 @@ function Fold({ filled, className = 'ed-more', summary, children }: { filled: bo
     return <details className={className} open={open ?? filled} onToggle={e => setOpen(e.currentTarget.open)}><summary>{summary}</summary>{children}</details>;
 }
 
-function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false, error = '', id }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean; error?: string; id?: string }) {
+function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '', decimal = false, error = '', id, hint }: { label: string; value: string; onChange: (v: string) => void; unit?: string; max?: number; placeholder?: string; decimal?: boolean; error?: string; id?: string; hint?: string }) {
     const errorId = id ? id + '-error' : undefined;
     return <label className="field"><span className="field-label">{label}</span>
         <div className={unit ? 'input-unit' : undefined}>
@@ -100,7 +100,8 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
         {/* 만원 fields show the amount in 원; a whole number of five digits or more (미네랄) shows its separators. */}
         {error ? <span className="field-error" id={errorId} role="alert">{error}</span>
             : decimal ? value && !Number.isNaN(manToWon(value)) && manToWon(value) !== null && <span className="field-hint">{manToWon(value)!.toLocaleString('ko-KR')}원</span>
-            : value.length >= 5 && <span className="field-hint">{Number(value).toLocaleString('ko-KR')}</span>}
+            : value.length >= 5 ? <span className="field-hint">{Number(value).toLocaleString('ko-KR')}</span>
+            : hint && <span className="field-hint">{hint}</span>}
     </label>;
 }
 
@@ -474,7 +475,7 @@ export default function Editor({ id }: { id?: string }) {
         {nickTypes('nicknameTypes')}
         <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
         <div className="ed-grid ed-grid-3">
-            <Num label="팬텀" value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={5000} placeholder="예: 225" />
+            <Num label={PHANTOM_LABEL} value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="예: 246" />
             <Num label="미네랄" value={d.minerals || ''} onChange={v => setDetail('minerals', v)} placeholder="예: 1400000" />
         </div>
@@ -495,8 +496,9 @@ export default function Editor({ id }: { id?: string }) {
         return <div className="grid-gap-16">
             <div className="ed-grid">
                 <Num label="대주 수" value={d[k('maxOwners')] || ''} onChange={v => setDetail(k('maxOwners'), v)} unit="대주 이하" max={9999} placeholder="상관없음" />
-                <div className="field"><span className="field-label">전적</span><Segmented name={prefix + '전적'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
+                <Num label={PHANTOM_LABEL} value={d[k('phantomMin')] || ''} onChange={v => setDetail(k('phantomMin'), v)} unit="% 이상" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             </div>
+            <div className="field"><span className="field-label">전적</span><Segmented name={prefix + '전적'} options={RECORD_PREFERENCES} value={d[k('recordPreference')] || ''} onChange={v => setDetail(k('recordPreference'), v)} /></div>
             <div className="field"><span className="field-label">원하는 닉네임</span>
                 <div className="range nick-range">
                     <div className="input-unit"><IntegerInput className="input" placeholder="최소" aria-label="닉네임 최소 글자 수" value={d[k('nicknameCharsMin')] || ''} max={20} onChange={v => setDetail(k('nicknameCharsMin'), v)} /><span>글자</span></div>

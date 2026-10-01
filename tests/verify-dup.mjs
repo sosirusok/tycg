@@ -156,7 +156,8 @@ const tokensOf = async c => (await c('me/usage')).data.bumpTokens;
 const ageListings = (c, ms) => sql(`UPDATE post_prints SET anchor_at=anchor_at-${ms},gone_at=gone_at-${ms} WHERE user_id='${c.user.id}' AND gone_at IS NOT NULL`);
 const reportsOf = c => sql(`SELECT details,post_id,reporter_id,status FROM reports WHERE target_user_id='${c.user.id}' AND reason='같은 매물 (자동)'`);
 
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%'");
+// Earlier suites on this database used up the sign-in limits (per IP and per user).
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 const manager = client(), guest = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
 // Earlier runs may have left pending automatic reports; this suite counts its own members' only.
