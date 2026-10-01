@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -80,8 +81,9 @@ export function postTime(p: Pick<Post, 'created_at' | 'bumped_at'>) {
 
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of
 // one board passes false. hideAuthor drops the author line on a member's own profile lists.
-// promoted is the board's '프리미엄 매물' box: a brand outline, no fill.
-export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, promoted = false }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; promoted?: boolean }) {
+// promoted is the board's '프리미엄 매물' box: a brand outline, no fill. flag goes at the end of the
+// meta line (찜한 글's '가격 내림').
+export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, promoted = false, flag }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; promoted?: boolean; flag?: ReactNode }) {
     const { me, requireLogin } = useApp();
     const href = '/posts/' + post.id;
     const tags = orderedTags(post.tags, highlight);
@@ -108,6 +110,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
                 <span className="post-card-time">{postTime(post)}</span>
                 {post.status !== 'open' && <span className={'status status-' + post.status}>{STATUS_NAMES[post.status]}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
+                {flag}
             </div>
             <h3 className="post-card-title"><Link to={href}>{post.title}</Link></h3>
             {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">

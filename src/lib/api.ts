@@ -75,3 +75,9 @@ export async function uploadPhoto(file: File): Promise<string> {
 }
 
 export const imageUrl = (id: string) => '/api/images/' + id;
+
+// The image files of a paste or a drop (clipboardData.files, dataTransfer.files). Other files are
+// left out; uploadPhoto still refuses image types other than JPG, PNG and WebP with its own message.
+export const imageFiles = (files: FileList | null | undefined) => Array.from(files || []).filter(f => f.type.startsWith('image/'));
+// Whether a drag carries files, so dragover can accept it (text and links are left alone).
+export const dragsFiles = (types: readonly string[]) => types.includes('Files');

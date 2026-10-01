@@ -26,6 +26,9 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
 type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number };
+// 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now).
+type SavedPost = Post & { price_drop?: { from: number; to: number } };
+const priceDrop = (p: SavedPost) => p.price_drop && <span className="price-drop"><span className="tag tag-drop">가격 내림</span><del>{priceText(p.price_drop.from)}</del><b>{priceText(p.price_drop.to)}</b></span>;
 // GET /me/usage (null limits are the manager's: no cap).
 type Usage = {
     perks: { bumpsPerDay: number | null; bumpGapHours: number | null; openPosts: number | null };
@@ -179,7 +182,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                         lostProxy={p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy')} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
                     {moreButton}
                 </> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />)
-                : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as Post[]).map(p => <PostCard key={p.id} post={p} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
+                : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
                     : <EmptyState icon="file" title={tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={<Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
                 : tab === 'offers' ? (items.length ? <ul className="simple-list">{(items as Offer[]).map(o => <li key={o.id}>
                     <span className="grow"><Link to={'/posts/' + o.post_id} className="strong-link">{o.title}</Link><span className="muted small">{o.sender_id === me.id ? <>보낸 제시 · <NameLine nickname={o.recipient_name} grade={o.recipient_grade} badges={o.recipient_badges} /></> : <>받은 제시 · <NameLine nickname={o.sender_name} grade={o.sender_grade} badges={o.sender_badges} /></>}<span className="nowrap">{' '}· {relativeTime(o.created_at)}</span></span></span>

@@ -72,7 +72,7 @@ function partner(row: any) {
     const { deleted_at, ...rest } = row;
     const m: Record<string, unknown> = withMember(rest);
     delete m.grade_expires_at;
-    if (deleted_at) { m.nickname = WITHDRAWN_NAME; m.deleted = true; }
+    if (deleted_at) { m.nickname = WITHDRAWN_NAME; m.deleted = true; delete m.last_seen_at; }
     return m;
 }
 
@@ -121,7 +121,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     }
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
-        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
+        // The room header also shows the partner's '최근 접속' (last_seen_at); the chat list leaves it out.
+        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
         return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b), listing: await chatListing(c.id, u) } });
     }
     if (p[1] && p[2] === 'messages') {

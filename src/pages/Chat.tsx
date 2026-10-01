@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowLeft, Ban, ImagePlus, LoaderCircle, Send, UserCog, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { KIND_ICONS, STATUS_NAMES, isTradeKind, listingPrice, priceText, relativeTime, type Post, type TradeKind, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
-import { ApiError, api, errorText, imageUrl, uploadPhoto } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, uploadPhoto } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
+import { lastSeenText } from '../lib/lastSeen';
 import { useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
@@ -13,7 +14,7 @@ import { MemberPanel } from '../components/MemberPanel';
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
-type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean };
+type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null };
 // The post the chat is about, pinned under the room header.
 type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
 type ChatFilter = 'all' | 'applications';
@@ -37,6 +38,10 @@ const KIND_REPLIES: Partial<Record<TradeKind, [string[], string[]]>> = {
     proxy_offer: [['지금 진행 가능한가요?', '가격 알려주세요', '경력 있으신가요?'], ['네 진행 가능합니다', '예약 걸어둘게요']],
 };
 const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일치', '거래내역 부족'];
+// A phone number (010-1234-5678) or an account-like run of digits in a partner's message gets a
+// '더치트 조회' link, the cafes' safety step before sending money.
+const LOOKUP = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}|\d{2,6}-\d{2,6}-\d{2,8}|\d{10,14}/;
+const PHOTOS_PER_MESSAGE = 6;
 
 function toListing(p: Post): Listing {
     return { id: p.id, title: p.title, kind: p.kind, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, author_id: p.author_id, currentOffer: p.details.currentOffer ? Number(p.details.currentOffer) || null : null };
@@ -249,13 +254,31 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send(); }
     }
-    async function attach(files: FileList | null) {
-        if (!files?.length) return;
-        const list = Array.from(files).slice(0, 6 - photos.length);
+    // Photos from the picker, a paste or a drop; at most 6 per message, one batch at a time.
+    async function attach(files: File[]) {
+        if (!files.length || uploading) return;
+        const list = files.slice(0, Math.max(0, PHOTOS_PER_MESSAGE - photos.length));
+        if (files.length > list.length) toast.error(`사진은 한 번에 ${PHOTOS_PER_MESSAGE}장까지입니다.`);
+        if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
         setUploading(true);
         try { for (const f of list) { const up = await uploadPhoto(f); setPhotos(p => [...p, up]); } }
         catch (err) { toast.error(errorText(err)); }
         finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
+    }
+    // A pasted screenshot or a photo dropped on the room goes up like one picked from the album.
+    const closed = blocked || !!partner?.deleted;
+    function onPaste(e: ClipboardEvent<HTMLFormElement>) {
+        const files = imageFiles(e.clipboardData.files);
+        if (!files.length || closed) return;
+        e.preventDefault();
+        void attach(files);
+    }
+    function onDragOver(e: DragEvent<HTMLElement>) { if (dragsFiles(e.dataTransfer.types)) e.preventDefault(); }
+    function onDrop(e: DragEvent<HTMLElement>) {
+        if (!dragsFiles(e.dataTransfer.types)) return;
+        // Even a refused drop must not open the file in place of the app.
+        e.preventDefault();
+        if (!closed) void attach(imageFiles(e.dataTransfer.files));
     }
     async function offerAction(offer: Offer, action: string) {
         try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료' : action === 'declined' ? '거절 완료' : '제시 취소 완료'); await poll(); activity.current(); }
@@ -313,11 +336,14 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
 
     return <section className={'chat-room' + (managerView ? ' with-panel' : '')} aria-label="대화">
-        <div className="room-main">
+        <div className="room-main" onDragOver={onDragOver} onDrop={onDrop}>
             <header className="room-head">
                 <Link to="/chat" className="icon-btn room-back" aria-label="채팅 목록"><ArrowLeft size={22} /></Link>
                 {partner?.deleted ? <span className="room-who"><Avatar name={partner.nickname} size="sm" /><span>{partner.nickname}</span></span>
-                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} compact /></Link> : <span className="grow" />}
+                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><span className="room-who-text">
+                        <NameLine nickname={partner.nickname} grade={partner.grade} role={partner.role} badges={partner.badges} compact />
+                        {partner.last_seen_at && <span className="room-seen">{lastSeenText(partner.last_seen_at)}</span>}
+                    </span></Link> : <span className="grow" />}
                 <span className="grow" />
                 {managerView && <button type="button" className="btn btn-line btn-sm room-panel-btn" onClick={() => setPanel(true)}><UserCog size={16} />회원 관리</button>}
                 {partner && partner.role !== 'manager' && !partner.deleted && <button type="button" className="icon-btn" aria-label={blocked ? '차단 해제' : '차단'} title={blocked ? '차단 해제' : '차단'} onClick={toggleBlock}><Ban size={19} /></button>}
@@ -338,6 +364,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 {!loaded ? <div className="room-loading"><LoaderCircle className="spin" /></div> : messages.map(m => {
                     const day = dayLabel(m.created_at), showDay = day !== prevDay; prevDay = day;
                     const mine = m.sender_id === me.id;
+                    // Not on the manager's own lines (the account for a grade deposit is the site's).
+                    const lookup = !mine && m.type === 'text' && partner?.role !== 'manager' && LOOKUP.test(m.body);
                     return <div key={m.id}>
                         {showDay && <div className="day-sep"><span>{day}</span></div>}
                         {m.type === 'system' ? <div className="sys-msg">{m.body}</div>
@@ -351,18 +379,20 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                                 </div>
                                 <span className="bubble-meta">{mine && m.id === lastMine?.id && readThrough >= m.id && <span className="read">읽음</span>}{timeLabel(m.created_at)}</span>
                             </div>}
+                        {/* Under the bubble row, so the time stays beside the bubble. */}
+                        {lookup && <a className="lookup-link" href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트 조회</a>}
                     </div>;
                 })}
                 </div>
             </div>
-            <form className="composer" onSubmit={send}>
+            <form className="composer" onSubmit={send} onPaste={onPaste}>
                 {partner?.deleted ? <p className="muted small composer-blocked">탈퇴한 회원입니다.</p>
                     : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p> : <>
                     {quick.length > 0 && <div className="chip-scroll quick-replies" role="group" aria-label="빠른 답장">{quick.map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}</div>}
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
-                        <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => attach(e.target.files)} />
-                        <button type="button" className="icon-btn" aria-label="사진 보내기" disabled={uploading || photos.length >= 6} onClick={() => fileInput.current?.click()}>{uploading ? <LoaderCircle size={20} className="spin" /> : <ImagePlus size={22} />}</button>
+                        <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void attach(Array.from(e.target.files || []))} />
+                        <button type="button" className="icon-btn" aria-label="사진 보내기" disabled={uploading || photos.length >= PHOTOS_PER_MESSAGE} onClick={() => fileInput.current?.click()}>{uploading ? <LoaderCircle size={20} className="spin" /> : <ImagePlus size={22} />}</button>
                         <textarea ref={input} rows={Math.min(6, Math.max(1, text.split('\n').length))} value={text} maxLength={2000} onChange={e => setText(e.target.value)} onKeyDown={onKey} placeholder="메시지 입력" aria-label="메시지" />
                         <button type="submit" className="send-btn" aria-label="보내기" disabled={sending || uploading || (!text.trim() && !photos.length)}>{sending ? <LoaderCircle size={20} className="spin" /> : <Send size={20} />}</button>
                     </div>

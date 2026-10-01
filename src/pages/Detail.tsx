@@ -8,13 +8,14 @@ import {
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, takeScrollRestore, withParams } from '../lib/router';
+import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
 
 type Row = [string, ReactNode];
-// Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴).
-type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean };
+// Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속).
+type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null };
 type Usage = {
     perks: { bumpsPerDay: number | null; bumpGapHours: number | null; boardSlots: number | null };
     bumpsToday: number; bumpsLeft: number | null; featured: { id: number; title: string }[];
@@ -320,15 +321,15 @@ export function Detail({ id }: { id: string }) {
     </div>;
 }
 
-function AuthorBox({ post, className }: { post: Post; className: string }) {
+function AuthorBox({ post, className }: { post: DetailPost; className: string }) {
     // A withdrawn author has no profile; the name is plain 탈퇴회원 without grade or badges.
-    if ((post as Post & { author_deleted?: boolean }).author_deleted) return <div className={'author-box ' + className}>
+    if (post.author_deleted) return <div className={'author-box ' + className}>
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} /></span>
     </div>;
     return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
         <Avatar name={post.nickname} />
-        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats">프로필 보기</span></span>
+        <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} /><span className="author-stats">{lastSeenText(post.author_last_seen_at) || '프로필 보기'}</span></span>
         <ChevronRight size={18} className="muted" />
     </Link>;
 }

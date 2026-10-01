@@ -35,7 +35,9 @@ export async function latestSeason() {
     return Number.isInteger(v) && v >= LATEST_SEASON && v <= 200 ? v : LATEST_SEASON;
 }
 
-async function rawPost(id: string | number) { return db().prepare(postSelect + ' WHERE p.id=?').bind(id).first<any>(); }
+// One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out).
+const onePostSelect = postSelect.replace(' FROM posts p ', ',u.last_seen_at AS author_last_seen_at FROM posts p ');
+async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
 // no longer holds 대리 인증 (the board list uses the same rule). The author and the manager still see both.
@@ -83,7 +85,7 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
-        if (authorDeleted) p.nickname = WITHDRAWN_NAME;
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; }
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
@@ -491,10 +493,26 @@ async function listPosts(req: Request, url: URL) {
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
     const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
     const posts = await decorate(r[1].results, u);
+    if (scope === 'favorites') await addPriceDrops(posts, u!.id);
     // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
     // post and started a chat from it. The profile lists do not ask, so they skip these reads.
     if (u && author === u.id && !scope && s.get('counts') === '1') await addOwnCounts(posts);
     return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+}
+
+// 찜한 글: a sale whose 즉거가 fell after the member saved it carries price_drop {from, to}. Each
+// history row holds the price before one change, so the first row written after the favorite holds
+// the price the member saw (a rise in between records nothing, so it is then the risen price). A rise
+// deletes the rows at or below the new price, so a price back at or above `from` shows no drop.
+async function addPriceDrops(posts: any[], userId: string) {
+    const sells = posts.filter(p => p.kind === 'sell' && p.price !== null && p.status !== 'closed');
+    if (!sells.length) return;
+    const r = await db().prepare('SELECT h.post_id,h.price FROM post_price_history h JOIN favorites f ON f.post_id=h.post_id AND f.user_id=? WHERE h.post_id IN (SELECT value FROM json_each(?)) AND h.changed_at>f.created_at ORDER BY h.id')
+        .bind(userId, JSON.stringify(sells.map(p => p.id))).all<{ post_id: number; price: number }>();
+    for (const p of sells) {
+        const first = r.results.find(h => h.post_id === p.id);
+        if (first && first.price > p.price) p.price_drop = { from: first.price, to: p.price };
+    }
 }
 
 // fav_count: favorites of the post. chat_count: chats opened from the post (a 'listing' message

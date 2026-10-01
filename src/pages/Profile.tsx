@@ -5,6 +5,7 @@ import { dateText, longDate, type Post, type User } from '../../shared/market';
 import { BADGES, GRADES, gradeInfo } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
+import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { gradeBenefits } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
@@ -13,7 +14,7 @@ import { PostCard } from '../components/PostCard';
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
 
-type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean };
+type Profile = User & { postCount: number; closedCount: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null };
 // GET /me/usage: today's use of the grade limits (null limits are the manager's: no cap).
 type Usage = { perks: { bumpsPerDay: number | null; openPosts: number | null; boardSlots: number | null }; bumpsToday: number; openPosts: number; featured: unknown[] };
 const PAGE_SIZE = 20;
@@ -117,6 +118,8 @@ export default function ProfilePage({ id }: { id?: string }) {
                 <NameLine nickname={user.nickname} grade={user.grade} role={user.role} badges={user.badges} size="lg" />
                 {user.prev_nickname && <p className="muted small mt-8">이전 닉네임: {user.prev_nickname}</p>}
                 <p className="muted small mt-8">{dateText(user.created_at)} 가입 · 거래글 {user.postCount} · 거래완료 {user.closedCount}</p>
+                {/* Other members' 최근 접속 (on one's own profile it would always read 10분 이내). */}
+                {!mine && user.last_seen_at && <p className="muted small profile-seen">{lastSeenText(user.last_seen_at)}</p>}
                 {user.bio && <p className="profile-bio">{user.bio}</p>}
             </div>
             <div className="profile-actions">

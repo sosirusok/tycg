@@ -113,19 +113,27 @@ export function tokenOf(r: Request) {
 export const SESSION_DAYS = 30;
 const DAY = 86400000;
 
+// '최근 접속' is written at most once per 10 minutes per member.
+export const LAST_SEEN_STEP = 10 * 60000;
+
 // Sessions last 30 days from the last visit. The expiry is pushed forward at most
 // once a week so an active member stays signed in without extra writes.
+// The same session read gives '최근 접속' (users.last_seen_at); it is written only when it is empty
+// or 10 minutes old, and the WHERE repeats that test so parallel requests write it once.
 export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
-    const { session_expires_at, ...user } = row;
-    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) {
-        await db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token).run();
+    const { session_expires_at, last_seen_at, ...user } = row;
+    const writes: D1PreparedStatement[] = [];
+    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
+    if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
+        writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
     }
+    if (writes.length) await db().batch(writes);
     return withMember(user) as User;
 }
 

@@ -6,7 +6,7 @@ import {
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { api, errorText, imageUrl, uploadPhoto } from '../lib/api';
+import { api, dragsFiles, errorText, imageFiles, imageUrl, uploadPhoto } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
@@ -279,9 +279,10 @@ export default function Editor({ id }: { id?: string }) {
         patch({ category, tags: [], details: keep });
     }
 
-    async function addPhotos(files: FileList | null) {
-        if (!files?.length) return;
-        const list = Array.from(files).slice(0, Math.max(0, photoCap - form.images.length));
+    // Photos from the picker, a paste or a drop, within the grade's cap; one batch at a time.
+    async function addPhotos(files: File[]) {
+        if (!files.length || uploading) return;
+        const list = files.slice(0, Math.max(0, photoCap - form.images.length));
         if (files.length > list.length) toast.error(`사진은 한 글에 ${photoCap}장까지입니다.`);
         if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
         setUploading(true);
@@ -295,6 +296,33 @@ export default function Editor({ id }: { id?: string }) {
         }
     }
     const moveImage = (i: number, d: number) => { const a = [...form.images]; [a[i], a[i + d]] = [a[i + d], a[i]]; patch({ images: a }); };
+    // A screenshot pasted anywhere on the page, or a photo dropped on it, goes into 사진 like one picked
+    // from the album. Text pastes and drags are left alone; a dropped file never replaces the page.
+    const addPhotosRef = useRef(addPhotos);
+    addPhotosRef.current = addPhotos;
+    useEffect(() => {
+        if (!loaded) return;
+        const paste = (e: ClipboardEvent) => {
+            const files = imageFiles(e.clipboardData?.files);
+            if (!files.length) return;
+            e.preventDefault();
+            void addPhotosRef.current(files);
+        };
+        const over = (e: DragEvent) => { if (e.dataTransfer && dragsFiles(e.dataTransfer.types)) e.preventDefault(); };
+        const drop = (e: DragEvent) => {
+            if (!e.dataTransfer || !dragsFiles(e.dataTransfer.types)) return;
+            e.preventDefault();
+            void addPhotosRef.current(imageFiles(e.dataTransfer.files));
+        };
+        document.addEventListener('paste', paste);
+        document.addEventListener('dragover', over);
+        document.addEventListener('drop', drop);
+        return () => {
+            document.removeEventListener('paste', paste);
+            document.removeEventListener('dragover', over);
+            document.removeEventListener('drop', drop);
+        };
+    }, [loaded]);
 
     const priceWon = form.kind === 'sell' ? manToWon(form.price) : null, offerWon = form.kind === 'sell' ? manToWon(form.offer) : null;
     const offerTooHigh = priceWon !== null && offerWon !== null && !Number.isNaN(priceWon) && !Number.isNaN(offerWon) && offerWon >= priceWon;
@@ -487,7 +515,7 @@ export default function Editor({ id }: { id?: string }) {
                 </section>
 
                 <Section title="사진" desc={`첫 장이 대표 사진 · ${photoCount}`}>
-                    <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => addPhotos(e.target.files)} />
+                    <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void addPhotos(Array.from(e.target.files || []))} />
                     <div className="photo-grid">
                         {form.images.map((img, i) => <div className="photo" key={img}>
                             <img src={imageUrl(img)} alt={`사진 ${i + 1}`} />

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
+import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
@@ -29,6 +30,15 @@ function cachePut(key: string, data: ListData) {
 }
 
 type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
+
+// Saved searches (GET /searches, 20 per member for every grade), read once per member per page load
+// and kept here so moving between tabs does not ask again. The stored query is the board's own
+// canonical query without the page, compared with its keys sorted.
+type Saved = { id: string; name: string; query: string };
+let savedCache: { user: string; list: Saved[] } | null = null;
+const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchParams(q); p.delete('page'); p.sort(); return p.toString(); };
+// The name is the filter chips in order, within the server's 32 characters.
+const searchName = (labels: string[]) => { const name = labels.join(', '); return name.length > 32 ? name.slice(0, 31) + '…' : name; };
 
 // Only parameters that mean something for the current tab reach the API. closed=1 stays in the
 // address only; without it the request asks for open and reserved posts (active=1).
@@ -230,6 +240,14 @@ export function Board() {
     const cached = fetched?.key === cacheKey ? undefined : cacheGet(cacheKey);
     const data = fetched?.key === cacheKey ? fetched : cached ? { key: cacheKey, ...cached, error: '' } : null;
     const [reload, setReload] = useState(0), [sheet, setSheet] = useState(false);
+    const [saved, setSaved] = useState<Saved[]>(() => me && savedCache?.user === me.id ? savedCache.list : []), [savingSearch, setSavingSearch] = useState(false);
+    useEffect(() => {
+        if (!me) { setSaved([]); return; }
+        if (savedCache?.user === me.id) { setSaved(savedCache.list); return; }
+        let alive = true;
+        api<{ searches: Saved[] }>('searches').then(d => { savedCache = { user: me.id, list: d.searches }; if (alive) setSaved(d.searches); }).catch(() => {});
+        return () => { alive = false; };
+    }, [me?.id]);
     // Follows the address (back/forward, chips) without overwriting what the member is typing.
     const urlQ = params.get('q') || '';
     const [q, setQ] = useState(urlQ);
@@ -302,6 +320,26 @@ export function Board() {
         if (y !== null) window.scrollTo(0, y);
     }, [loading, cacheKey]);
     const chips = activeChips(ctx, query, update);
+    // Saved searches of this tab above the list; '이 조건 저장' next to the filter chips.
+    const currentKey = searchKey(query);
+    const tabSaved = saved.filter(v => (new URLSearchParams(v.query).get('kind') || 'all') === kind);
+    const isSaved = saved.some(v => searchKey(v.query) === currentKey);
+    async function refreshSaved() {
+        const d = await api<{ searches: Saved[] }>('searches');
+        if (me) savedCache = { user: me.id, list: d.searches };
+        setSaved(d.searches);
+    }
+    async function saveSearch() {
+        if (savingSearch) return;
+        setSavingSearch(true);
+        try { await api('searches', 'POST', { name: searchName(chips.map(c => c.label)), query: currentKey }); toast('저장 완료'); await refreshSaved(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setSavingSearch(false); }
+    }
+    async function deleteSearch(id: string) {
+        try { await api('searches/' + id, 'DELETE'); toast('삭제 완료'); await refreshSaved(); }
+        catch (e) { toast.error(errorText(e)); }
+    }
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
     const compose = () => requireLogin(u => {
@@ -350,7 +388,16 @@ export function Board() {
                     </form>
                     {filters && <button type="button" className="btn btn-line filter-open" onClick={() => setSheet(true)}><SlidersHorizontal size={18} />필터{chips.length > 0 && <b className="filter-count">{chips.length}</b>}</button>}
                 </div>
-                {chips.length > 0 && <div className="active-filters">{chips.map(c => <button type="button" key={c.key} onClick={c.clear} aria-label={c.label + ' 해제'}>{c.label}<X size={13} /></button>)}<button type="button" className="clear" onClick={clearAll}>전체 해제</button></div>}
+                {tabSaved.length > 0 && <div className="chip-scroll saved-searches" role="group" aria-label="저장한 검색">
+                    <span className="saved-label">저장한 검색</span>
+                    {tabSaved.map(v => { const on = searchKey(v.query) === currentKey; return <span key={v.id} className={'saved-chip' + (on ? ' on' : '')}>
+                        <button type="button" aria-pressed={on} onClick={() => { if (!on) void navigate('/trade?' + v.query); }}>{v.name}</button>
+                        <button type="button" aria-label={v.name + ' 삭제'} onClick={() => void deleteSearch(v.id)}><X size={13} /></button>
+                    </span>; })}
+                </div>}
+                {chips.length > 0 && <div className="active-filters">{chips.map(c => <button type="button" key={c.key} onClick={c.clear} aria-label={c.label + ' 해제'}>{c.label}<X size={13} /></button>)}
+                    {me && !isSaved && <button type="button" className="btn btn-line btn-xs save-search" disabled={savingSearch} onClick={() => void saveSearch()}>이 조건 저장</button>}
+                    <button type="button" className="clear" onClick={clearAll}>전체 해제</button></div>}
                 <div className="list-meta">
                     <p aria-live="polite">{loading ? '불러오는 중' : <><b>{data!.total.toLocaleString()}</b>건</>}</p>
                     <div className="list-tools">

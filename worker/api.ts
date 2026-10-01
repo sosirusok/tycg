@@ -149,12 +149,12 @@ async function usersHandler(req: Request, p: string[]) {
         const viewer = await currentUser(req);
         // Counts skip 대리(진행) posts whose author lost 대리 인증, as the board list does (the author still counts them).
         const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))";
-        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.role,u.bio,u.created_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
+        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount FROM users u WHERE u.id=?`)
             .bind(viewer?.id || '', viewer?.id || '', p[1]).first<any>();
         if (!row) fail(404, '회원을 찾을 수 없습니다.');
         const { prev_nickname, nickname_changed_at, deleted_at, ...rest } = row;
         // A withdrawn member is only a name: no bio, grade, badges, counts or chat.
-        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, deleted: true } });
+        if (deleted_at) return json({ user: { id: row.id, nickname: WITHDRAWN_NAME, role: row.role, bio: '', created_at: row.created_at, grade: 'normal', grade_expires_at: null, badges: [], postCount: 0, closedCount: 0, last_seen_at: null, deleted: true } });
         const user: Record<string, unknown> = withMember(rest);
         // The nickname before the latest change stays on the profile for 90 days.
         if (prev_nickname && nickname_changed_at > Date.now() - 90 * DAY) user.prev_nickname = prev_nickname;
