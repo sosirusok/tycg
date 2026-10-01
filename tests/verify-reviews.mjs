@@ -66,7 +66,7 @@ async function register(name) {
 }
 
 // The suites before this one use most of the 40 sign-ins per 10 minutes from this address.
-sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 
 const guest = client(), manager = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');
