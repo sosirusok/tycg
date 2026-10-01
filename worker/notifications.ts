@@ -18,7 +18,8 @@ const COUNT_CAP = 99;
 // - neither of the two blocked the other;
 // - the recipient got fewer than 100 알림 today (KST);
 // - the recipient has no unread row of the same type and ref (the notifications_open index), so a
-//   repeated event writes nothing until that row is read.
+//   repeated event writes nothing until that row is read; a later 가격 내림 (fav_price) instead updates
+//   that unread row's text and time, so it shows the latest price (still one row per post).
 // The outer SELECT always has a WHERE, which SQLite needs to parse the upsert after INSERT … SELECT.
 export function notifyStatement(type: NotifyType, select: string, args: unknown[], now: number, guard = '1', guardArgs: unknown[] = []) {
     return db().prepare(`INSERT INTO notifications(user_id,type,ref,post_id,actor_id,text,created_at)
@@ -27,7 +28,7 @@ export function notifyStatement(type: NotifyType, select: string, args: unknown[
         AND EXISTS(SELECT 1 FROM users nu WHERE nu.id=x.user_id AND nu.deleted_at IS NULL)
         AND NOT EXISTS(SELECT 1 FROM blocks nb WHERE (nb.user_id=x.user_id AND nb.target_id=x.actor_id) OR (nb.user_id=x.actor_id AND nb.target_id=x.user_id))
         AND NOT EXISTS(SELECT 1 FROM notifications nd WHERE nd.user_id=x.user_id AND nd.created_at>=? LIMIT 1 OFFSET ${NOTIFY_PER_DAY - 1})
-        ON CONFLICT(user_id,type,ref) WHERE read_at IS NULL DO NOTHING`)
+        ON CONFLICT(user_id,type,ref) WHERE read_at IS NULL ${type === 'fav_price' ? 'DO UPDATE SET text=excluded.text,created_at=excluded.created_at' : 'DO NOTHING'}`)
         .bind(type, now, ...args, ...guardArgs, kstDayStart(now));
 }
 
@@ -44,13 +45,15 @@ export function notifyOne(type: NotifyType, userId: string, ref: string, postId:
 // The header count: unread 알림, at most 99 rows read (notifications_unread). Bind the member's id.
 export const ALERTS_COUNT_SQL = `(SELECT COUNT(*) FROM (SELECT 1 FROM notifications WHERE user_id=? AND read_at IS NULL LIMIT ${COUNT_CAP}))`;
 
-type Row = { id: number; type: string; ref: string; post_id: number | null; text: string; created_at: number; read_at: number | null; post_title: string | null; post_thumb: string | null };
-// The post shows only while the member may see it: not hidden, or their own.
-const ROW_SQL = `SELECT n.id,n.type,n.ref,n.post_id,n.text,n.created_at,n.read_at,p.title AS post_title,json_extract(p.images,'$[0]') AS post_thumb
+type Row = { id: number; type: string; ref: string; post_id: number | null; text: string; created_at: number; read_at: number | null; post_title: string | null; post_thumb: string | null; post_image: string | null };
+// The post shows only while the member may see it: not hidden, or their own. The row picture is the
+// inline thumbnail (posts.thumb, no image request); the first photo id only for posts saved without one.
+const ROW_SQL = `SELECT n.id,n.type,n.ref,n.post_id,n.text,n.created_at,n.read_at,p.title AS post_title,p.thumb AS post_thumb,
+    CASE WHEN p.thumb IS NULL AND json_valid(p.images) THEN json_extract(p.images,'$[0]') END AS post_image
     FROM notifications n LEFT JOIN posts p ON p.id=n.post_id AND (p.hidden=0 OR p.author_id=n.user_id)`;
 const row = (r: Row) => ({
     id: r.id, type: r.type, ref: r.ref, text: r.text, created_at: r.created_at, read: r.read_at !== null,
-    post_id: r.post_id, post: r.post_title === null ? null : { id: r.post_id, title: r.post_title, thumb: r.post_thumb },
+    post_id: r.post_id, post: r.post_title === null ? null : { id: r.post_id, title: r.post_title, thumb: r.post_thumb, image: r.post_image },
 });
 
 // GET notifications?page=1 (20 per page, newest first), GET notifications/latest (the newest unread row),

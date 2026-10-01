@@ -106,6 +106,12 @@ equal([a.trial.popup, a.trial.endsAt, a.trial.ended, a.trial.capped], [true, aCr
 equal((await me(a)).trial.popup, true, 'auth/me keeps asking until the popup is closed');
 equal((await a('me/trial-popup', 'POST', {})).status, 200, 'POST me/trial-popup');
 equal((await me(a)).trial.popup, false, 'the popup is done for this account');
+// A member the manager gives a higher grade during the trial never gets the trial event popup.
+const el = await register('el', '10.250.7.7');
+equal(el.trial.popup, true, 'el signs up on the trial');
+equal((await manager(`manage/users/${el.user.id}/grades`, 'POST', { grade: 'elite', plan: 'permanent' })).status, 201, 'the manager gives el 엘리트');
+const elMe = await me(el);
+equal([elMe.user.grade, elMe.trial.popup], ['elite', false], 'an 엘리트 member gets no trial popup');
 
 // 2. Triggers.
 const userSql = (id, created, extra = '') => `INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at${extra ? ',trial_at' : ''}) VALUES ('${id}','${id}','${id}','${id}','','','member','',${created}${extra ? ',' + extra : ''})`;

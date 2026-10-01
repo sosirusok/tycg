@@ -170,7 +170,8 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
 
 /* Status labels */
 .status { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: var(--r-4); font-size: var(--fs-12); font-weight: 600; }
-.status-closed { background: var(--fill); color: var(--ink-3); }
+/* 완료 (and 숨김): an ink-2 solid chip with white text (design.md 3). */
+.status-closed { background: var(--ink-2); color: var(--white); }
 
 /* Tabs */
 .tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }

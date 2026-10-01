@@ -48,6 +48,9 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 // one windowed DELETE of at most 2,000 rows a run.
 export const ALERTS_DELETES_PER_RUN = 2000;
 const ALERTS_KEPT = 300;
+// Members trimmed to the newest ALERTS_KEPT per run; others wait for a later run (the 60-day limit
+// removes their old rows in any case).
+const ALERTS_TRIM_MEMBERS = 50;
 // 플러스 무료 체험 reminders per run (each a set-based INSERT … SELECT and an UPDATE).
 const TRIAL_ALERTS_PER_RUN = 500;
 
@@ -72,8 +75,8 @@ const kstSql = (col: string) => {
 
 // The 플러스 무료 체험's 알림 (no manager chat, WP41/WP50). A trial ending within 24 hours gets the
 // reminder once (reminded_at=now); a trial that ended (in the last 7 days) and was not seen yet
-// (reminded_at NULL or ≥ 0) gets '플러스 무료 체험이 끝났습니다.' once (reminded_at=-1, which also ends the
-// home end band). A member who holds a paid grade that outlives the trial gets neither row, but the
+// (reminded_at NULL or ≥ 0) gets '플러스 무료 체험이 끝났습니다.' once (reminded_at=-2: the 알림 is sent,
+// and the home end band stays until the member closes it, which sets -1). A member who holds a paid grade that outlives the trial gets neither row, but the
 // trial is still marked so it is not looked at again. Each pair selects the same rows (same order and
 // limit): the 알림 first, then the mark.
 function trialAlertStatements(now: number) {
@@ -87,7 +90,7 @@ function trialAlertStatements(now: number) {
         db().prepare(`UPDATE user_grades SET reminded_at=? WHERE id IN (SELECT g.id FROM user_grades g WHERE ${soon} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN})`).bind(now, ...soonArgs),
         notifyStatement('grade_end', `SELECT g.user_id,g.id||':end' AS ref,NULL AS post_id,NULL AS actor_id,? AS text
             FROM user_grades g WHERE ${ended} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN}`, [TRIAL_ALERT_ENDED, ...endedArgs], now, outlived('?'), [now]),
-        db().prepare(`UPDATE user_grades SET reminded_at=-1 WHERE id IN (SELECT g.id FROM user_grades g WHERE ${ended} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN})`).bind(...endedArgs),
+        db().prepare(`UPDATE user_grades SET reminded_at=-2 WHERE id IN (SELECT g.id FROM user_grades g WHERE ${ended} ORDER BY g.id LIMIT ${TRIAL_ALERTS_PER_RUN})`).bind(...endedArgs),
     ];
 }
 
@@ -152,11 +155,16 @@ export async function cleanup(now = Date.now()) {
             AND ((status='closed' AND COALESCE(closed_at,updated_at)<?) OR (status!='closed' AND bumped_at<?)) LIMIT ?)`).bind(now - RETAIN_DAYS * DAY, now - THUMB_OPEN_DAYS * DAY, THUMBS_PER_RUN),
         // 링크 미리보기 (WP48): cached previews older than 7 days (the posts keep their own cards).
         db().prepare('DELETE FROM link_cache WHERE fetched_at<?').bind(now - 7 * DAY),
-        // 알림함 (WP50): the age limits and the newest 300 per member, then the trial's 알림.
+        // 알림함 (WP50): the age limits and the newest 300 per member, then the trial's 알림. Only a member
+        // who got a row in the last 3 days can have gone over 300 since the last run, so the count reads
+        // those members' rows (notifications_user) and the window runs over at most 50 of them, never the
+        // whole table.
         db().prepare(`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications INDEXED BY notifications_created WHERE created_at<?
             UNION SELECT id FROM notifications INDEXED BY notifications_created WHERE created_at<? AND read_at IS NOT NULL
-            UNION SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC,id DESC) AS rn FROM notifications) WHERE rn>?
-            LIMIT ?)`).bind(now - 60 * DAY, now - 14 * DAY, ALERTS_KEPT, ALERTS_DELETES_PER_RUN),
+            UNION SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC,id DESC) AS rn FROM notifications
+                WHERE user_id IN (SELECT user_id FROM notifications WHERE user_id IN (SELECT user_id FROM notifications INDEXED BY notifications_created WHERE created_at>=?)
+                    GROUP BY user_id HAVING COUNT(*)>? LIMIT ${ALERTS_TRIM_MEMBERS})) WHERE rn>?
+            LIMIT ?)`).bind(now - 60 * DAY, now - 14 * DAY, now - 3 * DAY, ALERTS_KEPT, ALERTS_KEPT, ALERTS_DELETES_PER_RUN),
         ...trialAlertStatements(now),
     ];
     const r = await db().batch([...house, ...names.map(n => reads[n])]);

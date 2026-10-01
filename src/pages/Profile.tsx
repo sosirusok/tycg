@@ -238,7 +238,8 @@ function ReviewList({ userId }: { userId: string }) {
     if (rows === null) return <SkeletonRows count={2} height={72} />;
     if (!rows.length) return <EmptyState title="받은 후기가 없습니다" />;
     return <>
-        <p className="muted small" style={{ marginBottom: 12 }}>{total}건</p>
+        {/* Every confirmed trade is listed; the trust line's '거래 N회' counts a partner once per 30 days. */}
+        <p className="muted small" style={{ marginBottom: 12 }}>전체 {total}건 · 거래 횟수는 같은 회원 30일 1번</p>
         <ul className="review-list">{rows.map(r => <li key={r.id}>
             <div className="review-head">
                 {r.author_deleted ? <NameLine nickname={r.nickname} compact /> : <Link to={'/profile/' + r.author_id} className="review-who"><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} compact /></Link>}
@@ -287,7 +288,8 @@ function TradeList({ userId }: { userId: string }) {
     if (rows === null) return <SkeletonRows count={2} height={72} />;
     if (!rows.length) return <EmptyState title="거래 기록이 없습니다" />;
     return <>
-        <p className="muted small" style={{ marginBottom: 12 }}>{total}건</p>
+        {/* Every confirmed trade is listed; the trust line's '거래 N회' counts a partner once per 30 days. */}
+        <p className="muted small" style={{ marginBottom: 12 }}>전체 {total}건 · 거래 횟수는 같은 회원 30일 1번</p>
         <ul className="review-list trade-list">{rows.map(t => <li key={t.id}>
             <div className="review-head">
                 <span className="trade-title"><span className="tag">{sideName(t)}</span>

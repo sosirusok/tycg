@@ -267,7 +267,7 @@ export function Detail({ id }: { id: string }) {
                 <AuthorBox post={post} own={mine} className="author-box-top" />
                 {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
                 {/* The first 2 photos load with the page, the rest as they scroll in (WP46). */}
-                {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(i)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading={i < 2 ? 'eager' : 'lazy'} /></button>)}</div>}
+                {post.images.length > 0 && <Gallery images={post.images} onOpen={setLightbox} />}
 
                 {info.length > 0 && <section className="detail-section">
                     <h2>{sectionTitle}</h2>
@@ -344,7 +344,7 @@ export function Detail({ id }: { id: string }) {
 
         <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
-        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
+        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(prev => ({ ...p, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count }))} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
         {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
@@ -404,6 +404,22 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
 }
 
 // Quick 즉거가 and 현젯 change for the author of a 판매 post (PATCH /posts/:id/price).
+// Two rows at most: 10 tiles on wide screens, 6 on phones. With more photos the last tile shows '+N' and
+// opens the lightbox there, so 계정 정보 and 내용 stay near the top (a post may carry 100 photos).
+const GALLERY_WIDE = 10, GALLERY_PHONE = 6;
+function Gallery({ images, onOpen }: { images: string[]; onOpen: (i: number) => void }) {
+    const n = images.length, wideMore = n > GALLERY_WIDE, phoneMore = n > GALLERY_PHONE;
+    return <div className="gallery">{images.slice(0, GALLERY_WIDE).map((img, i) => {
+        const moreWide = wideMore && i === GALLERY_WIDE - 1, morePhone = phoneMore && i === GALLERY_PHONE - 1;
+        const cls = [phoneMore && i >= GALLERY_PHONE ? 'gallery-wide-only' : '', moreWide ? 'has-more-wide' : '', morePhone ? 'has-more-phone' : ''].filter(Boolean).join(' ');
+        return <button type="button" key={img} className={cls || undefined} onClick={() => onOpen(i)} aria-label={moreWide || morePhone ? `사진 ${i + 1} 크게 보기 · 전체 ${n}장` : `사진 ${i + 1} 크게 보기`}>
+            <img src={imageUrl(img)} alt="" loading={i < 2 ? 'eager' : 'lazy'} />
+            {moreWide && <span className="gallery-more gallery-more-wide" aria-hidden="true">+{n - GALLERY_WIDE + 1}</span>}
+            {morePhone && <span className="gallery-more gallery-more-phone" aria-hidden="true">+{n - GALLERY_PHONE + 1}</span>}
+        </button>;
+    })}</div>;
+}
+
 function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: () => void; post: Post; onSaved: (post: DetailPost) => void }) {
     const [price, setPrice] = useState(''), [current, setCurrent] = useState(''), [busy, setBusy] = useState(false);
     useEffect(() => { if (open) { setPrice(wonToMan(post.price)); setCurrent(wonToMan(post.details.currentOffer ? Number(post.details.currentOffer) : null)); } }, [open]);

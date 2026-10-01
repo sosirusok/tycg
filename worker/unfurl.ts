@@ -45,14 +45,26 @@ export async function assertNoBlockedLinks(req: Request, ...texts: (string | nul
 }
 
 // The cards GET /posts/:id returns: only while the author's current grade allows previews and the
-// post's switch is on, and only cards whose address still occurs (as a live link) in the body.
+// post's switch is on, and only cards whose address still occurs (as a live link) in the body. Cards of
+// this site's own posts are rebuilt from the linked posts now (one read of at most 3 ids), so a post that
+// was hidden or that others cannot open drops its card, and the title and price are current.
 export async function shownCards(req: Request, post: { body: string; link_preview?: number | null; link_cards?: string | null }, grade: string | null | undefined, role: string | null | undefined): Promise<LinkCard[]> {
     if (!linkPreviewAllowed(grade, role) || post.link_preview === 0 || !post.link_cards || post.link_cards === '[]') return [];
     let cards: unknown;
     try { cards = JSON.parse(post.link_cards); } catch { return []; }
     if (!Array.isArray(cards) || !cards.length) return [];
-    const live = new Set(findLinks(post.body, { blocked: await blockedDomains(), selfHost: selfHostOf(req) }).map(l => l.url));
-    return (cards as LinkCard[]).filter(c => c && typeof c.url === 'string' && live.has(c.url)).slice(0, MAX_CARDS);
+    const selfHost = selfHostOf(req);
+    const live = new Set(findLinks(post.body, { blocked: await blockedDomains(), selfHost }).map(l => l.url));
+    const kept = (cards as LinkCard[]).filter(c => c && typeof c.url === 'string' && live.has(c.url)).slice(0, MAX_CARDS);
+    const ownIds = kept.map(c => ownPostId(c.url, selfHost)).filter((id): id is number => id !== null);
+    if (!ownIds.length) return kept;
+    const rows = await ownPostRows(ownIds);
+    return kept.flatMap(c => {
+        const id = ownPostId(c.url, selfHost);
+        if (id === null) return [c];
+        const row = rows.get(id);
+        return row ? [{ ...ownCard(row, new URL(c.url)), url: c.url }] : [];
+    });
 }
 
 // ---- Text cleanup -------------------------------------------------------------------------
@@ -210,11 +222,24 @@ async function youtubeCard(id: string, c: FetchContext): Promise<LinkCard | null
 }
 
 // The site's own post, from the database (no fetch). A hidden or missing post gives no card.
-async function ownPostCard(id: number, u: URL): Promise<LinkCard | null> {
-    const p = await db().prepare('SELECT title,kind,category,price,price_mode,hidden FROM posts WHERE id=?').bind(id).first<{ title: string; kind: TradeKind; category: string; price: number | null; price_mode: string; hidden: number }>();
-    if (!p || p.hidden) return null;
+// The own posts a card may show: those every member can open (visiblePost without the author's and the
+// manager's own view): not hidden, the author not withdrawn, and a 대리(진행) post only while its author
+// keeps 대리 인증.
+type OwnRow = { id: number; title: string; kind: TradeKind; category: string; price: number | null; price_mode: string };
+async function ownPostRows(ids: number[]): Promise<Map<number, OwnRow>> {
+    const r = await db().prepare(`SELECT p.id,p.title,p.kind,p.category,p.price,p.price_mode FROM posts p JOIN users a ON a.id=p.author_id
+        WHERE p.id IN (SELECT value FROM json_each(?)) AND p.hidden=0 AND a.deleted_at IS NULL
+            AND (p.kind!='proxy_offer' OR a.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=a.id AND b.badge='proxy'))`)
+        .bind(JSON.stringify([...new Set(ids)])).all<OwnRow>();
+    return new Map(r.results.map(p => [Number(p.id), p]));
+}
+function ownCard(p: OwnRow, u: URL): LinkCard {
     const label = `${KIND_NAMES[p.kind] || '거래'} · ${categoryName(p.category)}`;
     return { url: '', site: SITE_NAME, domain: domainOf(u), title: cleanText(p.title, 100), description: p.kind === 'exchange' ? label : `${label} · ${listingPrice(p)}` };
+}
+async function ownPostCard(id: number, u: URL): Promise<LinkCard | null> {
+    const p = (await ownPostRows([id])).get(id);
+    return p ? ownCard(p, u) : null;
 }
 
 const isNaverCafe = (host: string) => host === 'naver.me' || host === 'cafe.naver.com' || host === 'm.cafe.naver.com';
@@ -226,10 +251,10 @@ type CacheRow = { url: string; card: string; ok: number; fetched_at: number };
 // Runs after POST or PUT /posts saved the post: builds the cards and stores them with
 // UPDATE … WHERE id=? AND body=? (a later edit of the body wins). The save waits at most 2.5 s; the rest
 // finishes in waitUntil. Never fails the save.
-export async function unfurlOnSave(req: Request, postId: number, body: string, author: { grade?: string | null; role?: string | null }, linkPreview: boolean) {
+export async function unfurlOnSave(req: Request, postId: number, body: string, author: { id: string; grade?: string | null; role?: string | null }, linkPreview: boolean) {
     if (!linkPreview || !linkPreviewAllowed(author.grade, author.role)) return;
     if (!/https?:\/\/|www\./i.test(body)) return;
-    const work = buildCards(req, postId, body).catch(e => console.warn('Link preview failed', e instanceof Error ? e.message : 'unknown'));
+    const work = buildCards(req, postId, body, author.id).catch(e => console.warn('Link preview failed', e instanceof Error ? e.message : 'unknown'));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waited = await Promise.race([work.then(() => true), new Promise<boolean>(r => { timer = setTimeout(() => r(false), SAVE_WAIT_MS); })]);
     if (timer !== undefined) clearTimeout(timer);
@@ -238,7 +263,7 @@ export async function unfurlOnSave(req: Request, postId: number, body: string, a
     }
 }
 
-async function buildCards(req: Request, postId: number, body: string) {
+async function buildCards(req: Request, postId: number, body: string, authorId: string) {
     const c: FetchContext = { selfHost: selfHostOf(req), testOrigin: testOrigin(req), blocked: await blockedDomains() };
     const urls = distinctLinks(body, { blocked: c.blocked, selfHost: c.selfHost }, MAX_CARDS);
     if (!urls.length) return;
@@ -256,8 +281,9 @@ async function buildCards(req: Request, postId: number, body: string) {
             if (!hit.ok) return null;
             try { return withUrl(JSON.parse(hit.card), url); } catch { /* fetch again */ }
         }
-        // Cache misses only: 30 per post per hour, then the card is skipped silently.
-        try { await limit('unfurl:' + postId, 30, HOUR); }
+        // Cache misses only: 30 per post and 30 per member an hour (a member editing many posts, or changing
+        // a query string to miss the cache), then the card is skipped silently.
+        try { await limit('unfurl:' + postId, 30, HOUR); await limit('unfurl-user:' + authorId, 30, HOUR); }
         catch (e) { if (e instanceof ApiError && e.status === 429) return null; throw e; }
         let card: LinkCard | null = null;
         try {

@@ -462,7 +462,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 <div ref={content}>
                 {/* Scrolls with the messages, above the ones loaded. */}
-                {listing && loaded && <Pretrade listing={listing} />}
+                {/* Pre-trade advice only while the post is in progress; after 완료 it would be stale. */}
+                {listing && loaded && listing.status !== 'closed' && <Pretrade listing={listing} />}
                 {hasMore && <button type="button" className="btn btn-soft btn-xs older" onClick={loadOlder}>이전 대화 보기</button>}
                 {!loaded ? <div className="room-loading"><LoaderCircle className="spin" /></div> : messages.map(m => {
                     const day = dayLabel(m.created_at), showDay = day !== prevDay; prevDay = day;

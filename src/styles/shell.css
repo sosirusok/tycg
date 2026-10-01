@@ -230,7 +230,7 @@
 .alert-body { display: grid; gap: 2px; min-width: 0; }
 .alert-text { color: var(--ink-3); font-size: var(--fs-15); line-height: 1.45; }
 .alert-row.is-unread .alert-text { color: var(--ink); font-weight: 600; }
-.alert-time { color: var(--ink-4); font-size: var(--fs-13); }
+.alert-time { color: var(--ink-3); font-size: var(--fs-13); }
 .alert-thumb { width: 48px; height: 48px; border-radius: var(--r-8); object-fit: cover; background: var(--fill); }
 .alert-dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--brand); }
 .alert-row:has(.alert-thumb):has(.alert-dot) { grid-template-columns: 40px minmax(0, 1fr) auto auto; }

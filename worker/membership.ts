@@ -24,8 +24,9 @@ export async function siteConfig() {
 const DAY = 86400000;
 
 // The member's own 플러스 무료 체험 state: when it ends, whether the sign-up popup is still due
-// (trial running and never closed), whether the one-time end band is due (the trial ended, no grade
-// replaced it and the band was not closed yet: reminded_at=-1 on the trial row), and whether the
+// (trial running, still the member's grade, and never closed), whether the one-time end band is due (the trial ended, no grade
+// replaced it and the band was not closed yet; closing sets reminded_at=-1 on the trial row, and the
+// cron's end 알림 sets -2, which keeps the band), and whether the
 // per-address cap kept the trial from this account (trial_at=-1, shown for a day after sign-up; a
 // closed-window sign-up is -2 and never reads as capped).
 export async function trialState(u: User, capped = false): Promise<TrialState> {
@@ -36,7 +37,9 @@ export async function trialState(u: User, capped = false): Promise<TrialState> {
     const has = r.expires_at !== null && r.expires_at !== undefined;
     return {
         endsAt: has ? r.expires_at : null,
-        popup: has && r.trial_popup_at === null && r.expires_at > now,
+        // Only while the trial is the member's grade: a paid or manager grade of the same or a higher rank
+        // (엘리트 given during the trial) never shows the trial event popup.
+        popup: has && r.trial_popup_at === null && r.expires_at > now && !!u.grade_trial,
         ended: has && r.expires_at <= now && r.reminded_at !== -1 && gradeInfo(u.grade).rank === 0,
         capped: capped || (r.trial_at === -1 && r.created_at > now - DAY),
     };

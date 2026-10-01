@@ -11,7 +11,8 @@ import { build } from 'vite';
 // 3. Save-time previews by grade, switch, redirect, size, type, image host, cache. 4. Reads: lists
 // carry no cards, edits drop removed links, an ended grade shows none.
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790');
-assert.ok(['127.0.0.1', 'localhost'].includes(endpoint.hostname), 'Local Worker origin required.');
+// The Worker serves preview fetches from the fixture only for requests to 127.0.0.1 (unfurl.ts testOrigin).
+assert.equal(endpoint.hostname, '127.0.0.1', 'Local Worker origin http://127.0.0.1 required.');
 const base = endpoint.origin;
 const fixture = process.env.PREVIEW_TEST_ORIGIN;
 assert.ok(fixture, 'PREVIEW_TEST_ORIGIN (the preview fixture) is required.');
@@ -163,8 +164,14 @@ const beforeNaver = await hits();
 const naver = (await cards(plus, await post(plus, 'https://cafe.naver.com/zombiego/123 https://naver.me/abc')));
 equal(naver.map(c => [c.site, c.title]), [['네이버 카페', '네이버 카페 글'], ['네이버 카페', '네이버 카페 글']], 'cafe.naver.com and naver.me get the fixed 네이버 카페 글 card');
 equal(Object.keys(await hits()).length, Object.keys(beforeNaver).length, 'Naver cards make no fetch');
-const own = (await cards(plus, await post(plus, `우리 글 ${base}/posts/${clean} 참고`)))[0];
+const ownLinker = await post(plus, `우리 글 ${base}/posts/${clean} 참고`);
+const own = (await cards(plus, ownLinker))[0];
 equal([own?.site, own?.title, own?.description], ['좀비고 거래소', (await normal('posts/' + clean)).data.post.title, '판매 · 기타 · 1만원'], "the site's own post gets a card from the database");
+sql(`UPDATE posts SET price=20000 WHERE id=${clean}`);
+equal((await cards(normal, ownLinker))[0]?.description, '판매 · 기타 · 2만원', 'the own-post card shows the linked post as it is now');
+sql(`UPDATE posts SET hidden=1 WHERE id=${clean}`);
+equal(await cards(normal, ownLinker), [], 'the card goes once the linked post is hidden');
+sql(`UPDATE posts SET hidden=0,price=10000 WHERE id=${clean}`);
 // The cache: another post (another member) with an address fetched before makes no new fetch.
 const cached = await hits();
 equal((await cards(other, await post(other, 'https://og.example/1 다시'))).map(c => c.title), ['미리보기 /1'], 'a cached card is reused');

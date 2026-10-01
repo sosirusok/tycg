@@ -86,7 +86,7 @@ function bodyPlaceholder(kind: TradeKind, category: string) {
 function similarHref(category: string, tags: SeasonTag[]) {
     const q = new URLSearchParams({ kind: 'sell', category });
     if (category === 'account' && tags.length) q.set('tags', JSON.stringify(tags.map(t => ({ tier: t.tier, season: t.season }))));
-    q.set('closed', '1');
+    q.set('closed', 'only');
     return '/trade?' + q.toString();
 }
 

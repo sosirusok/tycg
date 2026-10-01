@@ -14,6 +14,10 @@
 .promo-text { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .promo-eyebrow { color: var(--white); font-size: var(--fs-13); font-weight: 500; }
 .promo strong { color: var(--white); font-size: var(--fs-20); font-weight: 700; letter-spacing: -0.4px; }
+.promo-wrap { position: relative; margin-top: 40px; }
+.promo-wrap .promo { margin-top: 0; padding-right: 60px; }
+.promo-x { position: absolute; right: 12px; top: 12px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; color: var(--white); }
+.promo-x:hover { box-shadow: inset 0 0 0 1px var(--white); }
 .promo-cta { display: inline-flex; flex: none; align-items: center; gap: 2px; height: 40px; padding: 0 12px 0 16px; border-radius: var(--r-8); background: var(--white); color: var(--brand); font-size: var(--fs-14); font-weight: 700; white-space: nowrap; }
 .shelf-chips { margin-bottom: 16px; }
 .shelf-empty { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 24px; border: 1px dashed var(--line-2); border-radius: var(--r-12); color: var(--ink-3); font-size: var(--fs-14); }
@@ -29,6 +33,9 @@
   .quick-item { width: auto; font-size: var(--fs-12); padding: 12px 2px; }
   .quick-item .cicon { width: 36px; height: 36px; }
   .promo { margin-top: 24px; padding: 16px 18px; gap: 12px; }
+  .promo-wrap { margin-top: 24px; }
+  .promo-wrap .promo { padding-right: 48px; }
+  .promo-x { right: 6px; top: 6px; }
   .promo strong { font-size: var(--fs-16); }
   .promo-cta { height: 36px; padding: 0 8px 0 12px; font-size: var(--fs-13); }
   .shelf-empty { flex-direction: column; align-items: flex-start; }
@@ -119,7 +126,10 @@
 .detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--ink-3); font-size: var(--fs-14); }
 .gallery { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 24px; }
 .gallery button { aspect-ratio: 1; border-radius: var(--r-8); overflow: hidden; background: var(--fill); border: 1px solid var(--line); }
+.gallery button { position: relative; }
 .gallery img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(28, 36, 47, .64); color: var(--white); font-size: var(--fs-24); font-weight: 700; }
+.gallery-more-phone { display: none; }
 .detail-section { padding: 32px 0; border-bottom: 1px solid var(--line); }
 .detail-section:last-of-type { border-bottom: 0; }
 .detail-tools { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
@@ -223,10 +233,13 @@
 @media (max-width: 640px) {
   .detail-title { font-size: var(--fs-20); }
   .gallery { grid-template-columns: repeat(3, 1fr); }
+  .gallery .gallery-wide-only { display: none; }
+  .gallery-more-wide { display: none; }
+  .gallery-more-phone { display: grid; }
   .spec-list { grid-template-columns: 1fr; }
 }
 .lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, .86); }
-.lightbox-content { position: fixed; inset: 0; z-index: 81; display: grid; place-items: center; padding: 24px; outline: none; }
+.lightbox-content { position: fixed; inset: 0; z-index: 81; display: grid; place-items: center; padding: 24px; outline: none; touch-action: pan-y pinch-zoom; }
 .lightbox-content img { max-width: 100%; max-height: 90dvh; border-radius: var(--r-8); }
 .lightbox-content img { user-select: none; -webkit-user-select: none; }
 .lightbox-close { position: absolute; top: 16px; right: 16px; color: var(--white); }
@@ -304,8 +317,15 @@
 .photo.is-cover .photo-move { bottom: 30px; }
 .photo-move button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: rgba(28, 36, 47, .72); color: var(--white); }
 .photo-move button:disabled { display: none; }
-/* A tile too narrow for '대표로' and both arrows on one line puts '대표로' at the top-left. */
-@container (max-width: 113px) { .photo-make-cover { top: 4px; bottom: auto; } }
+/* Touch screens move photos by long-press drag, so the ‹ › buttons stay only for screen readers and
+   keyboards (shown again while focused); '대표로' keeps its bottom-left place on phone tiles. */
+@media (pointer: coarse) {
+  .photo-move:not(:focus-within) { width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+}
+/* A mouse tile too narrow for '대표로' and both arrows on one line puts '대표로' at the top-left. */
+@media (pointer: fine) {
+  @container (max-width: 113px) { .photo-make-cover { top: 4px; bottom: auto; } }
+}
 .photo-add { display: grid; place-items: center; align-content: center; gap: 4px; border: 1px dashed var(--line-2); color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
 .photo-add:hover { border-color: var(--ink-3); color: var(--ink-2); }
 .ed-bar { position: sticky; bottom: 0; z-index: 5; display: flex; gap: 8px; margin-top: 24px; padding: 14px 0 16px; background: var(--white); border-top: 1px solid var(--line); }
@@ -656,7 +676,7 @@
 .ed-style-btn { flex: none; }
 /* The 꾸미기 sheet: the rendered body to select in, and the grade's tools. Full height from the bottom on
    phones (tools at the bottom, above the safe area), a 640px modal on desktop (tools on top). */
-.modal.style-sheet { display: flex; flex-direction: column; overflow: hidden; height: min(720px, calc(100dvh - 48px)); }
+.modal.style-sheet { display: flex; flex-direction: column; overflow: hidden; height: auto; max-height: min(720px, calc(100dvh - 48px)); }
 .style-sheet .modal-head { flex: none; padding: 16px 16px 12px 24px; border-bottom: 1px solid var(--line); }
 .style-sheet .modal-head h2 { font-size: var(--fs-18); }
 .style-scroll { flex: 1; min-height: 0; overflow-y: auto; }

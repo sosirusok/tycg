@@ -606,7 +606,7 @@ async function listPosts(req: Request, url: URL) {
     // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
     // posts stay in the list, so counts and paging do not change.
     // featured=none asks for the plain list without the box.
-    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && s.get('featured') !== 'none';
+    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && s.get('featured') !== 'none' && s.get('status') !== 'closed';
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
     // The count stops at 301 rows (capped: '300+'; the profile and 내 글 keep paging while pages come back
@@ -809,8 +809,9 @@ async function completePost(req: Request, u: User, post: any) {
         db().prepare("UPDATE posts SET status='closed',closed_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, post.id),
         ...endOffersStatements(post.id, post.author_id, `${COMPLETE_ENDS_OFFERS} AND ${guard}`, [keep, ...guardArgs], now),
         ...plan ? plan.statements : [],
-        // '판매완료 · 제목' (WP50) to every member who saved the post, guarded on this very completion.
-        favoritesNotify('fav_closed', post.id, post.author_id, `${statusName(post.kind, 'closed')} · ${post.title}`, now, 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0)', guardArgs),
+        // '판매완료 · 제목' (WP50) to every member who saved the post, guarded on this very completion; the
+        // member named as the partner gets the trade request instead.
+        favoritesNotify('fav_closed', post.id, post.author_id, `${statusName(post.kind, 'closed')} · ${post.title}`, now, 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0) AND x.user_id IS NOT ?', [...guardArgs, typeof b.partnerId === 'string' && b.partnerId ? b.partnerId : null]),
     ]);
     if (!r[0].meta.changes) fail(409, '이미 완료된 글입니다.');
     // r[0] is the post, then the three statements that end the 제시, then the plan's DELETE and INSERT.

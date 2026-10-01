@@ -90,6 +90,7 @@ equal([rows[0].ref, rows[0].post_id, rows[0].actor_id], [String(P.id), P.id, A.u
 equal(rowsOf(C).length, 0, 'C, who blocked A, gets nothing');
 equal((await A(`posts/${P.id}/price`, 'PATCH', { price: 330000 })).status, 200, 'A lowers it to 330,000 before B reads');
 equal(unreadOf(B, 'fav_price').length, 1, 'still one unread row');
+check(unreadOf(B, 'fav_price')[0].text.includes('33만원'), 'the unread row now shows the latest price');
 equal((await A(`posts/${P.id}/price`, 'PATCH', { price: 340000 })).status, 200, 'A raises it to 340,000');
 equal(rowsOf(B, 'fav_price').length, 1, 'a raise writes nothing');
 const list = await B('notifications');
@@ -117,6 +118,13 @@ rows = unreadOf(B, 'fav_closed');
 equal(rows.map(r => r.text), [`판매완료 · ${P.title}`], 'B gets 판매완료 · 제목');
 equal(rowsOf(C).length, 0, 'C (blocked A) still has nothing');
 equal(rowsOf(A).length, 0, 'the author gets no row about their own post');
+// The member named as the partner gets the trade request, not '판매완료' for their own trade.
+const PQ = await sellPost(A, 200000);
+equal((await B(`posts/${PQ.id}/favorite`, 'POST', { active: true })).status, 200, 'B saves Q');
+const qChat = (await B('chats', 'POST', { postId: PQ.id })).data.id;
+equal((await B(`chats/${qChat}/messages`, 'POST', { body: '아직 판매중인가요?', postId: PQ.id })).status, 201, 'B asks about Q');
+equal((await A(`posts/${PQ.id}/status`, 'PATCH', { status: 'closed', partnerId: B.user.id })).status, 200, 'A completes Q with B as the partner');
+equal(rowsOf(B, 'fav_closed').filter(r => r.ref === String(PQ.id)).length, 0, 'the partner gets no 판매완료 row');
 
 // ---- 3. The header count ----
 const unread = await B('chats/unread');
@@ -174,10 +182,15 @@ equal((await T('auth/me')).data.trial?.ended, true, 'the end band is due before 
 equal(await fireCron(), 200, 'the cron runs after the end');
 rows = rowsOf(T, 'grade_end');
 equal(rows.map(r => r.text)[1], '플러스 무료 체험이 끝났습니다.', 'the second run adds the end row');
-equal(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${T.user.id}' AND source='trial'`)[0].reminded_at, -1, 'the trial is marked −1');
-equal((await T('auth/me')).data.trial?.ended, false, 'which also ends the home band');
+equal(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${T.user.id}' AND source='trial'`)[0].reminded_at, -2, 'the trial is marked −2 (알림 sent)');
+equal((await T('auth/me')).data.trial?.ended, true, 'the home end band is still due after the 알림');
 equal(await fireCron(), 200, 'a third run');
 equal(rowsOf(T, 'grade_end').length, 2, 'adds none');
+equal((await T('me/trial-ended-seen', 'POST', {})).status, 200, 'T closes the end band');
+equal(sql(`SELECT reminded_at FROM user_grades WHERE user_id='${T.user.id}' AND source='trial'`)[0].reminded_at, -1, 'closing marks it −1');
+equal((await T('auth/me')).data.trial?.ended, false, 'which ends the home band');
+equal(await fireCron(), 200, 'a fourth run');
+equal(rowsOf(T, 'grade_end').length, 2, 'still adds none');
 equal(managerChats(), 0, 'no manager conversation was created');
 // A trial member who already holds a paid 플러스 gets no reminder, and the trial is still marked.
 equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).data.open, true, 'the window opens again');

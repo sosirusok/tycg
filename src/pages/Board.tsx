@@ -42,8 +42,8 @@ const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchPara
 // The name is the filter chips in order, within the server's 32 characters.
 const searchName = (labels: string[]) => { const name = labels.join(', '); return name.length > 32 ? name.slice(0, 31) + '…' : name; };
 
-// Only parameters that mean something for the current tab reach the API. closed=1 stays in the
-// address only; without it the request asks for posts still in progress (active=1).
+// Only parameters that mean something for the current tab reach the API. closed=1 (or only) stays in
+// the address only; without it the request asks for posts still in progress (active=1).
 function allowedKeys(ctx: Ctx) {
     const { kind, category } = ctx;
     // old=1 is '오래된 글 보기': posts not bumped in the last 30 days too.
@@ -179,6 +179,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     const chips: { key: string; label: string; clear: () => void }[] = [];
     const add = (key: string, label: string) => { if (params.get(key)) chips.push({ key, label, clear: () => update({ [key]: '' }) }); };
     add('q', `‘${params.get('q')}’`);
+    if (params.get('closed') === 'only') chips.push({ key: 'closed', label: '거래완료만', clear: () => update({ closed: '' }) });
     const tags = readTags(params.get('tags'));
     for (const tier of TIERS) {
         const seasons = tags.filter(t => t.tier === tier.id).map(t => t.season).sort((a, b) => a - b);
@@ -234,11 +235,13 @@ export function Board() {
     if (kind !== 'all') { query.set('kind', kind); query.set('category', category); }
     if (kind === 'exchange') query.set('wantedCategory', wanted);
     for (const key of allowedKeys(ctx)) { const v = params.get(key); if (v && !query.has(key)) query.set(key, v); }
-    // Boards hide 거래완료 unless '거래완료 포함' is on (closed=1).
-    const closed = query.get('closed') === '1';
+    // Boards hide 거래완료 unless '거래완료 포함' is on (closed=1); closed=only lists 거래완료 alone
+    // (the editor's '비슷한 거래완료 글').
+    const closedOnly = query.get('closed') === 'only', closed = closedOnly || query.get('closed') === '1';
     const apiQuery = new URLSearchParams(query);
     apiQuery.delete('closed');
-    if (!closed) apiQuery.set('active', '1');
+    if (closedOnly) apiQuery.set('status', 'closed');
+    else if (!closed) apiQuery.set('active', '1');
     const queryString = apiQuery.toString();
 
     const cacheKey = (me?.id || '') + '|' + queryString;
@@ -312,7 +315,8 @@ export function Board() {
             if (nextKind === 'exchange') p.wantedCategory = nextWanted || 'account';
         }
         if (keepSearch && params.get('q')) p.q = params.get('q')!;
-        if (keepSearch && params.get('closed') === '1') p.closed = '1';
+        const keepClosed = params.get('closed');
+        if (keepSearch && (keepClosed === '1' || keepClosed === 'only')) p.closed = keepClosed;
         void navigate(withParams('/trade', p));
     };
     // Resets every filter, including the search word and 거래완료 포함.
