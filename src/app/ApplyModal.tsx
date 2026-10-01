@@ -15,13 +15,13 @@ export const CHAT_DRAFT_EVENT = 'zg:chat-draft';
 
 const won = (n: number) => n.toLocaleString('ko-KR') + '원';
 
-// What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces).
-// The apply modal lists them; the profile's next grade line shows the first one.
+// What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces), as
+// WP40 lists them (at most 3 data items per row; WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
 export function gradeBenefits(id: string): string[] {
     const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
     if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`];
-    if (id === 'premium') return [wallet('premium'), `게시판 상단 ${PERKS.premium.boardSlots}자리`];
-    if (id === 'elite') return [wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`, '홈 추천 매물'];
+    if (id === 'premium') return [wallet('premium')];
+    if (id === 'elite') return [wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
     return [];
 }
 

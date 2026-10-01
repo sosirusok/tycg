@@ -126,19 +126,27 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // Grade benefits (see the Guide table and the apply modal, which render from this object).
 // The Worker enforces them; the manager account has no caps.
 // 끌올 지갑: up to bumpMax 끌올, one more every bumpRefillMinutes, and the same post again after
-// bumpGapMinutes. Manual 끌올 spends the wallet.
-export type Perks = { bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number; boardSlots: number; homeShelf: boolean };
+// bumpGapMinutes. Manual 끌올 spends the wallet (owner override of 2026-10-01: 3/5/10/20, 6h/4h/90분/30분,
+// gap 6h/3h/1h/20분). The automation fields are the tier-table values for the packages that ship them
+// (자동 끌올: autoBumpPosts posts, one every autoEveryMinutes, paused after pauseDays without a visit;
+// 광고 매물: adSlots). Nothing reads them yet. boardSlots is the round-2 게시판 상단 노출, which the 광고
+// package (WP53) replaces with adSlots.
+export type Perks = {
+    bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
+    autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
+    boardSlots: number; homeShelf: boolean;
+};
 
-const ELITE_PERKS: Perks = { bumpMax: 8, bumpRefillMinutes: 60, bumpGapMinutes: 30, boardSlots: 3, homeShelf: true };
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, boardSlots: 3, homeShelf: true };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 240, bumpGapMinutes: 180, boardSlots: 0, homeShelf: false },
-    plus: { bumpMax: 4, bumpRefillMinutes: 180, bumpGapMinutes: 120, boardSlots: 0, homeShelf: false },
-    premium: { bumpMax: 6, bumpRefillMinutes: 120, bumpGapMinutes: 60, boardSlots: 1, homeShelf: false },
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false },
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, boardSlots: 0, homeShelf: false },
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, boardSlots: 1, homeShelf: false },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
 };
-export const MANAGER_PERKS: Perks = { bumpMax: Infinity, bumpRefillMinutes: 60, bumpGapMinutes: 0, boardSlots: 3, homeShelf: true };
+export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGapMinutes: 0, pauseDays: 0 };
 
 export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
     if (u.role === 'manager') return MANAGER_PERKS;

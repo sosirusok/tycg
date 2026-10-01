@@ -151,16 +151,19 @@ export async function currentUser(r: Request): Promise<User | null> {
     if (writes.length) await db().batch(writes);
     // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
     // Worker still served has no trial yet. Only members with no grade row at all, once per isolate.
+    // A failed catch-up never fails the request; the member is tried again in the next isolate.
     if (trial_at === null && user.grade_info === null && user.role !== 'manager' && !catchUpTried.has(user.id)) {
-        const w = await trialWindow();
-        if (user.created_at >= w.start && user.created_at <= w.end && user.created_at + TRIAL_MS > now) {
-            if (catchUpTried.size > 5000) catchUpTried.clear();
-            catchUpTried.add(user.id);
-            if (await grantTrial(user.id, now, true)) {
-                const g = await db().prepare(`SELECT ${memberColumns('u')} FROM users u WHERE u.id=?`).bind(user.id).first<any>();
-                if (g) Object.assign(user, g);
+        try {
+            const w = await trialWindow();
+            if (user.created_at >= w.start && user.created_at <= w.end && user.created_at + TRIAL_MS > now) {
+                if (catchUpTried.size > 5000) catchUpTried.clear();
+                catchUpTried.add(user.id);
+                if (await grantTrial(user.id, now, true)) {
+                    const g = await db().prepare(`SELECT ${memberColumns('u')} FROM users u WHERE u.id=?`).bind(user.id).first<any>();
+                    if (g) Object.assign(user, g);
+                }
             }
-        }
+        } catch (e) { console.warn('Trial catch-up failed', e instanceof Error ? e.message : 'unknown'); }
     }
     return withMember(user) as User;
 }

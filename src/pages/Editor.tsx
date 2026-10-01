@@ -11,6 +11,7 @@ import { api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPho
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
+import { walletNow, type Usage } from '../components/Wallet';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 type Form = {
@@ -123,7 +124,6 @@ function kstClock(t: number) {
 }
 
 type Draft = Partial<Form> & { savedAt?: number };
-type Usage = { rules: { photosPerPost: number | null } };
 // Photos per post (the same for every member; SITE_RULES.photosPerPost) until GET me/usage answers.
 const PHOTO_CAP = SITE_RULES.photosPerPost;
 const EXCHANGE_SIDES = ['account', 'clan'] as const;
@@ -150,6 +150,8 @@ export default function Editor({ id }: { id?: string }) {
     const [version, setVersion] = useState(0);
     const [pendingKind, setPendingKind] = useState<TradeKind | null>(null);
     const [photoCap, setPhotoCap] = useState(PHOTO_CAP);
+    // GET me/usage for the 새 글 allowance line above [등록] (first 3 new posts a day are free).
+    const [usage, setUsage] = useState<Usage | null>(null);
     const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
@@ -193,6 +195,7 @@ export default function Editor({ id }: { id?: string }) {
             post.current = p?.post || null;
             // An edit may keep the photos a post already has.
             setPhotoCap(Math.max(usage?.rules.photosPerPost ?? PHOTO_CAP, p?.post.images.length || 0));
+            setUsage(usage);
             const draft = dr.draft && typeof dr.draft.kind === 'string' && 'offer' in dr.draft ? dr.draft : null;
             if (!draft) replaceForm(base, false);
             else if (p) {
@@ -363,15 +366,20 @@ export default function Editor({ id }: { id?: string }) {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
             const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), status: form.status, tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images };
             done.current = true;
-            const d = await api<{ id: number }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
+            const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
             setLeaveGuard(null);
-            toast(id ? '수정 완료' : '등록 완료');
+            toast(id ? '수정 완료' : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용' : d.placed === 'last' ? '끌올이 없어 최근 끌올 자리에 등록했습니다.' : '등록 완료');
             void navigate('/posts/' + d.id, { replace: !!id, force: true });
         } catch (err) { done.current = false; showError(errorText(err)); }
         finally { setBusy(false); }
     }
 
+    // From the 4th new post of the KST day, a new post spends 1 끌올 (or, with none left, goes to the
+    // latest 끌올 place). Nothing for the manager (no wallet).
+    const wallet = usage ? walletNow(usage, Date.now()) : null, freshPerDay = usage?.rules.freshPerDay ?? 3;
+    const freshLine = usage && wallet && (usage.freshToday ?? 0) >= freshPerDay
+        ? `오늘 새 글 ${freshPerDay}개 사용 · ${wallet.tokens >= 1 ? '이번 글은 끌올 1개' : '남은 끌올 없음'}` : '';
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
     if (loadError) return <div className="container page"><EmptyState title="글을 불러오지 못했습니다" text={loadError} /></div>;
     if (!loaded) return <div className="container page"><SkeletonRows count={3} height={180} /></div>;
@@ -562,6 +570,7 @@ export default function Editor({ id }: { id?: string }) {
                 </Section>}
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
+                {!id && freshLine && <p className="field-hint ed-fresh">{freshLine}</p>}
                 <div className="ed-bar">
                     <button type="button" className="btn btn-line" onClick={() => void persist(true)}>임시저장</button>
                     <button type="submit" className="btn btn-primary grow" disabled={busy || uploading || !!suspendedUntil}>{busy ? <LoaderCircle size={18} className="spin" /> : id ? '수정' : '등록'}</button>

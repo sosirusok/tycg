@@ -134,31 +134,31 @@ equal((await plus(`posts/${t2.data.id}`, 'DELETE')).status, 200, 'the new post i
 refused(await titled('28 챌린저 계정 팝니다'), 429, '부터 다시 올릴 수 있습니다', 'reposting a deleted title right away is refused');
 const kst = t => { const d = new Date(Math.ceil(t / 60000) * 60000 + 9 * HOUR); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
 const deletedEvent = sql(`SELECT MAX(created_at) AS t FROM post_events WHERE post_id=${t2.data.id} AND kind='post'`)[0].t;
-refused(await titled('28 챌린저 계정 팝니다'), 429, `${kst(deletedEvent + 2 * HOUR)}부터`, 'the wait ends 2 hours (플러스 gap) after that post');
+refused(await titled('28 챌린저 계정 팝니다'), 429, `${kst(deletedEvent + 3 * HOUR)}부터`, 'the wait ends 3 hours (플러스 gap) after that post');
 const managerTitle = `[QA] 매니저 ${run}`;
 const m1 = await manager('posts', 'POST', sale(managerTitle)), m2 = await manager('posts', 'POST', sale(managerTitle));
 check(m1.status === 201 && m2.status === 201, 'the manager has no same-title cap');
 for (const r of [m1, m2]) await manager(`posts/${r.data.id}`, 'DELETE');
 
-// 3. 끌올 지갑 (일반: 3 held, 1 more every 4 hours, the same post every 3 hours).
+// 3. 끌올 지갑 (일반: 3 held, 1 more every 6 hours, the same post every 6 hours).
 // age(): moves a post's created_at and bumped_at back, as if it was written `hours` ago.
 const age = (ids, hours) => sql(`UPDATE posts SET created_at=created_at-${Math.round(hours * HOUR)},bumped_at=bumped_at-${Math.round(hours * HOUR)} WHERE id IN (${ids.join(',')})`);
 const wallet = async c => { const d = (await c('me/usage')).data; return { tokens: d.bumpTokens, max: d.bumpMax, refillMin: d.bumpRefillMin, next: d.nextRefillAt }; };
 const setWallet = (c, tokens, at) => sql(`UPDATE users SET bump_tokens=${tokens},bump_at=${at} WHERE id='${c.user.id}'`);
 const bumper = await register('bump');
-equal(await wallet(bumper), { tokens: 3, max: 3, refillMin: 240, next: null }, 'a new 일반 member starts with a full wallet (3/3)');
+equal(await wallet(bumper), { tokens: 3, max: 3, refillMin: 360, next: null }, 'a new 일반 member starts with a full wallet (3/3)');
 const b1 = await created(bumper, 'bump post');
-refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 3시간마다 끌올할 수 있습니다. (', 'bump right after posting waits for the 3-hour gap');
-age([b1], 3.1);
+refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 6시간마다 끌올할 수 있습니다. (', 'bump right after posting waits for the 6-hour gap');
+age([b1], 6.1);
 const bumped = await bumper(`posts/${b1}/bump`, 'POST');
-equal(bumped.status, 200, 'bump after 3 hours');
-equal([bumped.data.bumpTokens, bumped.data.bumpMax, bumped.data.bumpRefillMin], [2, 3, 240], 'the bump response carries the wallet (2/3)');
-check(bumped.data.nextRefillAt - bumped.data.bumpedAt === 4 * HOUR, 'the refill clock starts at the first spend from a full wallet');
-check(bumped.data.nextBumpAt - bumped.data.bumpedAt === 3 * HOUR, 'nextBumpAt is 3 hours later');
+equal(bumped.status, 200, 'bump after 6 hours');
+equal([bumped.data.bumpTokens, bumped.data.bumpMax, bumped.data.bumpRefillMin], [2, 3, 360], 'the bump response carries the wallet (2/3)');
+check(bumped.data.nextRefillAt - bumped.data.bumpedAt === 6 * HOUR, 'the refill clock starts at the first spend from a full wallet');
+check(bumped.data.nextBumpAt - bumped.data.bumpedAt === 6 * HOUR, 'nextBumpAt is 6 hours later');
 equal((await guest(`posts?kind=sell&q=${run}`)).data.posts[0].id, b1, 'the bumped post is first in 최신순');
 const afterBump = (await guest('posts/' + b1)).data.post;
 check(afterBump.bump_count === 1 && afterBump.bumped_at > afterBump.created_at, 'bump_count and bumped_at are returned; created_at is kept');
-refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 3시간마다', 'bumping again waits for the gap');
+refused(await bumper(`posts/${b1}/bump`, 'POST'), 429, '같은 글은 6시간마다', 'bumping again waits for the gap');
 const other = await register('other');
 equal((await other(`posts/${b1}/bump`, 'POST')).status, 403, 'another member cannot bump');
 equal((await manager(`posts/${b1}/bump`, 'POST')).status, 403, 'the manager cannot bump a member post');
@@ -169,38 +169,45 @@ refused(await bumper(`posts/${b1}/bump`, 'POST'), 409, '거래중인 글만 끌�
 const daily = await register('daily');
 const four = [];
 for (let i = 0; i < 4; i++) four.push(await created(daily, 'daily bump post'));
-age(four, 4);
+// The 4th new post of the day spent 1 끌올 (새 글 allowance); start these checks from a full wallet.
+setWallet(daily, 0, 0);
+// Three posts are past the 6-hour gap; the 4th was written 4 hours ago (its gap ends before the refill).
+age(four.slice(0, 3), 6.5);
+age([four[3]], 4);
 let firstSpend = 0;
 for (let i = 0; i < 3; i++) {
     const r = await daily(`posts/${four[i]}/bump`, 'POST');
     equal([r.status, r.data.bumpTokens], [200, 2 - i], `bump ${i + 1} of 3 (wallet ${2 - i}/3)`);
     if (!i) firstSpend = r.data.bumpedAt;
 }
-refused(await daily(`posts/${four[3]}/bump`, 'POST'), 429, `끌올이 없습니다. ${kst(firstSpend + 4 * HOUR)}에 1개 충전됩니다.`, 'the 4th post: the wallet is empty until the refill');
+// The post's own gap (6h from its creation 4h ago) ends before the refill, so the message names the refill.
+refused(await daily(`posts/${four[3]}/bump`, 'POST'), 429, `끌올이 없습니다. ${kst(firstSpend + 6 * HOUR)}에 1개 충전됩니다.`, 'the 4th post: the wallet is empty until the refill');
 equal((await wallet(daily)).tokens, 0, 'the wallet reads 0/3');
 equal((await daily(`posts/${four[3]}`, 'PUT', sale('수정한 제목 ' + run))).status, 200, 'editing is allowed');
 equal(sql(`SELECT bumped_at<${Date.now() - 3 * HOUR} AS old FROM posts WHERE id=${four[3]}`)[0].old, 1, 'editing never bumps');
-equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${daily.user.id}' AND kind='bump'`)[0].n, 3, 'only the 3 bumps that moved a post are logged');
+equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${daily.user.id}' AND kind='bump' AND post_id IN (${four.slice(0, 3).join(',')})`)[0].n, 3, 'only the 3 bumps that moved a post are logged');
+equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${daily.user.id}' AND kind='bump' AND post_id=${four[3]}`)[0].n, 1, 'the 4th post has only the 끌올 its creation spent');
 
-// Refill: 4 hours and 1 minute after the clock started, 1 is back.
-sql(`UPDATE users SET bump_at=bump_at-${4 * HOUR + 60000} WHERE id='${daily.user.id}'`);
-equal((await wallet(daily)).tokens, 1, 'after 4h01m the wallet holds 1');
+// Refill: 6 hours and 1 minute after the clock started, 1 is back (the 4th post's gap has passed too).
+sql(`UPDATE users SET bump_at=bump_at-${6 * HOUR + 60000} WHERE id='${daily.user.id}'`);
+age([four[3]], 3);
+equal((await wallet(daily)).tokens, 1, 'after 6h01m the wallet holds 1');
 equal((await daily(`posts/${four[3]}/bump`, 'POST')).status, 200, 'and the 4th post is bumped');
 
-// 엘리트: 8 held, 1 every hour; a long wait is capped at 8.
+// 엘리트: 20 held, 1 every 30 minutes; a long wait is capped at 20.
 const eliteW = await register('elitew');
 await grant(eliteW, 'elite');
-setWallet(eliteW, 0, Date.now() - (8 * HOUR + 60000));
-equal(await wallet(eliteW), { tokens: 8, max: 8, refillMin: 60, next: null }, '엘리트 with 0 after 8h01m reads 8/8 (capped)');
+setWallet(eliteW, 0, Date.now() - (10 * HOUR + 60000));
+equal(await wallet(eliteW), { tokens: 20, max: 20, refillMin: 30, next: null }, '엘리트 with 0 after 10h01m reads 20/20 (capped)');
 setWallet(eliteW, 0, Date.now() - (20 * HOUR));
-equal((await wallet(eliteW)).tokens, 8, 'and 20 hours never give more than 8');
+equal((await wallet(eliteW)).tokens, 20, 'and 20 hours never give more than 20');
 
-// The same post again: 엘리트 30분, 프리미엄 1시간, 플러스 2시간, 일반 3시간 after its last bump.
+// The same post again: 엘리트 20분, 프리미엄 1시간, 플러스 3시간, 일반 6시간 after its last bump.
 const ep = await created(eliteW, 'elite gap post');
 age([ep], 1);
 equal((await eliteW(`posts/${ep}/bump`, 'POST')).status, 200, '엘리트 bumps a post');
-sql(`UPDATE posts SET bumped_at=${Date.now() - 20 * 60000} WHERE id=${ep}`);
-refused(await eliteW(`posts/${ep}/bump`, 'POST'), 429, '같은 글은 30분마다 끌올할 수 있습니다.', '엘리트: the same post 20 minutes later');
+sql(`UPDATE posts SET bumped_at=${Date.now() - 10 * 60000} WHERE id=${ep}`);
+refused(await eliteW(`posts/${ep}/bump`, 'POST'), 429, '같은 글은 20분마다 끌올할 수 있습니다.', '엘리트: the same post 10 minutes later');
 const gapMember = async (name, grade, text) => {
     const c = await register(name);
     if (grade) await grant(c, grade);
@@ -210,16 +217,17 @@ const gapMember = async (name, grade, text) => {
     return c;
 };
 const premiumGap = await gapMember('gpre', 'premium', '1시간');
-const plusGap = await gapMember('gplus', 'plus', '2시간');
-await gapMember('gnorm', null, '3시간');
-equal((await premiumGap('me/usage')).data.bumpMax, 6, '프리미엄 holds 6');
-equal((await plusGap('me/usage')).data.bumpRefillMin, 180, '플러스 refills every 3 hours');
+const plusGap = await gapMember('gplus', 'plus', '3시간');
+await gapMember('gnorm', null, '6시간');
+equal((await premiumGap('me/usage')).data.bumpMax, 10, '프리미엄 holds 10');
+equal((await premiumGap('me/usage')).data.bumpRefillMin, 90, '프리미엄 refills every 1시간 30분');
+equal((await plusGap('me/usage')).data.bumpRefillMin, 240, '플러스 refills every 4 hours');
 
 // 새 글 우선: a post placed ahead of now cannot be bumped down, and the wallet is untouched.
 const prio = await register('prio');
 const pp = await created(prio, 'priority post');
 const prioUntil = Date.now() + 30 * 60000;
-sql(`UPDATE posts SET created_at=${Date.now() - 5 * HOUR},bumped_at=${prioUntil},bump_count=0 WHERE id=${pp}`);
+sql(`UPDATE posts SET created_at=${Date.now() - 7 * HOUR},bumped_at=${prioUntil},bump_count=0 WHERE id=${pp}`);
 refused(await prio(`posts/${pp}/bump`, 'POST'), 429, `새 글 우선 중인 글은 ${kst(prioUntil)}부터 끌올할 수 있습니다.`, 'a post in 새 글 우선 is not bumped');
 equal((await wallet(prio)).tokens, 3, 'the wallet is unchanged (3/3)');
 equal(sql(`SELECT bumped_at FROM posts WHERE id=${pp}`)[0].bumped_at, prioUntil, 'the post keeps its place');
@@ -232,26 +240,60 @@ equal((await wallet(granted)).tokens, 0, 'the member is at 0/3');
 const app = await granted('applications', 'POST', { kind: 'grade', target: 'elite', plan: 'permanent' });
 equal(app.status, 201, `the member applies for 엘리트 (${app.data.error || ''})`);
 equal((await manager(`applications/${app.data.id}`, 'PATCH', { action: 'approve' })).status, 200, 'the manager approves');
-equal(await wallet(granted), { tokens: 8, max: 8, refillMin: 60, next: null }, 'the grant fills the wallet to 8/8');
+equal(await wallet(granted), { tokens: 20, max: 20, refillMin: 30, next: null }, 'the grant fills the wallet to 20/20');
 const grantLine = (await granted(`chats/${app.data.chatId}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body).find(b => b.includes('등급 지급 완료'));
-check(grantLine?.includes('끌올이 8개로 충전되었습니다.'), `the grant chat line says the wallet was filled (${JSON.stringify(grantLine)})`);
+check(grantLine?.includes('끌올이 20개로 충전되었습니다.'), `the grant chat line says the wallet was filled (${JSON.stringify(grantLine)})`);
 sql(`UPDATE user_grades SET expires_at=${Date.now() - 1000} WHERE user_id='${granted.user.id}'`);
 const clamped = await wallet(granted);
 check(clamped.tokens <= 3 && clamped.max === 3, `after the grade ends the next read clamps to 일반 (${clamped.tokens}/${clamped.max})`);
 const direct = await register('grantd');
 setWallet(direct, 0, Date.now());
 await grant(direct, 'premium');
-equal((await wallet(direct)).tokens, 6, 'a grant from the member page fills the wallet too (6/6)');
+equal((await wallet(direct)).tokens, 10, 'a grant from the member page fills the wallet too (10/10)');
+const directChat = (await direct('chats')).data.chats.find(x => x.partner_id === 'manager');
+const directLine = directChat && (await direct(`chats/${directChat.id}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
+equal(directLine, ['프리미엄 등급 지급 완료 (영구)\n끌올이 10개로 충전되었습니다.'], 'a direct grant says so in the manager chat too');
 
 // Race: two parallel bumps on two posts with 1 in the wallet: exactly one passes.
 const racer2 = await register('wrace');
 const rp = [await created(racer2, 'race a'), await created(racer2, 'race b')];
-age(rp, 4);
+age(rp, 7);
 setWallet(racer2, 1, Date.now());
 const pair = await Promise.all(rp.map(id => racer2(`posts/${id}/bump`, 'POST')));
 equal(pair.map(r => r.status).sort(), [200, 429], 'two parallel bumps with 1 in the wallet: exactly one 200');
 equal(sql(`SELECT bump_tokens FROM users WHERE id='${racer2.user.id}'`)[0].bump_tokens, 0, 'the wallet is at 0');
 equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE id IN (${rp.join(',')}) AND bump_count=1`)[0].n, 1, 'exactly one post moved');
+
+// 새 글 allowance (decisions item 1b): the first 3 new posts of the KST day go to the top for free;
+// from the 4th on a new post spends 1 끌올, or, with the wallet empty, sits at the latest top time.
+// Changing the title every time buys nothing more.
+const fresher = await register('fresh');
+const placedPosts = [];
+for (let i = 0; i < 3; i++) {
+    const r = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 제목${i} 다름`));
+    equal([r.status, r.data.placed, r.data.bumpTokens], [201, 'fresh', 3], `new post ${i + 1} of 3 is a free new post`);
+    placedPosts.push(r.data);
+}
+const fourth = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 네번째`));
+equal([fourth.status, fourth.data.placed, fourth.data.bumpTokens], [201, 'bump', 2], 'the 4th new post spends 1 끌올 (2/3 left)');
+check(fourth.data.bumpedAt >= placedPosts[2].bumpedAt, 'and goes to the top');
+equal(sql(`SELECT COUNT(*) AS n FROM post_events WHERE user_id='${fresher.user.id}' AND kind='fresh'`)[0].n, 3, 'three fresh events');
+setWallet(fresher, 0, Date.now());
+const othersNew = await created(other, 'another member posts after the 4th');
+const fifth = await fresher('posts', 'POST', sale(`[QA] 새 글 ${run} 다섯번째 완전히 다른 제목`));
+equal([fifth.status, fifth.data.placed, fifth.data.bumpTokens], [201, 'last', 0], 'with the wallet empty the 5th new post is placed, not refused');
+equal(fifth.data.bumpedAt, fourth.data.bumpedAt, 'at the latest top time (the 4th post)');
+const freshList = (await guest(`posts?kind=sell&q=${run}&size=40`)).data.posts.map(p => p.id);
+check(freshList.includes(othersNew) && freshList.indexOf(fifth.data.id) > freshList.indexOf(othersNew), `the 5th post sits below a post another member wrote before it (${freshList.slice(0, 6).join(',')})`);
+equal((await fresher('me/usage')).data.freshToday, 3, 'usage.freshToday is 3');
+const freshRace = await register('fresh2');
+const raced = await Promise.all([0, 1, 2, 3, 4].map(i => freshRace('posts', 'POST', sale(`[QA] 동시 새 글 ${run} ${i}`))));
+equal(raced.filter(r => r.status === 201).length, 5, 'five parallel new posts are all created');
+equal(raced.map(r => r.data.placed).sort(), ['bump', 'bump', 'fresh', 'fresh', 'fresh'], 'exactly 3 are free new posts; the other 2 spend 1 끌올 each');
+equal((await wallet(freshRace)).tokens, 1, 'the wallet holds 1 (3 - 2)');
+const mgrNew = await manager('posts', 'POST', sale(`[QA] 매니저 새 글 ${run}`));
+equal([mgrNew.status, mgrNew.data.placed], [201, 'fresh'], 'the manager has no allowance (always a new post)');
+await manager(`posts/${mgrNew.data.id}`, 'DELETE');
 
 // The manager has no wallet and no gap.
 const mp = await manager('posts', 'POST', sale(`[QA] 매니저 끌올 ${run}`));
@@ -371,11 +413,12 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
 equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 240, bumpGapMinutes: 180, boardSlots: 0, homeShelf: false }, '일반 perks');
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false }, '일반 perks');
+equal(usage.freshToday, 3, 'usage counts today\'s free new posts (3 of the 4)');
 equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
-check(usage.nextRefillAt > Date.now() && usage.nextRefillAt - Date.now() <= 4 * HOUR, 'nextRefillAt is within the next 4 hours');
+check(usage.nextRefillAt > Date.now() && usage.nextRefillAt - Date.now() <= 6 * HOUR, 'nextRefillAt is within the next 6 hours');
 const premiumUsage = (await premium('me/usage')).data;
-equal([premiumUsage.grade, premiumUsage.perks.boardSlots, premiumUsage.bumpMax, premiumUsage.featured.map(f => f.id)], ['premium', 1, 6, [B]], 'premium perks and featured list');
+equal([premiumUsage.grade, premiumUsage.perks.boardSlots, premiumUsage.bumpMax, premiumUsage.featured.map(f => f.id)], ['premium', 1, 10, [B]], 'premium perks and featured list');
 const managerUsage = (await manager('me/usage')).data;
 equal([managerUsage.perks.bumpMax, managerUsage.bumpTokens, managerUsage.nextRefillAt, managerUsage.rules.openPosts, managerUsage.rules.photosPerPost], [null, null, null, null, 100], 'the manager has no wallet and no open-post ceiling (null)');
 equal((await guest('me/usage')).status, 401, 'usage needs a login');

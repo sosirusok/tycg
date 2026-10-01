@@ -8,7 +8,7 @@ import { filesHandler } from './files';
 import { chatHandler } from './chat';
 import { communityHandler } from './community';
 import { membershipHandler, trialState, trialMeHandler } from './membership';
-import { kstDate } from '../shared/membership';
+import { kstDate, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
@@ -95,11 +95,17 @@ async function withdraw(req: Request) {
 
 // 플러스 무료 체험 at sign-up, while the window is open. At most 5 trials per hashed address per KST
 // day (the counter is only read here, so a 6th sign-up is never refused); a capped account is marked
-// trial_at=-1 so the catch-up in currentUser never grants it later. Sign-up never fails because of
+// trial_at=-1 so the catch-up in currentUser never grants it later. A sign-up while the window is
+// closed is marked -1 too, so moving the end date later (종료일 변경 after 지금 마감) never hands
+// trials to those accounts through the catch-up, which has no per-address cap. The catch-up is only
+// for sign-ups the previous Worker served (trial_at stays NULL there). Sign-up never fails because of
 // the trial. Returns whether the cap applied.
 async function signUpTrial(id: string, ip: string, createdAt: number) {
     try {
-        if (!trialOpen(await trialWindow(true), createdAt)) return false;
+        if (!trialOpen(await trialWindow(true), createdAt)) {
+            await db().prepare('UPDATE users SET trial_at=-1 WHERE id=? AND trial_at IS NULL').bind(id).run();
+            return false;
+        }
         try { await limit('trial-ip:' + ip + ':' + kstDate(createdAt), 5, DAY); }
         catch (e) {
             if (!(e instanceof ApiError && e.status === 429)) throw e;
@@ -165,7 +171,14 @@ async function authHandler(req: Request, p: string[]) {
         db().prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').bind(await digest(token), id, Date.now() + SESSION_DAYS * 86400000),
     ]);
     const user = withMember(await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(id).first<any>());
-    return json({ user, trial: await trialState(user, capped) }, 200, { 'Set-Cookie': sessionCookie(req, token) });
+    // The session already exists: a failed trial read must not turn the sign-in into an error.
+    let trial: TrialState;
+    try { trial = await trialState(user, capped); }
+    catch (e) {
+        console.warn('Trial state not read', e instanceof Error ? e.message : 'unknown');
+        trial = { endsAt: user.grade_trial ? user.grade_expires_at ?? null : null, popup: !!user.grade_trial, ended: false, capped };
+    }
+    return json({ user, trial }, 200, { 'Set-Cookie': sessionCookie(req, token) });
 }
 
 async function usersHandler(req: Request, p: string[]) {

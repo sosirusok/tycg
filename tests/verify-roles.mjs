@@ -239,4 +239,16 @@ if (sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name='user_grad
     equal((await guest('users/' + A)).data.user.grade, 'plus', 'the manager grant is intact');
 } else console.log('SKIP triggers are not installed');
 
+// The one automated grant (0016_plus_trial): sign-up and the deploy-gap catch-up write 플러스 체험 rows
+// as the manager with source 'trial'. That is the only exception: every grade row is the manager's,
+// its source is 'manager' or 'trial', and a trial row has exactly the trigger's shape (플러스 rank 1,
+// no application, ending 7 days after the account was created). A trial row of any other shape aborts.
+if (sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name='user_grades_trial_rule'").length) {
+    equal(sql("SELECT COUNT(*) AS n FROM user_grades WHERE granted_by IS NOT 'manager' OR source NOT IN ('manager','trial')")[0].n, 0, 'every grade row is the manager\'s, from a grant or a trial');
+    equal(sql(`SELECT COUNT(*) AS n FROM user_grades g WHERE g.source='trial' AND NOT (g.grade='plus' AND g.rank=1 AND g.application_id IS NULL
+        AND g.expires_at<=(SELECT created_at FROM users WHERE id=g.user_id)+604800000)`)[0].n, 0, 'every trial row is a 7-day 플러스 from sign-up (or shorter, after 지금 마감)');
+    check(sqlFails(`INSERT INTO user_grades(user_id,grade,rank,granted_by,granted_at,source) VALUES('${B}','elite',3,'manager',1,'trial')`).includes('trial rule'), 'trigger: a trial row of another grade aborts');
+    check(sqlFails(`INSERT INTO user_grades(user_id,grade,rank,granted_by,granted_at,source) VALUES('${B}','plus',1,'manager',1,'promo')`).includes('trial rule'), 'trigger: an unknown source aborts');
+} else console.log('SKIP trial triggers are not installed');
+
 console.log(`\n${checks} role checks passed`);

@@ -63,7 +63,7 @@ function Applications({ onChange }: { onChange: () => void }) {
         <div className="mt-16">{apps === null ? <SkeletonRows count={3} height={72} /> : apps.length ? <ul className="simple-list">{apps.map(a => <li key={a.id}>
             <span className="grow">
                 <strong>{applicationTitle(a)}</strong>
-                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">@{a.username} · {relativeTime(a.created_at)}</span></span>
+                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">@{a.username}{a.grade_trial && ' · 플러스 체험'} · {relativeTime(a.created_at)}</span></span>
             </span>
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
@@ -87,7 +87,7 @@ function Members() {
         <form className="search-input" onSubmit={submit} role="search"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="닉네임 또는 아이디" aria-label="회원 검색" /></form>
         <div className="chip-row mt-12">{[['', '전체'], ['badged', '인증 보유'], ['graded', '등급 보유']].map(([id, label]) => <button type="button" key={id} className="chip chip-sm" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}</div>
         <div className="mt-16">{users === null ? <SkeletonRows count={4} height={60} /> : users.length ? <ul className="simple-list">{users.map(u => <li key={u.id}>
-            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.suspended && ' · 이용 정지 중'}</span></span>
+            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.grade_trial && ' · 플러스 체험'}{u.suspended && ' · 이용 정지 중'}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
         </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
@@ -176,7 +176,7 @@ const fromKstInput = (v: string) => { const t = Date.parse(v + ':00Z'); return N
 function TrialCard() {
     const { refreshConfig } = useApp();
     const [info, setInfo] = useState<TrialInfo | null>(null);
-    const [sheet, setSheet] = useState<'' | 'end' | 'close'>(''), [end, setEnd] = useState(''), [endRunning, setEndRunning] = useState(false), [busy, setBusy] = useState(false);
+    const [sheet, setSheet] = useState<'' | 'end' | 'close' | 'running'>(''), [end, setEnd] = useState(''), [endRunning, setEndRunning] = useState(false), [busy, setBusy] = useState(false);
     useEffect(() => { api<TrialInfo>('manage/trial').then(setInfo).catch(e => toast.error(errorText(e))); }, []);
     async function save(data: Record<string, unknown>, done: string) {
         setBusy(true);
@@ -192,7 +192,8 @@ function TrialCard() {
         <p className="muted small">체험 받은 회원 {info.granted}명 · 지금 체험 중 {info.active}명 · 체험 후 등급 신청 {info.applied}명</p>
         <div className="row mt-8">
             <button type="button" className="btn btn-line btn-sm" onClick={() => { setEnd(kstInput(Math.max(info.end && info.end > now ? info.end : now + 86400000, now))); setSheet('end'); }}>종료일 변경</button>
-            <button type="button" className="btn btn-line btn-sm" disabled={!info.open} onClick={() => { setEndRunning(false); setSheet('close'); }}>지금 마감</button>
+            {info.open ? <button type="button" className="btn btn-line btn-sm" onClick={() => { setEndRunning(false); setSheet('close'); }}>지금 마감</button>
+                : info.active > 0 && <button type="button" className="btn btn-line btn-sm" onClick={() => setSheet('running')}>진행 중인 체험 끝내기</button>}
         </div>
         <Modal open={sheet === 'end'} onClose={() => { if (!busy) setSheet(''); }} title="종료일 변경"
             footer={<button className="btn btn-primary btn-lg btn-block" disabled={busy || !end} onClick={() => save({ end: fromKstInput(end) }, '저장 완료')}>저장</button>}>
@@ -203,6 +204,10 @@ function TrialCard() {
         <Modal open={sheet === 'close'} onClose={() => { if (!busy) setSheet(''); }} title="지금 마감"
             footer={<button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => save({ close: true, endRunning }, '마감 완료')}>마감</button>}>
             <label className="check"><input type="checkbox" checked={endRunning} onChange={e => setEndRunning(e.target.checked)} />진행 중인 체험도 지금 끝내기</label>
+        </Modal>
+        <Modal open={sheet === 'running'} onClose={() => { if (!busy) setSheet(''); }} title="진행 중인 체험 끝내기"
+            footer={<button className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => save({ close: true, endRunning: true }, '체험 종료 완료')}>끝내기</button>}>
+            <p>체험 중인 {info.active}명이 지금 일반 등급으로 돌아갑니다.</p>
         </Modal>
     </section>;
 }

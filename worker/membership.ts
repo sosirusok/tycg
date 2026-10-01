@@ -57,15 +57,18 @@ async function manageTrial(req: Request) {
         const end = b.close === true ? now - 1 : Number(b.end);
         if (b.close !== true && (!Number.isInteger(end) || end < now || end > now + 90 * DAY)) fail(400, '종료일은 지금부터 90일 안으로 정해 주세요.');
         await db().batch([
-            db().prepare("INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_end',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(end), now),
+            // 지금 마감 on a window that already ended keeps the earlier end (it only ends running trials).
+            db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_end',?,?) ON CONFLICT(key) DO UPDATE SET
+                value=CASE WHEN ? AND CAST(settings.value AS INTEGER)<CAST(excluded.value AS INTEGER) THEN settings.value ELSE excluded.value END,updated_at=excluded.updated_at`).bind(String(end), now, b.close === true ? 1 : 0),
             ...b.close === true && b.endRunning === true ? [db().prepare("UPDATE user_grades SET expires_at=? WHERE source='trial' AND expires_at>?").bind(now, now)] : [],
         ]);
         clearTrialCache();
     }
     const w = await trialWindow(true);
     const r = await db().prepare(`SELECT (SELECT COUNT(*) FROM users WHERE trial_at>0) AS granted,
-        (SELECT COUNT(*) FROM user_grades WHERE source='trial' AND expires_at>?) AS active,
-        (SELECT COUNT(DISTINCT a.user_id) FROM applications a JOIN users u ON u.id=a.user_id WHERE u.trial_at>0 AND a.kind='grade' AND a.created_at>=u.trial_at) AS applied`).bind(now).first<any>();
+        (SELECT COUNT(*) FROM user_grades t WHERE t.source='trial' AND t.expires_at>?
+            AND NOT EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=t.user_id AND g.source='manager' AND g.rank>=1 AND (g.expires_at IS NULL OR g.expires_at>?))) AS active,
+        (SELECT COUNT(DISTINCT a.user_id) FROM applications a JOIN users u ON u.id=a.user_id WHERE u.trial_at>0 AND a.kind='grade' AND a.created_at>=u.trial_at) AS applied`).bind(now, now).first<any>();
     return json({
         start: Number.isFinite(w.start) ? w.start : null, end: Number.isFinite(w.end) ? w.end : null, open: trialOpen(w, now),
         granted: r?.granted ?? 0, active: r?.active ?? 0, applied: r?.applied ?? 0,
@@ -100,10 +103,11 @@ export async function grantGradeStatements(userId: string, grade: GradeId, plan:
     if (await db().prepare('SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL LIMIT 1').bind(userId, grade).first()) fail(409, '이미 영구 등급입니다.');
     const noPermanent = 'NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at IS NULL)';
     if (plan === '6m') {
-        const existing = await db().prepare('SELECT id,expires_at FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? ORDER BY expires_at DESC LIMIT 1').bind(userId, grade, now).first<{ id: number; expires_at: number }>();
+        // Only paid rows: a running 플러스 체험 row is never extended (user_grades_trial_no_extend).
+        const existing = await db().prepare("SELECT id,expires_at FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? AND source='manager' ORDER BY expires_at DESC LIMIT 1").bind(userId, grade, now).first<{ id: number; expires_at: number }>();
         if (existing) {
             const expires = addMonths(existing.expires_at, 6);
-            const precondition = `EXISTS(SELECT 1 FROM user_grades WHERE id=? AND expires_at=?) AND ${noPermanent}`, preArgs = [existing.id, existing.expires_at, userId, grade];
+            const precondition = `EXISTS(SELECT 1 FROM user_grades WHERE id=? AND expires_at=? AND source='manager') AND ${noPermanent}`, preArgs = [existing.id, existing.expires_at, userId, grade];
             return {
                 expires, precondition, preArgs, ...wallet,
                 statement: db().prepare(`UPDATE user_grades SET expires_at=?,granted_by=?,granted_at=?,application_id=COALESCE(?,application_id) WHERE id=? AND expires_at=? AND ${noPermanent} AND ${guard}`)
@@ -114,7 +118,7 @@ export async function grantGradeStatements(userId: string, grade: GradeId, plan:
     const expires = plan === '6m' ? addMonths(now, 6) : null;
     // A new row only while the member still has no permanent row of this grade and, for 6 months,
     // no unexpired 6-month row that should be extended instead.
-    const precondition = noPermanent + (plan === '6m' ? ' AND NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at>?)' : '');
+    const precondition = noPermanent + (plan === '6m' ? " AND NOT EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND expires_at>? AND source='manager')" : '');
     const preArgs = [userId, grade, ...plan === '6m' ? [userId, grade, now] : []];
     return {
         expires, precondition, preArgs, ...wallet,
@@ -141,6 +145,10 @@ async function permanentRank(userId: string) {
 
 const DECIDED = 'EXISTS(SELECT 1 FROM applications WHERE id=? AND decision_id=?)';
 
+// The member's chat line for a grade grant, from an approved application or the member panel.
+const grantLine = (grade: string, expires: number | null, bumpMax: number) =>
+    `${gradeInfo(grade).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}\n끌올이 ${bumpMax}개로 충전되었습니다.`;
+
 // The status change carries a new decision id. The grant and the chat message are
 // guarded by that id, so when two decisions overlap only the first one takes effect.
 async function decide(u: User, app: any, action: 'approve' | 'reject', note: string) {
@@ -160,7 +168,7 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
             statements.push(grant!.statement, grant!.wallet);
-            message = `${gradeInfo(app.target).name} 등급 지급 완료${grant!.expires ? ` (${dateLabel(grant!.expires)}까지)` : ' (영구)'}\n끌올이 ${grant!.bumpMax}개로 충전되었습니다.`;
+            message = grantLine(app.target, grant!.expires, grant!.bumpMax);
         }
     } else {
         message = `반려: ${applicationTitle(app)}${note ? ` (사유: ${note})` : ''}`;
@@ -347,8 +355,14 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (plan === '6m' && !planInfo(b.grade, '6m')) fail(400, '이 등급은 6개월 기간이 없습니다.');
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
             if (target.deleted_at) fail(400, WITHDRAWN);
-            const { statement, wallet } = await grantGradeStatements(p[2], b.grade, plan, u.id, null);
-            if (!(await db().batch([statement, wallet]))[0].meta.changes) fail(409, GRADE_CHANGED);
+            const now = Date.now();
+            const { statement, wallet, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
+            // The member hears about a direct grant in the manager chat too, written only when the
+            // grant row was written at this time. A member who blocked the manager gets no line.
+            const chatId = await ensureChat(p[2], MANAGER_ID).catch(() => null);
+            const granted = 'EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)';
+            const line = chatId ? guardedMessageStatements(chatId, u.id, grantLine(b.grade, expires, bumpMax), 'system', null, granted, [p[2], b.grade, u.id, now], now) : [];
+            if (!(await db().batch([statement, wallet, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
         // A member who forgot their password gets a temporary one through the manager's chat.

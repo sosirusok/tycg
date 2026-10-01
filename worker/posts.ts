@@ -569,11 +569,16 @@ async function bumpPost(u: User, post: any) {
     if (!r[0].meta.changes) {
         const row = await db().prepare('SELECT status,hidden,bumped_at,created_at,bump_count FROM posts WHERE id=?').bind(post.id).first<any>();
         if (!row || row.status !== 'open' || row.hidden) fail(409, '거래중인 글만 끌올할 수 있습니다.');
-        if (row.bumped_at > now) fail(429, `새 글 우선 중인 글은 ${clock(row.bumped_at)}부터 끌올할 수 있습니다.`);
-        const gapEnd = (row.bump_count ? row.bumped_at : row.created_at) + gapMs;
-        if (gapEnd > now) fail(429, `같은 글은 ${gapText(perks.bumpGapMinutes)}마다 끌올할 수 있습니다. (${clock(gapEnd)}부터 가능)`);
+        // Several blockers can hold at once; the message names the one that ends last, the same time
+        // the 끌올 button shows ('15:40부터 가능'), so retrying at that time works.
         const w = walletOf(stored.bump_tokens, stored.bump_at, perks, now);
-        if (w.tokens < 1 && w.nextRefillAt) fail(429, `끌올이 없습니다. ${clock(w.nextRefillAt)}에 1개 충전됩니다.`);
+        const priorityEnd = row.bumped_at > now ? row.bumped_at : 0;
+        const gapEnd = (row.bump_count ? row.bumped_at : row.created_at) + gapMs;
+        const refillAt = w.tokens < 1 && w.nextRefillAt ? w.nextRefillAt : 0;
+        const latest = Math.max(priorityEnd, gapEnd, refillAt);
+        if (refillAt && refillAt === latest) fail(429, `끌올이 없습니다. ${clock(refillAt)}에 1개 충전됩니다.`);
+        if (priorityEnd && priorityEnd === latest) fail(429, `새 글 우선 중인 글은 ${clock(priorityEnd)}부터 끌올할 수 있습니다.`);
+        if (gapEnd > now) fail(429, `같은 글은 ${gapText(perks.bumpGapMinutes)}마다 끌올할 수 있습니다. (${clock(gapEnd)}부터 가능)`);
         fail(429, '잠시 후 다시 시도해 주세요.');
     }
     return json({ bumpedAt: now, nextBumpAt: now + gapMs, ...walletJson(stored, perks, now) });
@@ -696,9 +701,9 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // included) and new posts today (deleting one does not give it back). The round-2 same-title
         // rules stay: the same title as an open post of the same kind, and the same title as a post
         // deleted within the bump gap. A title that only matches 거래완료 posts is allowed.
-        const perks = perksOf(u), rules = rulesOf(u), strict = u.role !== 'manager' && !relaxedLimits(req), dayStart = kstDayStart(now);
+        const rules = rulesOf(u), strict = u.role !== 'manager' && !relaxedLimits(req), dayStart = kstDayStart(now);
         if (strict) {
-            const gapMs = perks.bumpGapMinutes * 60000;
+            const gapMs = perksOf(u).bumpGapMinutes * 60000;
             // The author's open posts from before title_key existed get their key now, so the
             // same-title rule sees them before the daily cleanup has run.
             const missing = await db().prepare("SELECT id,title FROM posts WHERE author_id=? AND status!='closed' AND title_key='' LIMIT 100").bind(u.id).all<{ id: number; title: string }>();
@@ -717,16 +722,46 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // select the new post's id and insert nothing when the insert was refused.
         const guard = strict ? "(SELECT COUNT(*) FROM posts WHERE author_id=? AND status!='closed')<? AND (SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='post' AND created_at>=?)<?" : '1';
         const newPost = '(SELECT id FROM posts WHERE author_id=? AND created_at=? AND title_key=? ORDER BY id DESC LIMIT 1)', newArgs = [u.id, now, key];
+        // 새 글 allowance (decisions item 1b, the backstop that needs no identity): only the first
+        // SITE_RULES.freshPerDay new posts of the KST day go to the top for free ('fresh' event). From
+        // the next one on, a new post spends 1 끌올 from the wallet ('bump' event), or, with the wallet
+        // empty, sits at the member's latest top time of the last 2 days. So changing the title
+        // never buys more top placements than the allowance plus the wallet. Everything is decided
+        // inside this batch (one transaction), so parallel creates cannot overspend.
+        const perks = perksOf(u), capped = strict && Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
+        const freshCount = "(SELECT COUNT(*) FROM post_events WHERE user_id=? AND kind='fresh' AND created_at>=?)", freshArgs = [u.id, dayStart];
+        const walletNow = `(SELECT ${WALLET_NOW} FROM users WHERE id=?)`, walletArgs = [M, now, R, u.id];
+        const placeSql = capped
+            ? `CASE WHEN ${freshCount}<? OR ${walletNow}>=1 THEN ? ELSE COALESCE((SELECT MAX(created_at) FROM post_events WHERE user_id=? AND kind IN ('fresh','bump') AND created_at>?),?) END`
+            : '?';
+        const placeArgs = capped ? [...freshArgs, rules.freshPerDay, ...walletArgs, now, u.id, now - 48 * HOUR, now] : [now];
+        const spent = `EXISTS(SELECT 1 FROM post_events WHERE post_id=${newPost} AND kind='bump')`;
         const r = await db().batch([
-            db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${guard}`)
-                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now, now, key, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+            db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,created_at,updated_at,bumped_at,title_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},? WHERE ${guard}`)
+                .bind(u.id, v.kind, v.title, v.content, v.price, v.status, v.category, v.mode, v.accepts, v.details, v.images, now, now, ...placeArgs, key, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
             ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
             ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
             db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
+            ...capped ? [
+                db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,id,'fresh',? FROM ${newPost} WHERE id IS NOT NULL AND ${freshCount}<?`)
+                    .bind(u.id, now, ...newArgs, ...freshArgs, rules.freshPerDay),
+                db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,id,'bump',? FROM ${newPost} n WHERE n.id IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM posts WHERE id=n.id AND bumped_at=?) AND NOT EXISTS(SELECT 1 FROM post_events WHERE post_id=n.id AND kind='fresh') AND ${walletNow}>=1`)
+                    .bind(u.id, now, ...newArgs, now, ...walletArgs),
+                db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-1,
+                    bump_at=CASE WHEN bump_tokens+CAST((?-bump_at)/? AS INTEGER)>=? THEN ? ELSE bump_at+CAST((?-bump_at)/? AS INTEGER)*? END
+                    WHERE id=? AND ${spent}`).bind(M, now, R, now, R, M, now, now, R, R, u.id, ...newArgs),
+            ] : [],
             db().prepare(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT ?,id,'post',?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(u.id, key, now, ...newArgs),
+            db().prepare(`SELECT ${spent} AS bump,(SELECT bumped_at FROM posts WHERE id=${newPost}) AS bumped_at,(SELECT bump_tokens FROM users WHERE id=?) AS bump_tokens,(SELECT bump_at FROM users WHERE id=?) AS bump_at`)
+                .bind(...newArgs, ...newArgs, u.id, u.id),
         ]);
         if (!r[0].meta.changes) fail(429, '잠시 후 다시 시도해 주세요.');
-        return json({ id: r[0].meta.last_row_id }, 201);
+        const out = r[r.length - 1].results[0] as { bump: number; bumped_at: number; bump_tokens: number; bump_at: number };
+        // placed: 'fresh' (one of today's free new posts), 'bump' (spent 1 끌올) or 'last' (wallet empty:
+        // placed at the latest top time). The manager and POST_LIMITS=relaxed always get 'fresh'.
+        const placed = !capped ? 'fresh' : out.bump ? 'bump' : out.bumped_at < now ? 'last' : 'fresh';
+        return json({ id: r[0].meta.last_row_id, placed, bumpedAt: out.bumped_at, ...capped ? walletJson(out, perks, now) : {} }, 201);
     }
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),

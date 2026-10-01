@@ -38,7 +38,8 @@ const FREE_ITEMS = [
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '채팅·제시',
-    `찜·검색 저장 ${SITE_RULES.savedSearches}개`,
+    '찜',
+    `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     '거래 기록·후기',
     '신고·차단',
 ];
@@ -94,7 +95,7 @@ export default function Guide() {
             </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
-                <li>채팅, 제시, 찜, 신고, 검색 필터, 인증 신청은 등급과 관계없이 같습니다.</li>
+                <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>

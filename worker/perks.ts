@@ -12,13 +12,14 @@ export async function usageHandler(req: Request) {
     const [counts, featured] = await db().batch([
         db().prepare(`SELECT u.bump_tokens,u.bump_at,
             (SELECT COUNT(*) FROM post_events WHERE user_id=u.id AND kind='post' AND created_at>=?) AS posts,
-            (SELECT COUNT(*) FROM posts WHERE author_id=u.id AND status!='closed') AS open FROM users u WHERE u.id=?`).bind(dayStart, u.id),
+            (SELECT COUNT(*) FROM post_events WHERE user_id=u.id AND kind='fresh' AND created_at>=?) AS fresh,
+            (SELECT COUNT(*) FROM posts WHERE author_id=u.id AND status!='closed') AS open FROM users u WHERE u.id=?`).bind(dayStart, dayStart, u.id),
         db().prepare(`SELECT id,title,kind FROM posts WHERE ${FEATURED_MINE} ORDER BY featured_at DESC`).bind(u.id),
     ]);
-    const c = counts.results[0] as { bump_tokens: number; bump_at: number; posts: number; open: number };
+    const c = counts.results[0] as { bump_tokens: number; bump_at: number; posts: number; fresh: number; open: number };
     return json({
         grade: u.grade, perks: finite(perks), rules: finite(rulesOf(u)),
         ...walletJson(c, perks, now),
-        openPosts: c.open, postsToday: c.posts, featured: featured.results,
+        openPosts: c.open, postsToday: c.posts, freshToday: c.fresh, featured: featured.results,
     });
 }

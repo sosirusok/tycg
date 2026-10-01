@@ -101,7 +101,7 @@ equal([a.user.grade, a.user.grade_trial], ['plus', true], 'a new sign-up is 플�
 equal(a.user.grade_expires_at, aCreated.created_at + WEEK, 'the trial ends exactly 7 days after sign-up');
 check(aCreated.trial_at > 0, 'users.trial_at is stamped');
 // WP40: the trial grant fills the 끌올 지갑 to the 플러스 cap.
-equal(sql(`SELECT bump_tokens,bump_at FROM users WHERE id='${a.user.id}'`)[0], { bump_tokens: 4, bump_at: aCreated.trial_at }, 'the trial fills the wallet to 4 (플러스)');
+equal(sql(`SELECT bump_tokens,bump_at FROM users WHERE id='${a.user.id}'`)[0], { bump_tokens: 5, bump_at: aCreated.trial_at }, 'the trial fills the wallet to 5 (플러스)');
 equal([a.trial.popup, a.trial.endsAt, a.trial.ended, a.trial.capped], [true, aCreated.created_at + WEEK, false, false], 'the sign-up response asks for the popup');
 equal((await me(a)).trial.popup, true, 'auth/me keeps asking until the popup is closed');
 equal((await a('me/trial-popup', 'POST', {})).status, 200, 'POST me/trial-popup');
@@ -155,9 +155,15 @@ equal((await client()('config')).data.trial?.open, false, 'GET config: trial.ope
 const d = await register('d');
 equal([d.user.grade, d.trial.popup], ['normal', false], 'a sign-up with the window closed is 일반');
 
-// 6. Catch-up: a member created inside the window with no grade row and no trial_at (the previous
-// Worker served the sign-up) gets exactly one trial on the next request.
+// 6. Moving the end later never hands trials to accounts that signed up while the window was closed:
+// they are marked trial_at=-1 at sign-up (the catch-up below has no per-address cap).
+equal(sql(`SELECT trial_at FROM users WHERE id='${d.user.id}'`)[0].trial_at, -1, 'a closed-window sign-up is marked trial_at=-1');
 equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).data.open, true, 'the window is open again');
+const dClosed = await me(d);
+equal([dClosed.user.grade, trialRows(d.user.id).length], ['normal', 0], 'reopening gives that account no trial');
+// Catch-up: a member created inside the window with no grade row and no trial_at (the previous
+// Worker served the sign-up; it never writes trial_at) gets exactly one trial on the next request.
+sql(`UPDATE users SET trial_at=NULL WHERE id='${d.user.id}'`);
 const dMe = await me(d);
 equal([dMe.user.grade, dMe.user.grade_trial, trialRows(d.user.id).length], ['plus', true, 1], 'auth/me creates exactly one trial row');
 await me(d);
@@ -198,8 +204,25 @@ check(card.granted >= 9 && card.active >= 1 && typeof card.applied === 'number' 
 equal((await manager('manage/trial', 'PUT', { end: Date.now() + 91 * DAY })).status, 400, 'an end more than 90 days ahead is refused');
 const f = await register('f');
 equal(f.user.grade, 'plus', 'another trial starts');
+// A paid 플러스 granted during the trial: its own manager row, the trial row untouched, and the card
+// no longer counts the member as 'in a trial'.
+const h = await register('h');
+const hTrial = trialRows(h.user.id)[0];
+const activeBefore = (await manager('manage/trial')).data.active;
+equal((await manager(`manage/users/${h.user.id}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the manager grants 플러스 영구 to a member in a trial');
+const hMe = await me(h);
+equal([hMe.user.grade, hMe.user.grade_trial, hMe.user.grade_expires_at], ['plus', false, null], 'the member now holds the paid 플러스 (chip shown)');
+equal(trialRows(h.user.id), [hTrial], 'the trial row is unchanged');
+equal(sql(`SELECT COUNT(*) AS n FROM user_grades WHERE user_id='${h.user.id}' AND source='manager' AND expires_at IS NULL`)[0].n, 1, 'the paid grant is its own manager row');
+equal((await manager('manage/trial')).data.active, activeBefore - 1, "the card's 지금 체험 중 leaves out members who hold a paid grade");
+const hChat = (await h('chats')).data.chats.find(x => x.partner_id === 'manager');
+check(hChat && (await h(`chats/${hChat.id}/messages`)).data.messages.some(m => m.type === 'system' && m.body === '플러스 등급 지급 완료 (영구)\n끌올이 5개로 충전되었습니다.'), 'the direct grant line reaches the member');
+// 지금 마감 without ending the trials, then ending them later (진행 중인 체험 끝내기) keeps the first end.
+const closeOnly = await manager('manage/trial', 'PUT', { close: true });
+check(closeOnly.data.open === false && closeOnly.data.active >= 1, '지금 마감 alone leaves the running trials');
 const endAll = await manager('manage/trial', 'PUT', { close: true, endRunning: true });
-equal([endAll.status, endAll.data.open, endAll.data.active], [200, false, 0], '지금 마감 with endRunning closes the window and ends every trial');
+equal([endAll.status, endAll.data.open, endAll.data.active, endAll.data.end], [200, false, 0, closeOnly.data.end], 'ending the running trials later ends every trial and keeps the earlier end');
+equal((await me(h)).user.grade, 'plus', 'the paid 플러스 stays');
 equal(sql(`SELECT COUNT(*) AS n FROM user_grades WHERE source='trial' AND expires_at>${Date.now()}`)[0].n, 0, 'no trial row ends in the future');
 equal((await me(f)).user.grade, 'normal', 'the member reads 일반');
 const g = await register('g');

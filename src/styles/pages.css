@@ -563,3 +563,6 @@
 .rules { display: grid; gap: 10px; margin: 16px 0 0; padding-left: 20px; color: var(--ink-2); }
 .rules a { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 960px) { .guide-cards { grid-template-columns: 1fr; } }
+/* The 새 글 allowance line above [등록] (from the 4th new post of the day). */
+.ed-fresh { margin-top: 24px; }
+.ed-fresh + .ed-bar { margin-top: 8px; }

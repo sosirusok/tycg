@@ -1,8 +1,9 @@
 import { db, fail, currentUser, requireUser, json, limit } from './http';
 import { SITE_RULES } from '../shared/membership';
-import { putPhoto, getPhoto, deletePhoto, photoLimit, photoLimitText, storageMode, D1_USER_BYTES, D1_SITE_BYTES } from './storage';
+import { putPhoto, getPhoto, deletePhoto, photoLimit, photoLimitText, storageMode, D1_USER_BYTES, D1_SITE_BYTES, R2_USER_BYTES } from './storage';
 
-// Upload rows one member may hold: every open post full of photos.
+// Upload rows one member may hold: every open post full of photos. Bytes are the real limit
+// (R2_USER_BYTES, or D1_USER_BYTES without R2).
 const UPLOAD_ROWS = SITE_RULES.openPosts * SITE_RULES.photosPerPost;
 
 // A photo is "in use" while a post, a chat message or one of the owner's drafts references it.
@@ -59,15 +60,21 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
         await limit('upload-day:' + u.id, SITE_RULES.uploadsPerDay, 86400000);
         const storage = storageMode();
         // Photos that no post, chat or draft uses are removed a day after upload (see cleanup.ts).
-        const mine = await db().prepare("SELECT COUNT(*) AS n,COALESCE(SUM(CASE WHEN storage='d1' THEN size ELSE 0 END),0) AS d1 FROM uploads WHERE owner_id=?").bind(u.id).first<any>();
+        // users.upload_rows and upload_bytes are kept by triggers on uploads (0018_upload_totals), so this
+        // reads one row instead of every upload the member holds. The manager has only the site limits.
+        const mine = await db().prepare('SELECT upload_rows AS n,upload_bytes AS bytes FROM users WHERE id=?').bind(u.id).first<{ n: number; bytes: number }>();
+        const member = u.role !== 'manager';
         // A row ceiling far above any real use (every open post full of photos); storage size is the real limit.
-        if (mine.n >= UPLOAD_ROWS) fail(409, '사진 업로드 한도를 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
+        if (member && mine && mine.n >= UPLOAD_ROWS) fail(409, '사진 업로드 한도를 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
         const bytes = await readBody(req, photoLimit());
         const mime = sniff(bytes);
         if (!mime) fail(400, 'JPG, PNG, WebP 사진을 선택해 주세요.');
+        if (storage === 'r2' && member && mine && mine.bytes + bytes.byteLength > R2_USER_BYTES) fail(409, '사진 용량(1인 1GB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
         if (storage === 'd1') {
             // Without R2, photos share the database's 500 MB, so each member and the whole site have a budget.
-            if (mine.d1 + bytes.byteLength > D1_USER_BYTES) fail(409, '사진 용량(1인 30MB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
+            // Only in this mode is the member's D1 sum read (it stays small: 30MB of photos at most).
+            const d1 = member ? await db().prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND storage='d1'").bind(u.id).first<{ bytes: number }>() : null;
+            if (d1 && d1.bytes + bytes.byteLength > D1_USER_BYTES) fail(409, '사진 용량(1인 30MB)을 넘었습니다. 안 쓰는 사진은 하루 뒤 정리됩니다.');
             const site = await db().prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE storage='d1'").first<any>();
             if (site.bytes + bytes.byteLength > D1_SITE_BYTES) fail(507, '사이트의 사진 저장 공간이 가득 찼습니다. 매니저에게 알려 주세요.');
         }

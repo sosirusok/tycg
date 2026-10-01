@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 export type Wallet = { bumpTokens: number | null; bumpMax: number | null; bumpRefillMin: number | null; nextRefillAt: number | null };
 export type Usage = Wallet & {
     perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; boardSlots: number | null; homeShelf: boolean | null };
-    rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null };
-    openPosts: number; postsToday: number; featured: { id: number; title: string; kind?: string }[];
+    rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null; freshPerDay?: number | null };
+    openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
 };
 
 // The wallet now, from the values the server sent: each refill interval that passed since
@@ -32,12 +32,16 @@ type BumpPost = { bumped_at?: number; created_at: number; bump_count?: number };
 // When the post can be bumped: the latest of the same-post gap end, the end of 새 글 우선 (a
 // bumped_at ahead of now) and, with an empty wallet, the next refill. 0 when it can be bumped now.
 export function bumpReadyAt(post: BumpPost, usage: Usage, now: number) {
-    const gap = (usage.perks.bumpGapMinutes || 0) * 60000;
-    const bumped = post.bumped_at || post.created_at;
-    const gapEnd = (post.bump_count ? bumped : post.created_at) + gap;
     const w = walletNow(usage, now);
     const refill = w && w.tokens < 1 ? w.nextRefillAt || 0 : 0;
-    const at = Math.max(gapEnd, bumped, refill);
+    const at = Math.max(postBlockedUntil(post, usage, now), refill);
+    return at > now ? at : 0;
+}
+// The post's own blockers only (the same-post gap and 새 글 우선), without the wallet. 0 when none.
+export function postBlockedUntil(post: BumpPost, usage: Usage, now: number) {
+    const gap = (usage.perks.bumpGapMinutes || 0) * 60000;
+    const bumped = post.bumped_at || post.created_at;
+    const at = Math.max((post.bump_count ? bumped : post.created_at) + gap, bumped);
     return at > now ? at : 0;
 }
 
@@ -54,7 +58,7 @@ export function useMinuteClock() {
     return [now, setNow] as const;
 }
 
-// '끌올 3/4 · 1:20 후 충전', or '끌올 4/4' when full. Nothing for the manager.
+// '끌올 3/5 · 1:20 후 충전', or '끌올 5/5' when full. Nothing for the manager.
 export function WalletGauge({ usage, now, className }: { usage: Usage; now: number; className?: string }) {
     const w = walletNow(usage, now);
     if (!w) return null;

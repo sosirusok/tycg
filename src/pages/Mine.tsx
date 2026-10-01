@@ -10,7 +10,7 @@ import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { TradeSheet } from '../components/TradeSheet';
-import { WalletGauge, bumpReadyAt, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
+import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 
 const TABS = [
     { id: 'posts', label: '내 글' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
@@ -46,11 +46,13 @@ const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).valu
 // the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
 // `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 거래완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
-    if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '' };
+    if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined };
     const ready = bumpReadyAt(post, usage, now);
-    if (ready) return { disabled: true, hint: `${kstClock(ready)}부터 가능` };
+    // With only the wallet empty, every row would repeat the same time: the gauge above the list says
+    // it once, and the button keeps the time as its title. A row with its own blocker shows the time.
+    if (ready) return { disabled: true, hint: postBlockedUntil(post, usage, now) ? `${kstClock(ready)}부터 가능` : '', title: `${kstClock(ready)}부터 가능` };
     const w = walletNow(usage, now);
-    return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '' };
+    return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined };
 }
 
 // A row of 내 글: photo, title, status, price, how many saved it and chatted, then 끌올 and 상태.
@@ -74,7 +76,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, onBump, onStatus }: {
             <span className="seller-stats">찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
         </div>
         <div className="seller-actions">
-            <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>
+            <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>
             <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="btn btn-line btn-sm seller-status" disabled={busy}>상태<ChevronDown size={15} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
@@ -177,12 +179,12 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={[...TABS]} /></div>
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
-                : tab === 'posts' ? (items.length ? <>
+                : tab === 'posts' ? <>
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
-                    <ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
+                    {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
                         closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} onBump={() => void bumpPost(p)} onStatus={s => void setStatus(p, s)} />)}</ul>
-                    {moreButton}
-                </> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />)
+                    {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
+                </>
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
                     : <EmptyState icon="file" title={tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={<Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
                 : tab === 'offers' ? (items.length ? <ul className="simple-list">{(items as Offer[]).map(o => <li key={o.id}>
