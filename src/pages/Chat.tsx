@@ -28,7 +28,7 @@ type ChatFilter = 'all' | 'applications';
 // A trade between the two members (WP23, WP43) with the 후기 each of them left, for the '거래 확인 요청' card.
 // author_id asked for it; it is confirmed once the other member answered '확인' (or left their 후기);
 // a pending one expires after 7 days; removed by the manager.
-type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; kind: string | null; price: number | null; author_id: string | null; confirmed: number; removed: number; reviews: Review[] };
+type Trade = { id: string; post_id: number; seller_id: string; buyer_id: string; created_at: number; title: string | null; kind: string | null; price: number | null; author_id: string | null; confirmed: number; removed: number; brokered?: number; reviews: Review[] };
 const ANSWER_MS = 7 * 86400000;
 
 const POST_MISMATCH = '게시글 작성자를 확인해 주세요.';
@@ -563,7 +563,7 @@ function ReviewCard({ trade, me, gone, asked, denied, onReport, onSaved }: { tra
         finally { setBusy(false); }
     }
     const note = (line: string) => <p className="small muted">{line}</p>;
-    const titleLine = <span className="muted small">{trade.title ? <Link to={'/posts/' + trade.post_id}>{info}</Link> : info}</span>;
+    const titleLine = <span className="muted small">{trade.title ? <Link to={'/posts/' + trade.post_id}>{info}</Link> : info}{!!trade.brokered && <> <span className="tag tag-line">운영진 중개</span></>}</span>;
     if (pending) return <div className="event-card review-card trade-confirm">
         <strong>거래 확인</strong>
         {titleLine}

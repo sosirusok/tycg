@@ -20,7 +20,8 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 // tradeCount, dealSum (거금), goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
 type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
-type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean };
+// brokered: the trade of the 후기 was brokered by the manager (운영진 중개, WP65).
+type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean; brokered?: number };
 type ProfileTab = 'active' | 'closed' | 'reviews';
 const PAGE_SIZE = 20;
 
@@ -168,7 +169,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
                         : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
-                    {/* '끌올 3/5 · 1:20 후 충전 · 무료 중개·가측 3/5' (WP65 adds the last item; at most 3). */}
+                    {/* '끌올 3/5 · 1:20 후 충전 · 무료 중개·가측 3/5 남음' (WP65 adds the last item; at most 3). */}
                     {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" extra={couponItem(usage)} />}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
                     {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
@@ -242,6 +243,7 @@ function ReviewList({ userId }: { userId: string }) {
             <div className="review-line">
                 <span className="review-verdict">{r.good ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}{reviewName(r.good)}</span>
                 {r.tags.map(t => <span key={t} className="tag">{t}</span>)}
+                {!!r.brokered && <span className="tag tag-line">운영진 중개</span>}
             </div>
             {r.text && <p className="review-text">{r.text}</p>}
         </li>)}</ul>

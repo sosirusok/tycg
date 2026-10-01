@@ -32,8 +32,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
     // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
     // 운영진 가측가 on the post for every grade (paid requests too).
-    ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회` : '무제한'; }],
-    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위`],
+    // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
+    ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
+    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
     ['운영진 가측가 표시', () => 'O'],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).

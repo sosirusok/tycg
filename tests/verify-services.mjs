@@ -104,7 +104,7 @@ equal((await plus('me/usage')).data.coupons, { limit: 1, used: 0, left: 1, reset
 equal((await plus('me/usage')).data.perks.serviceCoupons, 1, 'usage.perks.serviceCoupons is 1 for 플러스');
 const r1 = await appraise(plus, A.id, '급처 예정');
 equal([r1.status, r1.data.request.coupon, r1.data.request.status, r1.data.request.month, r1.data.coupons.left], [201, 1, 'open', month, 0], 'plus: the first 가측 신청 uses the coupon');
-equal(await lastLine(plus), `[가측 신청] ${A.body.title}\n무료 쿠폰 사용 (이번 달 1/1)\n메모: 급처 예정`, 'the request leaves a line in the manager chat');
+equal(await lastLine(plus), `[가측 신청] ${A.body.title}\n무료 쿠폰 사용 (이번 달 0/1 남음)\n메모: 급처 예정`, 'the request leaves a line in the manager chat');
 refused(await appraise(plus, A.id), 409, '진행 중인 가측 신청이 있습니다.', 'a second open 가측 신청 is refused');
 const managerChat = (await manager('chats')).data.chats.find(x => x.partner_id === plus.user.id);
 check(managerChat && managerChat.unread > 0, 'the manager has the request unread');
@@ -118,7 +118,7 @@ refused(await done(r1.data.request.id, 500), 400, '가측가', 'a price under 1,
 refused(await done(r1.data.request.id, 100000001), 400, '가측가', 'a price over 1억 is refused');
 equal((await done(r1.data.request.id, 120000)).status, 200, 'the manager completes the 가측 at 12만원');
 refused(await done(r1.data.request.id, 120000), 409, '이미 처리된 신청입니다.', 'a decided request cannot be decided again');
-equal(await lastLine(plus), '가측 완료: 12만원', 'the member gets 가측 완료: 12만원');
+equal(await lastLine(plus), `[가측 완료] ${A.body.title}\n12만원`, 'the member gets [가측 완료] with the post title and 12만원');
 const shown = (await guest(`posts/${A.id}`)).data.post;
 equal(shown.appraised?.price, 120000, 'the post shows the 운영진 가측가');
 check(!('appraised_price' in shown), 'others never see the raw columns');
@@ -131,7 +131,7 @@ const r2 = await appraise(plus, A.id);
 equal([r2.status, r2.data.request.coupon], [201, 0], 'plus: the second request this month is 유료 (coupon 0)');
 equal(await lastLine(plus), `[가측 신청] ${A.body.title}\n유료 (수수료는 매니저가 안내)`, 'the line says 유료');
 equal((await cancel(r2.data.request.id)).status, 200, 'the manager cancels the 유료 request');
-equal(await lastLine(plus), '신청 취소', 'a 유료 cancel line names no coupon');
+equal(await lastLine(plus), `[가측 신청 취소] ${A.body.title}`, 'a 유료 cancel line names the kind and post but no coupon');
 
 // Editing the post hides the 가측가 (the manager still sees the stored value).
 equal((await plus(`posts/${A.id}`, 'PUT', { ...A.body, body: '자동 검증 수정' })).status, 200, 'the member edits the appraised post');
@@ -145,8 +145,14 @@ equal((await coupons(plus)).left, 1, 'with the requests moved to last month the 
 const r3 = await appraise(plus, A.id);
 equal(r3.data.request.coupon, 1, 'the next request uses this month\'s coupon');
 equal((await cancel(r3.data.request.id)).status, 200, 'the manager cancels it');
-equal(await lastLine(plus), '신청 취소: 무료 쿠폰을 돌려드렸습니다.', 'the cancel line says the coupon came back');
+equal(await lastLine(plus), `[가측 신청 취소] ${A.body.title}\n무료 쿠폰을 돌려드렸습니다.`, 'the cancel line says the coupon came back');
 equal((await coupons(plus)).left, 1, 'the cancelled request gave its coupon back');
+// A coupon request of an earlier month gives nothing back to this month's count, and the line says nothing.
+const r3b = await appraise(plus, A.id);
+equal(r3b.data.request.coupon, 1, 'the next request uses the coupon again');
+sql(`UPDATE service_requests SET month='${lastMonth}' WHERE id=${r3b.data.request.id}`);
+equal((await cancel(r3b.data.request.id)).status, 200, 'the manager cancels last month\'s coupon request');
+equal(await lastLine(plus), `[가측 신청 취소] ${A.body.title}`, 'cancelling an earlier month\'s coupon request promises no coupon back');
 
 // 2. 프리미엄: 5 a month, then 유료.
 const prem = await register('r');
@@ -155,7 +161,7 @@ const B = await post(prem);
 for (let i = 1; i <= 5; i++) {
     const r = await appraise(prem, B.id);
     equal([r.status, r.data.request.coupon], [201, 1], `premium: request ${i} uses a coupon`);
-    if (i === 2) equal(await lastLine(prem), `[가측 신청] ${B.body.title}\n무료 쿠폰 사용 (이번 달 2/5)`, 'the line counts 2/5');
+    if (i === 2) equal(await lastLine(prem), `[가측 신청] ${B.body.title}\n무료 쿠폰 사용 (이번 달 3/5 남음)`, 'the line says 3/5 left');
     equal((await done(r.data.request.id, 100000 + i * 1000)).status, 200, `premium: request ${i} done`);
 }
 equal(await coupons(prem), { limit: 5, used: 5, left: 0, resetsAt: nextMonth }, 'premium: 5/5 used');
@@ -172,8 +178,8 @@ equal(await coupons(elite), { limit: null, used: 0, left: null, resetsAt: nextMo
 let eliteFree = 0;
 for (let i = 1; i <= 12; i++) {
     if (i === 11) {
-        refused(await appraise(elite, E.id), 429, '요청이 많습니다.', 'the 11th request in a day hits the rate limit');
-        sql(`DELETE FROM rate_limits WHERE key='service:${elite.user.id}'`);
+        refused(await appraise(elite, E.id), 429, '중개·가측 신청은 하루 10번까지입니다.', 'the 11th request in a day hits the daily ceiling');
+        sql(`UPDATE service_requests SET created_at=created_at-${DAY} WHERE user_id='${elite.user.id}'`);
     }
     const r = await appraise(elite, E.id);
     assert.equal(r.status, 201, `elite request ${i}: ${JSON.stringify(r.data)}`);
@@ -188,8 +194,13 @@ equal((await coupons(elite)).used, 12, 'elite: 12 used, still unlimited');
 const normal = await register('n');
 const N = await post(normal);
 equal(await coupons(normal), { limit: 0, used: 0, left: 0, resetsAt: nextMonth }, 'normal: no free requests');
-const rn = await appraise(normal, N.id);
+let rn = await appraise(normal, N.id);
 equal([rn.status, rn.data.request.coupon], [201, 0], 'normal: a request is 유료');
+// Refused attempts never count toward the 10 a day: 12 retries while one is open, then a real one.
+for (let i = 0; i < 12; i++) assert.equal((await appraise(normal, N.id)).status, 409, `normal retry ${i} is refused as already open`);
+equal((await cancel(rn.data.request.id)).status, 200, 'the manager cancels the open request');
+rn = await appraise(normal, N.id);
+equal([rn.status, rn.data.request.coupon], [201, 0], 'after 12 refused retries a real request is still taken');
 
 sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
 equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).status, 200, 'the trial window opens for one sign-up');
@@ -243,7 +254,7 @@ equal([rb.status, rb.data.request.kind, rb.data.request.partner_id, rb.data.requ
 equal(await lastLine(buyer), `[중개 신청] ${S1.body.title} · 상대 ${seller.user.nickname}\n유료 (수수료는 매니저가 안내)\n메모: 오늘 저녁`, 'the 중개 line names the partner');
 refused(await buyer('services', 'POST', { kind: 'broker', postId: S1.id, partnerId: seller.user.id }), 409, '진행 중인 중개 신청이 있습니다.', 'a second open 중개 신청 is refused');
 equal((await done(rb.data.request.id)).status, 200, 'the manager completes the 중개');
-equal(await lastLine(buyer), '중개 완료', 'the member gets 중개 완료');
+equal(await lastLine(buyer), `[중개 완료] ${S1.body.title}`, 'the member gets [중개 완료] with the post title');
 equal((await seller(`posts/${S1.id}/status`, 'PATCH', { status: 'closed', partnerId: buyer.user.id })).status, 200, 'the seller completes the post with the buyer');
 equal(sql(`SELECT brokered FROM trades WHERE post_id=${S1.id}`)[0]?.brokered, 1, 'the trade record written after 중개 완료 is brokered=1');
 const panel = (await manager(`manage/users/${seller.user.id}`)).data;
@@ -255,12 +266,45 @@ const chat2 = (await buyer('chats', 'POST', { userId: seller.user.id, postId: S2
 equal((await buyer(`chats/${chat2}/messages`, 'POST', { body: '이것도 중개로', postId: S2.id })).status, 201, 'the buyer asks about the second post');
 const rb2 = await seller('services', 'POST', { kind: 'broker', postId: S2.id, partnerId: buyer.user.id });
 equal([rb2.status, rb2.data.request.partner_id], [201, buyer.user.id], 'the seller (the author) asks for 중개 naming the buyer');
+refused(await buyer('services', 'POST', { kind: 'broker', postId: S2.id, partnerId: seller.user.id }), 409, '상대가 이미 중개를 신청했습니다.', 'the other side of the same trade cannot file a second 중개');
 equal((await seller(`posts/${S2.id}/status`, 'PATCH', { status: 'closed', partnerId: buyer.user.id })).status, 200, 'the seller completes the second post first');
 equal(sql(`SELECT brokered FROM trades WHERE post_id=${S2.id}`)[0]?.brokered, 0, 'the record is not brokered yet');
 refused(await seller('services', 'POST', { kind: 'appraise', postId: S2.id }), 409, '진행중인 글만', 'a completed post takes no new request');
 equal((await done(rb2.data.request.id)).status, 200, 'the manager completes the 중개 afterwards');
 equal(sql(`SELECT brokered FROM trades WHERE post_id=${S2.id}`)[0]?.brokered, 1, 'the existing record becomes brokered=1');
 equal(sql(`SELECT COUNT(*) AS n FROM service_requests WHERE status='open' AND user_id IN ('${seller.user.id}','${buyer.user.id}')`)[0].n, 0, 'no open requests remain for the pair');
+
+// A completed post keeps its 운영진 가측가 (completing is not an edit), and a 가측 finished after the
+// post was completed does not show on it.
+const S3 = await post(seller);
+const ra = await appraise(seller, S3.id);
+equal((await done(ra.data.request.id, 130000)).status, 200, 'the manager appraises the third post');
+equal((await seller(`posts/${S3.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'the seller completes it');
+equal((await guest(`posts/${S3.id}`)).data.post.appraised?.price, 130000, 'the completed post still shows its 가측가');
+const S4 = await post(seller);
+const ra2 = await appraise(seller, S4.id);
+equal((await seller(`posts/${S4.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'the seller completes the fourth post before the 가측');
+equal((await done(ra2.data.request.id, 140000)).status, 200, 'the manager finishes the 가측 afterwards');
+equal((await guest(`posts/${S4.id}`)).data.post.appraised, null, 'a 가측 finished after completion is not shown on the post');
+equal(await lastLine(seller), `[가측 완료] ${S4.body.title}\n14만원`, 'the member still gets the 가측가 in the chat');
+
+// Members see 운영진 중개 on the chat trade card data, and a 중개 needs no block between the two.
+const pairTrades = (await buyer(`chats/${chat}/messages`)).data;
+check(JSON.stringify(pairTrades).includes('"brokered":1'), 'the chat trade data carries brokered for members');
+const S5 = await post(seller);
+const chat5 = (await buyer('chats', 'POST', { userId: seller.user.id, postId: S5.id })).data.id;
+equal((await buyer(`chats/${chat5}/messages`, 'POST', { body: '차단 전 문의', postId: S5.id })).status, 201, 'the buyer asks about the fifth post');
+equal((await seller('blocks', 'POST', { userId: buyer.user.id, active: true })).status, 200, 'the seller blocks the buyer');
+refused(await buyer('services', 'POST', { kind: 'broker', postId: S5.id, partnerId: seller.user.id }), 409, '차단된 회원과는 중개를 신청할 수 없습니다.', 'a blocked pair cannot file 중개');
+equal((await seller('blocks', 'POST', { userId: buyer.user.id, active: false })).status, 200, 'the seller unblocks the buyer');
+
+// Withdrawal ends the member's open requests.
+const leaver = await register('w');
+const L = await post(leaver);
+const rl = await appraise(leaver, L.id);
+equal(rl.status, 201, 'the leaver files a 가측 신청');
+equal((await leaver('auth/withdraw', 'POST', { password })).status, 200, 'the leaver withdraws');
+equal(sql(`SELECT status FROM service_requests WHERE id=${rl.data.request.id}`)[0]?.status, 'cancelled', 'withdrawal cancels the open request');
 
 // A decided request stays decided, even through SQL (trigger).
 let aborted = false;

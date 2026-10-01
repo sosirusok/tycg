@@ -175,8 +175,8 @@ export function nextKstMonthStart(t: number) {
     const d = new Date(t + KST);
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - KST;
 }
-// Handling order (1순위 first) for 중개·가측 requests and member reports: 엘리트·관리자 1, 프리미엄 2,
-// 플러스 3, 일반 and the 플러스 체험 4.
+// Handling order (1순위 first) for 중개·가측 requests: 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the
+// 플러스 체험 4. The report ordering (WP60) is meant to reuse this helper when it ships.
 export function gradePriority(grade: string | null | undefined, trial?: boolean | null) {
     if (grade === 'elite' || grade === 'admin') return 1;
     if (grade === 'premium') return 2;

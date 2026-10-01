@@ -183,6 +183,7 @@
 .service-post { margin: 0; color: var(--ink); font-size: var(--fs-15); line-height: 1.5; overflow-wrap: anywhere; }
 .service-coupon { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: var(--fs-14); }
 .service-coupon b { font-weight: 600; }
+.service-chat { justify-self: start; margin-top: 4px; color: var(--brand); font-size: var(--fs-14); }
 .owner-hint { color: var(--ink-3); font-size: var(--fs-13); }
 .promo-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .promo-row .switch { color: var(--ink); font-weight: 600; }
@@ -526,7 +527,7 @@
 .simple-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
-.report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 /* A handled row is grayed by its text color, not opacity, so its check marks never turn into a pale brand. */
 .simple-list li.is-done :is(strong, .small, .muted, .nick) { color: var(--ink-3); }
 .simple-list strong, .strong-link { color: var(--ink); font-weight: 700; }

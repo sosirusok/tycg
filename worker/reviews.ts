@@ -237,7 +237,8 @@ async function listReviews(userId: string, url: URL) {
     const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('page'))) || 1, 1), 500);
     const shown = `EXISTS(SELECT 1 FROM users t WHERE t.id=r.target_id AND t.deleted_at IS NULL) AND ${liveReview('r')}`;
     const [rows, count] = await db().batch([
-        db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at,a.nickname,a.role,a.deleted_at,${memberColumns('a')}
+        db().prepare(`SELECT r.id,r.trade_id,r.author_id,r.target_id,r.good,r.tags,r.text,r.created_at,a.nickname,a.role,a.deleted_at,${memberColumns('a')},
+            COALESCE((SELECT t.brokered FROM trades t WHERE t.id=r.trade_id),0) AS brokered
             FROM reviews r LEFT JOIN users a ON a.id=r.author_id WHERE r.target_id=? AND ${shown} ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?`).bind(userId, PAGE_SIZE, (page - 1) * PAGE_SIZE),
         db().prepare(`SELECT COUNT(*) AS n FROM reviews r WHERE r.target_id=? AND ${shown}`).bind(userId),
     ]);

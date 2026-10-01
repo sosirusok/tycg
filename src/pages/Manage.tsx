@@ -82,7 +82,7 @@ function Applications({ onChange }: { onChange: () => void }) {
 }
 
 // 중개·가측 신청 (WP65): open requests by grade priority (1순위 first), then oldest first.
-type ServiceRow = { id: number; kind: ServiceKind; user_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; post_id: number | null; post_title: string | null;
+type ServiceRow = { id: number; kind: ServiceKind; user_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; post_id: number | null; post_title: string | null; post_status: string | null;
     partner_id: string | null; partner_nickname: string | null; coupon: number; status: string; price: number | null; note: string; created_at: number; priority: number; conversation_id: string | null };
 function Services({ onChange }: { onChange: () => void }) {
     const [rows, setRows] = useState<ServiceRow[] | null>(null), [member, setMember] = useState<string | null>(null), [busy, setBusy] = useState(0);
@@ -106,11 +106,12 @@ function Services({ onChange }: { onChange: () => void }) {
         {rows.length ? <ul className="simple-list">{rows.map(r => <li key={r.id}>
             <span className="grow">
                 <strong>{r.priority}순위 · {SERVICE_NAMES[r.kind]} 신청</strong>
-                <span className="small">{r.post_id ? <Link to={'/posts/' + r.post_id}>{r.post_title || '글 ' + r.post_id}</Link> : '삭제된 글'}{r.partner_nickname && <> · 상대 {r.partner_id ? <Link to={'/profile/' + r.partner_id}>{r.partner_nickname}</Link> : r.partner_nickname}</>}{r.note && <> · {r.note}</>}</span>
+                <span className="small">{r.post_id && r.post_title ? <Link to={'/posts/' + r.post_id}>{r.post_title}</Link> : '삭제된 글'}{r.post_title && r.post_status === 'closed' && <span className="muted"> (거래완료)</span>}{r.partner_nickname && <> · 상대 {r.partner_id ? <Link to={'/profile/' + r.partner_id}>{r.partner_nickname}</Link> : r.partner_nickname}</>}</span>
+                {r.note && <span className="muted small">메모: {r.note}</span>}
                 <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(r.user_id)}><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} /></button><span className="muted">{r.grade_trial && '플러스 체험 · '}{r.coupon ? '무료 쿠폰' : '유료'} · {relativeTime(r.created_at)}</span></span>
             </span>
             <span className="report-actions">
-                {r.conversation_id && <Link to={'/chat/' + r.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
+                {r.conversation_id && <Link to={'/chat/' + r.conversation_id} className="btn btn-line btn-sm">채팅</Link>}
                 <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => r.kind === 'appraise' ? (setPrice(''), setAppraising(r)) : void decide(r, 'done')}>완료</button>
                 <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => setCancelling(r)}>취소</button>
             </span>

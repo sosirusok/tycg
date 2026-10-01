@@ -136,6 +136,8 @@ export function ApplyModal() {
                         <div className="grade-row-name">
                             <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
                             {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
+                            {/* The 체험 has no free 중개·가측 (WP65), though the 플러스 row lists them. */}
+                            {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">무료 중개·가측은 유료 플러스부터</span>}
                         </div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {
