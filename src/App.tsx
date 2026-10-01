@@ -56,8 +56,8 @@ function Shell() {
     if (page === 'trade') rememberBoard(params);
     const lastKind = lastBoard('kind');
     const tradeHref = (lastKind && lastBoard(lastKind)) || '/trade?kind=sell';
-    // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, chat room).
-    const hideBottomNav = page === 'write' || page === 'edit' || (page === 'chat' && !!parts[1]);
+    // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, post, chat room).
+    const hideBottomNav = page === 'write' || page === 'edit' || page === 'posts' || (page === 'chat' && !!parts[1]);
     useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
 
     // Tab title per screen. A post and a profile add their title or nickname once loaded.
@@ -146,7 +146,8 @@ function Shell() {
                     : <NotFound />}
             </Suspense>
         </main>
-        {page !== 'chat' && <footer className="footer">
+        {/* On phones a post ends at its fixed bar, so the footer is left out there (pages.css). */}
+        {page !== 'chat' && <footer className={'footer' + (page === 'posts' ? ' footer-post' : '')}>
             <div className="container footer-inner">
                 <div><strong>좀비고 거래소</strong>게임사와 무관한 유저 거래 커뮤니티입니다. 거래 책임은 거래 당사자에게 있습니다.</div>
                 <div className="footer-links"><Link to="/guide">공지</Link><button type="button" onClick={() => openApply()}>인증/등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
