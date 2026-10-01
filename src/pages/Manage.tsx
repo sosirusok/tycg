@@ -23,7 +23,7 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
     const tab = (['applications', 'services', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; usage?: { relistsYesterday: number } } | null>(null);
+    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
@@ -291,7 +291,7 @@ const sizeText = (b: number) => b >= GB ? `${(b / GB).toFixed(1).replace(/\.0$/,
 
 // 사용량 (WP44 starts it; WP45 adds the database and the photo stores; auto-bump lines join it later).
 // In KV and D1 modes it lists the two owner steps that turn on R2 (the deploy creates the bucket).
-function UsageCard({ usage }: { usage?: { relistsYesterday: number } }) {
+function UsageCard({ usage }: { usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } }) {
     const [store, setStore] = useState<StorageInfo | null>(null), [limitGB, setLimitGB] = useState(''), [busy, setBusy] = useState(false);
     useEffect(() => { api<StorageInfo>('manage/storage').then(d => { setStore(d); setLimitGB(String(Math.round(d.r2Limit / GB))); }).catch(() => {}); }, []);
     async function saveLimit(e: FormEvent) {
@@ -316,6 +316,7 @@ function UsageCard({ usage }: { usage?: { relistsYesterday: number } }) {
     return <section className="card card-pad usage-admin">
         <h2 className="card-title">사용량</h2>
         {usage && <p>어제 다시 올린 글 {usage.relistsYesterday.toLocaleString('ko-KR')}</p>}
+        {usage?.autoYesterday && <p>자동 끌올 어제 {usage.autoYesterday.done.toLocaleString('ko-KR')}번 · 지연 {usage.autoYesterday.delayed.toLocaleString('ko-KR')}번</p>}
         {store && <>
             <p>DB {sizeText(store.dbBytes)}/{sizeText(store.dbLimit)}</p>
             {photo && <p>사진 {sizeText(photo.used)}/{sizeText(photo.limit)} <span className="muted small">{store.mode === 'r2' ? 'R2' : store.mode === 'kv' ? 'KV' : 'D1'}</span></p>}
@@ -362,7 +363,7 @@ function LinkBlockCard() {
     </form>;
 }
 
-function Settings({ usage }: { usage?: { relistsYesterday: number } }) {
+function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } }) {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
     useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); }, [config]);

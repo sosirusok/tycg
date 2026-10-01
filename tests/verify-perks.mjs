@@ -257,7 +257,7 @@ await grant(direct, 'premium');
 equal((await wallet(direct)).tokens, 10, 'a grant from the member page fills the wallet too (10/10)');
 const directChat = (await direct('chats')).data.chats.find(x => x.partner_id === 'manager');
 const directLine = directChat && (await direct(`chats/${directChat.id}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
-equal(directLine, ['프리미엄 등급 지급 완료 (영구)\n끌올이 10개로 충전되었습니다.'], 'a direct grant says so in the manager chat too');
+equal(directLine, ['프리미엄 등급 지급 완료 (영구)\n끌올이 10개로 충전되었습니다.\n자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.'], 'a direct grant says so in the manager chat too');
 
 // Race: two parallel bumps on two posts with 1 in the wallet: exactly one passes.
 const racer2 = await register('wrace');

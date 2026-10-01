@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, applicationTitle, type Application } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, AUTO_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
-import { Link, navigate } from '../lib/router';
+import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
+import { remindText, setBumpRemind } from '../components/AutoSheet';
+import { Auto } from './Auto';
 
+// '자동화' (WP52) shows for 플러스 and up (the 체험 too) and the manager.
 const TABS = [
-    { id: 'posts', label: '내 글' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
+    { id: 'posts', label: '내 글' }, { id: 'auto', label: '자동화' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
     { id: 'recent', label: '최근 본 글' }, { id: 'applications', label: '신청 내역' }, { id: 'blocks', label: '차단' },
 ] as const;
 type TabId = typeof TABS[number]['id'];
@@ -27,7 +30,8 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
 // traded: a completed post that holds a trade record. askable: '거래 기록 요청' can still be sent for it
 // (not hidden, no live record, under the post's 3 requests).
-type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean };
+// auto: in the 자동 끌올 list (the '자동' chip); remind_at: a pending '끌올 가능' 알림 (WP52).
+type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean; auto?: boolean; remind_at?: number | null };
 // 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
@@ -47,19 +51,22 @@ const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).valu
 // the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
 // `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
-    if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined };
+    if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined, remind: false };
     const ready = bumpReadyAt(post, usage, now);
+    // A pending '끌올 가능' 알림 (WP52): '15:40 알림 예정'.
+    if (ready && post.remind_at && post.remind_at > now) return { disabled: true, hint: remindText(post.remind_at), title: remindText(post.remind_at), remind: false };
     // With only the wallet empty, every row would repeat the same time: the gauge above the list says
     // it once, and the button keeps the time as its title. A row with its own blocker shows the time.
-    if (ready) return { disabled: true, hint: postBlockedUntil(post, usage, now) ? `${kstClock(ready)}부터 가능` : '', title: `${kstClock(ready)}부터 가능` };
+    // A waiting button sets the '끌올 가능' 알림 (WP52).
+    if (ready) return { disabled: false, hint: postBlockedUntil(post, usage, now) ? `${kstClock(ready)}부터 가능` : '', title: `${kstClock(ready)}부터 가능`, remind: true };
     const w = walletNow(usage, now);
-    return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined };
+    return { disabled: false, hint: w ? `${w.tokens}/${w.max}` : '', title: undefined, remind: false };
 }
 
 // A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
 // 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
-function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onComplete }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onComplete: () => void;
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onRemind: () => void; onComplete: () => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
@@ -74,12 +81,13 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onCom
             <div className="seller-meta">
                 {closed && <span className="status status-closed">{closedLabel(post.kind)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
+                {post.auto && !closed && <span className="tag tag-auto">자동</span>}
                 <b>{price}</b>
             </div>
             <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
         </div>
         <div className="seller-actions">
-            {!closed && <button type="button" className="btn btn-line btn-sm seller-bump" disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
+            {!closed && <button type="button" className={'btn btn-line btn-sm seller-bump' + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={bump.remind ? onRemind : onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
             {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
             {recordable && <button type="button" className="btn btn-line btn-sm seller-status" onClick={onComplete}>거래 기록 요청</button>}
         </div>
@@ -88,7 +96,13 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onCom
 
 export default function Mine({ tab: raw }: { tab?: string }) {
     const { me, ready, requireLogin, openApply } = useApp();
-    const tab: TabId = TABS.some(t => t.id === raw) ? raw as TabId : 'posts';
+    const { params } = useLocation();
+    // 자동화 is for 플러스 and up (the 체험 too) and the manager.
+    const autoTab = !!me && (me.role === 'manager' || gradeInfo(me.grade).rank >= 1);
+    const tabs = TABS.filter(t => t.id !== 'auto' || autoTab);
+    const tab: TabId = tabs.some(t => t.id === raw) ? raw as TabId : 'posts';
+    // 내 글 ?stale=1: the listed posts untouched for 7 days (the weekly 알림), with '모두 계속'.
+    const stale = tab === 'posts' && params.get('stale') === '1';
     const [rev, setRev] = useState(0);
     const [data, setData] = useState<ListState | null>(null);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -99,11 +113,12 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
-    const pagePath = (t: TabId, n: number) => 'posts?' + new URLSearchParams({ ...(t === 'posts' ? { author: me!.id, counts: '1' } : { scope: t }), size: String(PAGE_SIZE), page: String(n) });
+    const pagePath = (t: TabId, n: number) => 'posts?' + new URLSearchParams({ ...(t === 'posts' ? { author: me!.id, counts: '1', ...stale ? { stale: '1' } : {} } : { scope: t }), size: String(PAGE_SIZE), page: String(n) });
     useEffect(() => {
         if (!me) return;
         let alive = true;
         const pages = isPostTab(tab) && loaded.current.tab === tab ? loaded.current.page : 1;
+        if (tab === 'auto') { setData({ tab, items: [], total: 0, page: 1 }); return () => { alive = false; }; }
         const load: Promise<Omit<ListState, 'tab'>> = isPostTab(tab)
             ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(tab, i + 1))))
                 .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages, capped: !!rs[rs.length - 1].capped, full: rs[rs.length - 1].posts.length === PAGE_SIZE }))
@@ -111,7 +126,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         load.then(r => { if (alive) { loaded.current = { tab, page: r.page }; setData({ tab, ...r }); } })
             .catch(e => { if (alive) { toast.error(errorText(e)); loaded.current = { tab, page: 1 }; setData({ tab, items: [], total: 0, page: 1 }); } });
         return () => { alive = false; };
-    }, [tab, me?.id, rev]);
+    }, [tab, me?.id, rev, stale]);
     // 내 글 header (the 끌올 gauge '끌올 3/4 · 1:20 후 충전') and the 끌올 states of the rows.
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     useEffect(() => { if (me && tab === 'posts') void loadUsage(); }, [tab, me?.id, me?.grade]);
@@ -155,18 +170,31 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         } catch (e) { toast.error(errorText(e)); }
         finally { setBusy(null); void loadUsage(); }
     }
+    async function remind(post: OwnPost) {
+        const at = await setBumpRemind(post.id);
+        if (at) patchPost(post.id, { remind_at: at });
+    }
+    async function keepAll() {
+        try { await api('me/automation/continue', 'POST', {}); void navigate('/me/posts', { replace: true }); }
+        catch (e) { toast.error(errorText(e)); }
+    }
     const moreButton = data && data.tab === tab && isPostTab(tab) && (data.items.length < data.total || (data.capped && data.full))
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
     return <div className="container page">
         <h1 className="page-title">내 거래</h1>
-        <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={[...TABS]} /></div>
+        <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={tabs} /></div>
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
+                : tab === 'auto' ? <Auto />
                 : tab === 'posts' ? <>
+                    {stale && <div className="auto-stale mine-stale">
+                        <span>{AUTO_TEXT.staleCount(items.length)}</span>
+                        <button type="button" className="btn btn-line btn-sm" onClick={() => void keepAll()}>모두 계속</button>
+                    </div>}
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)}
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)}
                         onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>

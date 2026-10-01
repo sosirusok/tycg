@@ -196,8 +196,31 @@ export const TITLE_STYLE_NAMES: Record<TitleTier, string> = { 0: '회색', 1: '�
 // 링크 미리보기 (WP48): 플러스 and up (the 무료 체험 too) and the manager, per post (posts.link_preview).
 export const linkPreviewAllowed = (grade: string | null | undefined, role?: string | null) => titleTier(grade, role) >= 1;
 
-// 자동 끌올 (a later package) leaves this many 끌올 in the wallet for manual use.
+// 자동 끌올 (WP52) leaves this many 끌올 in the wallet for manual use: it runs only while 3 or more remain.
 export const AUTO_RESERVE = 2;
+// The benefits of a grade rank (0 일반 … 4 관리자); the tick reads ranks, not grade ids.
+export function perksOfRank(rank: number): Perks {
+    return PERKS[GRADES.find(g => g.rank === rank)?.id || 'normal'];
+}
+// 자동 끌올 wording (copy.md WP52). The status lines take the clock ('15:40') of the next run.
+export const AUTO_TEXT = {
+    off: '자동 끌올은 플러스부터 가능합니다.',
+    full: (n: number) => `자동 끌올은 글 ${n}개까지입니다.`,
+    sheet: (n: number) => `자동 끌올 ${n}/${n} · 뺄 글 선택`,
+    moved: '자동 끌올 글 변경 완료',
+    grant: '자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.',
+    running: (min: number, at: string) => `자동 끌올 ${gapText(min)}마다 1개 · 다음 ${at}`,
+    idle: '자동 끌올 쉬는 중 · 모든 글이 1페이지에 있습니다',
+    busy: (at: string) => `게시판이 붐벼 자동 끌올을 미뤘습니다. (${at} 예정)`,
+    reply: '답장하지 않은 채팅이 있어 자동 끌올을 멈췄습니다. 답장하면 다시 시작됩니다.',
+    away: (days: number) => `${days}일 동안 접속하지 않아 자동 끌올을 멈췄습니다. 접속하면 다시 시작됩니다.`,
+    stale: '7일 동안 변경이 없어 자동 끌올을 멈췄습니다.',
+    staleCount: (n: number) => `자동 끌올 글 ${n}개 확인 필요`,
+    trial: '체험 중 자동 끌올은 유료 등급 다음 순서입니다.',
+    ready: (title: string) => `‘${title}’ 글 끌올 가능`,
+    reserve: '자동 끌올은 한 번에 글 1개씩 · 2개는 직접 끌올용으로 남김',
+    capped: '자동 끌올은 게시판 활동량에 맞춰 제한됩니다.',
+};
 
 // '30분', '1시간', '1시간 30분'.
 export function gapText(min: number) {
@@ -235,12 +258,15 @@ export const TRIAL_ROWS: TrialRow[] = [
     { icon: 'megaphone', title: `끌올 ${PERKS.plus.bumpMax}개 · ${gapText(PERKS.plus.bumpRefillMinutes)}마다 충전`, text: `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다 끌올 (일반 ${gapText(PERKS.normal.bumpGapMinutes)})` },
     // 제목 강조 검정 (WP48), the 플러스 글자 꾸미기 with 글자색 (WP49) and 링크 미리보기 (WP48).
     { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
+    // 자동 끌올 (WP52): on from the first post, one post every autoEveryMinutes.
+    { icon: 'alarm-clock', title: `자동 끌올 글 ${PERKS.plus.autoBumpPosts}개`, text: `${gapText(PERKS.plus.autoEveryMinutes)}마다 1번 · 첫 글부터 바로 켜짐` },
 ];
 
 // 알림함 rows for the trial (WP50), written by the daily cleanup: one in the last 24 hours ('10월 9일
-// 14:32'), one after the end. Until WP52 keeps settings across grades, the reminder ends like the home
-// end band ('플러스는 입금 확인 후 매니저가 지급합니다.').
-export const trialAlertSoon = (when: string) => `플러스 무료 체험이 ${when}에 끝납니다. 플러스는 입금 확인 후 매니저가 지급합니다.`;
+// 14:32'), one after the end. The automation settings stay when the trial ends (WP52), and a 플러스
+// grant turns them on again.
+export const TRIAL_KEEPS = '설정은 그대로 남고, 플러스를 신청하면 바로 다시 켜집니다.';
+export const trialAlertSoon = (when: string) => `플러스 무료 체험이 ${when}에 끝납니다. ${TRIAL_KEEPS}`;
 export const TRIAL_ALERT_ENDED = '플러스 무료 체험이 끝났습니다.';
 
 const kstParts = (t: number) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronRight, Search, X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
-import { gradeInfo } from '../../shared/membership';
+import { TRIAL_KEEPS, gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
 import { useApp } from '../app/state';
@@ -66,7 +66,7 @@ function TrialEndBand() {
     return <section className="home-band" aria-label="플러스 무료 체험">
         <span className="home-band-text">
             <strong>플러스 무료 체험이 끝났습니다.</strong>
-            <span>플러스는 입금 확인 후 매니저가 지급합니다.</span>
+            <span>{TRIAL_KEEPS}</span>
         </span>
         <button type="button" className="btn btn-primary btn-sm home-band-cta" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>플러스 신청</button>
         <button type="button" className="home-band-x" aria-label="닫기" onClick={close}><X size={20} /></button>

@@ -5,8 +5,10 @@
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Daily cleanup of expired sessions and unused photos (03:17 KST).
-  "triggers": { "crons": ["17 18 * * *"] },
+  // Tick A every 10 minutes (자동 끌올, 09:00-02:00 KST), tick B 5 minutes later ('끌올 가능' 알림), and the
+  // daily cleanup of expired sessions and unused photos (03:17 KST). 3 of the account's 5 cron triggers:
+  // any other Worker on the same Cloudflare account may use at most 2.
+  "triggers": { "crons": ["*/10 * * * *", "5-59/10 * * * *", "17 18 * * *"] },
   "assets": {
     // The React app is a single-page app; unknown paths fall back to index.html.
     // Only /api/* requests invoke the Worker, so static files never cost CPU time.

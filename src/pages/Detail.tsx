@@ -17,12 +17,16 @@ import { ServiceSheet } from '../components/ServiceSheet';
 import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
+import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
+import { gradeInfo } from '../../shared/membership';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
-    author_created_at?: number; author_prev_nickname?: string };
+    author_created_at?: number; author_prev_nickname?: string;
+    // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
+    auto?: { bump: boolean; remindAt: number | null } };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -121,6 +125,8 @@ export function Detail({ id }: { id: string }) {
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
     // 가측 신청 (WP65) from the owner's 더보기 menu.
     const [appraise, setAppraise] = useState(false);
+    // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
+    const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
     const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
@@ -173,12 +179,17 @@ export function Detail({ id }: { id: string }) {
     // 가측 신청 (WP65): an own open 판매·교환 account post; the manager performs it and needs none.
     const canAppraise = mine && openNow && !manager && !suspended && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
 
-    // 끌올: the wallet ('3/4') or '15:40부터 가능'.
+    // 끌올: the wallet ('3/4') or '15:40부터 가능'. A waiting button sets the '끌올 가능' 알림 ('15:40 알림
+    // 예정', WP52).
     const wallet = usage && walletNow(usage, now);
-    const bump = !usage ? { disabled: true, hint: '' }
-        : !openNow || lostProxy || suspended ? { disabled: true, hint: '' }
-        : nextBump > now ? { disabled: true, hint: `${kstClock(nextBump)}부터 가능` }
-        : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '' };
+    const remindAt = post.auto?.remindAt && post.auto.remindAt > now ? post.auto.remindAt : 0;
+    const bump = !usage ? { disabled: true, hint: '', remind: false }
+        : !openNow || lostProxy || suspended ? { disabled: true, hint: '', remind: false }
+        : nextBump > now && remindAt ? { disabled: true, hint: remindText(remindAt), remind: false }
+        : nextBump > now ? { disabled: false, hint: `${kstClock(nextBump)}부터 가능`, remind: true }
+        : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
+    // 자동 끌올 (WP52): 플러스 and up (the 체험 too) and the manager, on an open post.
+    const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
     const slots = usage?.perks.boardSlots || 0, slotsUsed = usage?.featured.length || 0;
 
     async function startChat() {
@@ -200,6 +211,13 @@ export function Detail({ id }: { id: string }) {
     }
     async function bumpNow() {
         if (busy || bump.disabled) return;
+        if (bump.remind) {
+            setBusy(true);
+            const at = await setBumpRemind(post!.id);
+            if (at) setPost({ ...post!, auto: { bump: !!post!.auto?.bump, remindAt: at } });
+            setBusy(false);
+            return;
+        }
         setBusy(true);
         try { await api(`posts/${post!.id}/bump`, 'POST', {}); toast('끌올 완료'); await Promise.all([load(), loadUsage()]); setNow(Date.now()); }
         catch (e) { toast.error(errorText(e)); void loadUsage(); }
@@ -240,7 +258,7 @@ export function Detail({ id }: { id: string }) {
         ];
     } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : genericBlocks(post, post.category);
 
-    const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls} disabled={bump.disabled || busy} onClick={bumpNow}>
+    const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} onClick={bumpNow}>
         <span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>;
 
     return <div className="container page detail-page">
@@ -314,6 +332,11 @@ export function Detail({ id }: { id: string }) {
                         <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
                     </div>
                     : <Link to="/guide#grade" className="promo-up">게시판 상단 노출은 프리미엄부터</Link>)}
+                {autoAllowed && openNow && <div className="promo-row">
+                    <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
+                    <Link to="/me/auto" className="owner-hint">설정</Link>
+                </div>}
+                {autoSheet}
                 {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
                 <AuthorBox post={post} own={mine} className="author-box-side" />
                 <p className="safety">입금 전 <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트</a>로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>

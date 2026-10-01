@@ -229,6 +229,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 ...post ? [db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?")
                     .bind(p[1], u.id, post.title, ref, now, p[1], ref)] : [],
                 ...messageStatements(p[1], u.id, text, 'text', null, images as string[], now),
+                // The author writing about their own open post keeps it in 자동 끌올 (WP52: touched_at).
+                db().prepare(`UPDATE posts SET touched_at=? WHERE id=${aboutPost('?')} AND author_id=? AND status!='closed'`).bind(now, p[1], u.id),
             ]);
             return json({ id: r[post ? 1 : 0].meta.last_row_id }, 201);
         }

@@ -17,6 +17,7 @@ import { homeHandler } from './home';
 import { servicesHandler } from './services';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 import { notificationsHandler } from './notifications';
+import { automationHandler } from './automation';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -308,6 +309,8 @@ async function route(req: Request): Promise<Response> {
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
             case 'me': {
                 if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
+                // 자동화 tab (WP52).
+                if (p[1] === 'automation') { const a = await automationHandler(req, p); if (a) return a; break; }
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;

@@ -13,6 +13,8 @@ type Page = { alerts: Alert[]; hasMore: boolean; page: number };
 
 const ICONS: Record<string, string> = {
     fav_price: 'money-with-wings', fav_closed: 'handshake', application: 'clipboard', grade_end: 'alarm-clock', hidden: 'warning', same_listing: 'police-car-light',
+    // 자동 끌올 (WP52).
+    auto_paused: 'warning', auto_stale: 'memo', bump_ready: 'megaphone',
 };
 
 export default function Alerts() {
@@ -60,6 +62,10 @@ export default function Alerts() {
         }
         if (a.type === 'application') void navigate('/me/applications');
         else if (a.type === 'grade_end') openApply(me!.grade_trial || me!.grade === 'normal' ? { kind: 'grade', target: 'plus' } : undefined);
+        // 자동 끌올 (WP52): a reply pause opens 채팅, the other pause the 자동화 tab, the weekly check 내 글 with
+        // the posts to look at ('모두 계속').
+        else if (a.type === 'auto_paused') void navigate(a.ref === 'reply' ? '/chat' : '/me/auto');
+        else if (a.type === 'auto_stale') void navigate('/me/posts?stale=1');
         else if (a.post) void navigate('/posts/' + a.post.id);
     }
 

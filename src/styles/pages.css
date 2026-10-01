@@ -712,3 +712,39 @@
   .style-tools-wrap { order: 3; border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
   .style-pop { top: auto; bottom: calc(100% + 6px); }
 }
+
+/* 자동 끌올 (WP52): 내 거래 › 자동화, the '자동' chip, the waiting 끌올 button and the 뺄 글 선택 sheet. */
+.auto-card { display: grid; gap: 12px; max-width: 720px; }
+.auto-card .card-title { margin-bottom: 0; }
+.auto-wallet { margin: 0; }
+.auto-status { margin: 0; color: var(--ink-2); font-size: var(--fs-14); line-height: 1.55; overflow-wrap: anywhere; }
+.auto-status.is-paused { color: var(--ink); font-weight: 600; }
+.auto-link { color: var(--brand); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.auto-note { margin: 0; color: var(--ink-3); font-size: var(--fs-13); }
+.auto-switches { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.auto-switches .switch { color: var(--ink); font-weight: 600; }
+.auto-stale { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
+.auto-stale .btn { flex: none; }
+.mine-stale { margin-bottom: 12px; }
+.auto-list-title { margin: 4px 0 0; color: var(--ink-2); font-size: var(--fs-14); font-weight: 700; }
+.auto-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.auto-list li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.auto-thumb { display: grid; place-items: center; width: 40px; height: 40px; overflow: hidden; border-radius: var(--r-8); background: var(--fill); }
+.auto-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.auto-main { display: grid; gap: 2px; min-width: 0; }
+.auto-title { overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.auto-list li:not(.is-on) .auto-title { color: var(--ink-2); font-weight: 500; }
+.auto-sub { color: var(--ink-3); font-size: var(--fs-13); }
+.auto-post-switch { padding: 8px 0 8px 8px; }
+.auto-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-14); }
+.auto-hints { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--ink-3); font-size: var(--fs-13); }
+.tag.tag-auto { height: 20px; padding: 0 6px; border: 1px solid var(--brand); background: var(--white); color: var(--brand); font-weight: 600; }
+.seller-bump.is-waiting, .owner-bump .btn.is-waiting, .owner-bar-bump.is-waiting { color: var(--ink-2); background: var(--fill-2); }
+.auto-swap { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.auto-swap-row { width: 100%; border: 0; text-align: left; cursor: pointer; font: inherit; }
+.auto-swap-row:hover { outline: 1px solid var(--line-2); }
+.auto-swap-row .post-strip-text { flex: 1; }
+.auto-swap-out { flex: none; color: var(--brand); font-size: var(--fs-14); font-weight: 600; }
+@media (max-width: 640px) {
+  .auto-stale { align-items: flex-start; flex-direction: column; }
+}

@@ -3,7 +3,8 @@ import { kstDayStart } from '../shared/membership';
 
 // 알림함 (WP50). Every 알림 is written by an INSERT … SELECT inside the batch of the event that causes it,
 // so it commits (or not) with that event and costs no extra D1 call.
-export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing';
+// auto_paused, auto_stale and bump_ready come from the 자동 끌올 ticks (WP52).
+export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing' | 'auto_paused' | 'auto_stale' | 'bump_ready';
 
 // At most this many 알림 per member per KST day; the check reads at most this many index entries.
 export const NOTIFY_PER_DAY = 100;

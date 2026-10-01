@@ -7,6 +7,7 @@ import { PRINT_DAYS } from './prints';
 import { printFill, type UnfilledPrint } from '../shared/listing';
 import { gradeInfo, trialAlertSoon, TRIAL_ALERT_ENDED } from '../shared/membership';
 import { notifyStatement } from './notifications';
+import { autoDailyStatements } from './automation';
 
 const DAY = 86400000;
 // Photos removed per daily run (one SELECT, one DELETE and one R2 call).
@@ -166,6 +167,8 @@ export async function cleanup(now = Date.now()) {
                     GROUP BY user_id HAVING COUNT(*)>? LIMIT ${ALERTS_TRIM_MEMBERS})) WHERE rn>?
             LIMIT ?)`).bind(now - 60 * DAY, now - 14 * DAY, now - 3 * DAY, ALERTS_KEPT, ALERTS_KEPT, ALERTS_DELETES_PER_RUN),
         ...trialAlertStatements(now),
+        // 자동 끌올 (WP52): yesterday's window counts for the manager, and the fair-share counts reset.
+        ...autoDailyStatements(now),
     ];
     const r = await db().batch([...house, ...names.map(n => reads[n])]);
     const got = <T>(n: keyof typeof reads) => r[house.length + names.indexOf(n)].results as T[];

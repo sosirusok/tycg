@@ -11,6 +11,7 @@ import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
 import { favoritesNotify, notifyStatement } from './notifications';
+import { newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -44,6 +45,8 @@ const THUMB_MAX = 6000;
 export const postSelect = `SELECT p.*,u.nickname,u.role,u.deleted_at AS author_deleted_at,${memberColumns('u', 'author_')} FROM posts p JOIN users u ON u.id=p.author_id`;
 
 export const parse = (s: string, fallback: any) => { try { return JSON.parse(s); } catch { return fallback; } };
+// 내 글: the list row with its 자동 끌올 state (WP52).
+const ownSelect = postSelect.replace(' FROM posts p ', ',(SELECT json_array(pa.bump,pa.bump_remind) FROM post_auto pa WHERE pa.post_id=p.id) AS own_auto FROM posts p ');
 
 export async function latestSeason() {
     const v = Number(await setting('latest_season'));
@@ -588,6 +591,12 @@ async function listPosts(req: Request, url: URL) {
         where.push(`p.id IN(SELECT post_id FROM ${scope === 'favorites' ? 'favorites' : 'history'} WHERE user_id=?)`);
         values.push(u.id);
     }
+    // 내 글 'stale=1' (the weekly '자동 끌올 글 12개 확인 필요' 알림, WP52): the author's listed open posts
+    // untouched for 7 days.
+    if (u && author === u.id && s.get('stale') === '1') {
+        where.push("p.status!='closed' AND COALESCE(p.touched_at,p.updated_at)<=? AND p.id IN (SELECT post_id FROM post_auto WHERE user_id=? AND bump=1)");
+        values.push(now - 7 * DAY, u.id);
+    }
     // The 30-day window for boards (see LIST_WINDOW); old=1 is '오래된 글 보기'.
     if (!q && !author && !scope && s.get('old') !== '1') { where.push('p.bumped_at>?'); values.push(now - LIST_WINDOW); }
     // 최신순 follows 끌올; created_at stays the time the post was written.
@@ -597,6 +606,8 @@ async function listPosts(req: Request, url: URL) {
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
     const cte = featuredCte(now);
+    // 내 글 (counts=1) also reads each row's 자동 끌올 state (WP52), one primary-key lookup per row.
+    const ownCounts = !!u && author === u.id && !scope && s.get('counts') === '1';
     // Home '추천 매물' (GET /api/home has it too): featured posts of 엘리트 and above across every tab,
     // with the same hidden, block and 대리 인증 rules as the boards.
     if (s.get('featured') === 'home') {
@@ -615,7 +626,7 @@ async function listPosts(req: Request, url: URL) {
     const r = (await db().batch([
         ...backfill,
         db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
-        db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
+        db().prepare((ownCounts ? ownSelect : postSelect) + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
         ...withFeatured ? [db().prepare(cte.sql + featuredSelect + clause + ' ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
     ])).slice(backfill.length);
@@ -625,7 +636,7 @@ async function listPosts(req: Request, url: URL) {
     if (scope === 'favorites') await addPriceDrops(posts, u!.id);
     // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
     // post and started a chat from it. The profile lists do not ask, so they skip these reads.
-    if (u && author === u.id && !scope && s.get('counts') === '1') await addOwnCounts(posts);
+    if (ownCounts) await addOwnCounts(posts);
     const total = Number((r[0].results[0] as any).count) || 0;
     return json({ posts, total, page, size, ...total > COUNT_CAP ? { capped: true } : {}, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
 }
@@ -675,6 +686,11 @@ async function addOwnCounts(posts: any[]) {
     for (const p of posts) {
         p.fav_count = count(favs.results, p.id);
         p.chat_count = count(chats.results, p.id);
+        // The '자동' chip and a pending '끌올 가능' 알림 (WP52), read with the list (own_auto: [bump, bump_remind]).
+        const auto = parse(p.own_auto ?? 'null', null) as [number, number] | null;
+        delete p.own_auto;
+        p.auto = !!auto?.[0];
+        p.remind_at = auto?.[1] || null;
         if (p.status === 'closed') { p.traded = traded.has(p.id); p.askable = !p.hidden && !p.traded && !spent.has(p.id); }
     }
 }
@@ -691,9 +707,11 @@ async function bumpPost(u: User, post: any) {
     const capped = Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
     const moved = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND bumped_at=?)';
     const r = await db().batch([
-        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1 WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,touched_at=? WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?
             AND (CASE WHEN bump_count=0 THEN created_at ELSE bumped_at END)<=?${capped ? ` AND (SELECT ${WALLET_NOW} FROM users WHERE id=?)>=1` : ''}`)
-            .bind(now, post.id, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+            .bind(now, now, post.id, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+        // A pending '끌올 가능' 알림 is no longer needed.
+        db().prepare(`UPDATE post_auto SET bump_remind=0 WHERE post_id=? AND bump_remind>0 AND ${moved}`).bind(post.id, post.id, now),
         ...capped ? [db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-1,
             bump_at=CASE WHEN bump_tokens+CAST((?-bump_at)/? AS INTEGER)>=? THEN ? ELSE bump_at+CAST((?-bump_at)/? AS INTEGER)*? END
             WHERE id=? AND ${moved}`).bind(M, now, R, now, R, M, now, now, R, R, u.id, post.id, now)] : [],
@@ -777,7 +795,7 @@ async function patchPrice(req: Request, u: User, post: any) {
     await db().batch([
         ...hasPrice ? priceHistoryStatements(post.id, 'sell', price, now) : [],
         ...hasPrice && price !== null ? [priceDropNotify(post.id, post.author_id, post.title, price, now)] : [],
-        db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=? WHERE id=? AND kind='sell'`).bind(...args, now, post.id),
+        db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=?,touched_at=? WHERE id=? AND kind='sell'`).bind(...args, now, now, post.id),
     ]);
     return json({ post: (await decorate([await rawPost(post.id)], u, true))[0] });
 }
@@ -860,6 +878,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         }
         const out = (await decorate([post], u, true))[0];
         out.link_cards = await shownCards(req, post, out.author_grade, out.role);
+        // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
+        if (u && u.id === post.author_id) out.auto = await postAutoOf(post.id);
         return json({ post: out });
     }
     const u = await requireUser(req);
@@ -889,6 +909,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
     if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);
     if (p[2] === 'status' && method === 'PATCH') return completePost(req, u, existing);
+    if (p[2] === 'auto' && method === 'PUT') return postAutoHandler(req, u, existing);
     if (!['POST', 'PUT'].includes(method) || p[2]) fail(405, '지원하지 않는 요청입니다.');
     if (method === 'POST' && p[1] || method === 'PUT' && !existing) fail(400, '게시글 번호를 확인해 주세요.');
     // A completed post is read-only (WP43): delete, 다시 올리기 and 복사해서 새 글 stay.
@@ -998,9 +1019,9 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const spent = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='bump' AND created_at=? AND post_id=${newPost})`;
     const fresh = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='fresh' AND created_at=? AND post_id=${newPost})`, eventArgs = [u.id, now, ...newArgs];
     const r = await db().batch([
-        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview,body_style)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,? WHERE ${guard}`)
-            .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, ...placeArgs, key,
+        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,touched_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview,body_style)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,? WHERE ${guard}`)
+            .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, now, ...placeArgs, key,
                 relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
@@ -1019,6 +1040,8 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
         ] : [],
         db().prepare(`INSERT INTO post_events(user_id,post_id,kind,title_key,created_at) SELECT ?,id,'post',?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(u.id, key, now, ...newArgs),
         printUpsert(newPost, newArgs, u.id, print),
+        // 자동 끌올 (WP52): the new post joins the list while the grade has room.
+        ...newPostEnrolStatements(u, newPost, newArgs, now),
         ...sold ? [reportStatement(newPost, newArgs, u.id, sold, now, `거래완료 글 #${relist!.post_id} %`)] : [],
         ...report ? [reportStatement(newPost, newArgs, u.id, report, now)] : [],
         // The buyer named on the sale hears that the same listing is up again (WP50), when it is visible.
@@ -1062,10 +1085,10 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
         ...v.kind === 'sell' && v.price !== null ? [priceDropNotify(existing.id, existing.author_id, v.title, v.price, now)] : [],
-        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,body_style=?,updated_at=?,
+        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,body_style=?,updated_at=?,touched_at=?,
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)
-            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, v.bodyStyle, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
+            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, v.bodyStyle, now, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),

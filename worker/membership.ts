@@ -5,8 +5,9 @@ import { notifyOne } from './notifications';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
+import { enrolStatements } from './automation';
 import {
-    GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
+    AUTO_TEXT, GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
 import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
@@ -92,10 +93,14 @@ async function walletFill(userId: string, grade: GradeId, by: string, now: numbe
     const r = await db().prepare('SELECT MAX(rank) AS rank FROM user_grades WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)').bind(userId, now).first<{ rank: number | null }>();
     const held = GRADES.find(g => g.rank === Number(r?.rank || 0))?.id || 'normal';
     const bumpMax = Math.max(PERKS[grade].bumpMax, PERKS[held].bumpMax);
+    const top = gradeInfo(held).rank > gradeInfo(grade).rank ? held : grade;
+    const granted = 'EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)', grantedArgs = [userId, grade, by, now];
     return {
         bumpMax,
-        wallet: db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)')
-            .bind(bumpMax, now, userId, userId, grade, by, now),
+        wallet: db().prepare(`UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND ${granted}`).bind(bumpMax, now, userId, ...grantedArgs),
+        // 자동 끌올 (WP52) is turned on with the grant: the row and the newest open posts up to the count of
+        // the highest grade the member then holds.
+        auto: enrolStatements(userId, top, now, granted, grantedArgs, true),
     };
 }
 
@@ -156,7 +161,7 @@ const DECIDED = 'EXISTS(SELECT 1 FROM applications WHERE id=? AND decision_id=?)
 
 // The member's chat line for a grade grant, from an approved application or the member panel.
 const grantLine = (grade: string, expires: number | null, bumpMax: number) =>
-    `${gradeInfo(grade).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}\n끌올이 ${bumpMax}개로 충전되었습니다.`;
+    `${gradeInfo(grade).name} 등급 지급 완료${expires ? ` (${dateLabel(expires)}까지)` : ' (영구)'}\n끌올이 ${bumpMax}개로 충전되었습니다.\n${AUTO_TEXT.grant}`;
 
 // The status change carries a new decision id. The grant and the chat message are
 // guarded by that id, so when two decisions overlap only the first one takes effect.
@@ -176,7 +181,7 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
-            statements.push(grant!.statement, grant!.wallet);
+            statements.push(grant!.statement, grant!.wallet, ...grant!.auto);
             message = grantLine(app.target, grant!.expires, grant!.bumpMax);
         }
     } else {
@@ -368,13 +373,13 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
             if (target.deleted_at) fail(400, WITHDRAWN);
             const now = Date.now();
-            const { statement, wallet, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
+            const { statement, wallet, auto, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
             // The member hears about a direct grant in the manager chat too, written only when the
             // grant row was written at this time. A member who blocked the manager gets no line.
             const chatId = await ensureChat(p[2], MANAGER_ID).catch(() => null);
             const granted = 'EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)';
             const line = chatId ? guardedMessageStatements(chatId, u.id, grantLine(b.grade, expires, bumpMax), 'system', null, granted, [p[2], b.grade, u.id, now], now) : [];
-            if (!(await db().batch([statement, wallet, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
+            if (!(await db().batch([statement, wallet, ...auto, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
         // A member who forgot their password gets a temporary one through the manager's chat.

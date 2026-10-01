@@ -225,7 +225,7 @@ equal(trialRows(h.user.id), [hTrial], 'the trial row is unchanged');
 equal(sql(`SELECT COUNT(*) AS n FROM user_grades WHERE user_id='${h.user.id}' AND source='manager' AND expires_at IS NULL`)[0].n, 1, 'the paid grant is its own manager row');
 equal((await manager('manage/trial')).data.active, activeBefore - 1, "the card's 지금 체험 중 leaves out members who hold a paid grade");
 const hChat = (await h('chats')).data.chats.find(x => x.partner_id === 'manager');
-check(hChat && (await h(`chats/${hChat.id}/messages`)).data.messages.some(m => m.type === 'system' && m.body === '플러스 등급 지급 완료 (영구)\n끌올이 5개로 충전되었습니다.'), 'the direct grant line reaches the member');
+check(hChat && (await h(`chats/${hChat.id}/messages`)).data.messages.some(m => m.type === 'system' && m.body === '플러스 등급 지급 완료 (영구)\n끌올이 5개로 충전되었습니다.\n자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.'), 'the direct grant line reaches the member');
 // 지금 마감 without ending the trials, then ending them later (진행 중인 체험 끝내기) keeps the first end.
 const closeOnly = await manager('manage/trial', 'PUT', { close: true });
 check(closeOnly.data.open === false && closeOnly.data.active >= 1, '지금 마감 alone leaves the running trials');
