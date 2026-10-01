@@ -128,6 +128,8 @@ if (phase === 'main') {
     sql(`DELETE FROM kv_trash WHERE id LIKE 'kvfake-${run}-%'`);
     sql("DELETE FROM settings WHERE key='sys:kv_deletes'");
 
+    // Earlier suites on this database used up the sign-in limits (per IP and per user).
+    sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
     const manager = client();
     equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' })).status, 200, 'manager logs in');
     const report = await manager('manage/storage');
