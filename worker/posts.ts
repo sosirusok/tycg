@@ -338,6 +338,8 @@ async function listPosts(req: Request, url: URL) {
         if (!v) continue;
         if (!choiceAllowed(key, v)) fail(400, `${f.label}: 확인해 주세요.`);
         if (buying && key === 'nicknameRank') where.push("(json_array_length(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]'))=0 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(p.details,'$.nicknameRanks'),'[]')) WHERE value=?))");
+        // 전변 가능 also finds 영전 accounts: the number goes with the account, so it can be changed.
+        else if (key === 'phoneChange' && v === '가능') where.push(`json_extract(p.details,'$.phoneChange') IN (?,'영전')`);
         else where.push(`json_extract(p.details,'$.${key}')=?`);
         values.push(v);
     }

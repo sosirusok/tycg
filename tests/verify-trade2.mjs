@@ -306,6 +306,39 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     check(!('counts' in (await guest('posts?kind=sell')).data), 'V-23 no counts without a search word');
 }
 
+// WP14: 전변 가능 also finds 영전, the cafe 계정 조건 keys, active=1 hides 거래완료 and the 작성자 인증 filter.
+{
+    const s = members.seller, token = `cond${run}`;
+    const account = (details, n, extra = {}) => post(s, {
+        kind: 'sell', category: 'account', title: `[QA] ${token} ${n}`, body: '자동 검증', price: 300000, status: 'open', tags: [], images: [],
+        details: { ownerCount: '1', recordStatus: '무전적', ...details }, ...extra,
+    }, 'WP14 sell account post ' + n);
+    const young = await account({ phoneChange: '영전', passwordChange: '가능', backupEmail: '없음', integrated: '미통합' }, 1);
+    const plain = await account({ phoneChange: '가능', passwordChange: '가능', backupEmail: '있음', integrated: '통합' }, 2);
+    const cool = await account({ phoneChange: '쿨타임 남음', passwordChange: '가능' }, 3);
+    const done = await account({ phoneChange: '가능' }, 4, { status: 'closed' });
+    const found = async extra => (await guest('posts?' + new URLSearchParams({ kind: 'sell', category: 'account', q: token, ...extra }))).data.posts.map(p => p.id).sort((x, y) => x - y);
+    const phone = await found({ phoneChange: '가능' });
+    check(phone.includes(young), 'WP14 phoneChange=가능 includes a post whose phoneChange is 영전');
+    equal(phone, [young, plain, done].sort((x, y) => x - y), 'WP14 phoneChange=가능 leaves out 쿨타임 남음');
+    equal(await found({ phoneChange: '영전' }), [young], 'WP14 phoneChange=영전 is still exact');
+    equal(await found({ passwordChange: '가능', phoneChange: '가능', active: '1' }), [young, plain].sort((x, y) => x - y), 'WP14 전비변 가능 with active=1');
+    equal(await found({ backupEmail: '없음' }), [young], 'WP14 보멜 없음');
+    equal(await found({ integrated: '미통합' }), [young], 'WP14 미통');
+    check(!(await found({ active: '1' })).includes(done) && (await found({})).includes(done), 'WP14 active=1 hides 거래완료 and the plain list keeps it');
+    check(!cool || (await found({})).includes(cool), 'WP14 the unfiltered list has every post');
+
+    const credit = members.other;
+    equal((await manager(`manage/users/${credit.user.id}/badges`, 'POST', { badge: 'credit', active: true })).status, 200, 'WP14 manager grants 신용인');
+    const mine = await post(credit, {
+        kind: 'sell', category: 'other', title: `[QA] ${token} 신용인`, body: '자동 검증', price: 10000, status: 'open', tags: [], images: [], details: {},
+    }, 'WP14 신용인 post');
+    const byBadge = (await guest('posts?' + new URLSearchParams({ q: token, badge: 'credit' }))).data;
+    equal(byBadge.posts.map(p => p.id), [mine], 'WP14 badge=credit lists only posts by 신용인 holders');
+    check(byBadge.counts && byBadge.counts.sell === 1, 'WP14 badge=credit also narrows the per-tab counts');
+    equal((await guest('posts?' + new URLSearchParams({ q: token, badge: 'identity' }))).data.posts.length, 0, 'WP14 badge=identity finds none of this run');
+}
+
 // The manager may delete any post; this run's posts are removed.
 for (const id of created) await manager('posts/' + id, 'DELETE');
 console.log(`\n${checks} trade checks passed`);

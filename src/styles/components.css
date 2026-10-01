@@ -71,25 +71,20 @@
 .mini-card .price { margin-top: auto; }
 .mini-card .post-card-author { padding-top: 12px; border-top: 1px solid var(--line); }
 
-/* Season picker */
-.season-picker { display: grid; gap: 6px; }
-.tier-row { border: 1px solid var(--line); border-radius: var(--r-8); overflow: hidden; }
-.tier-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 44px; padding: 0 12px; text-align: left; }
-.tier-head:hover { background: var(--fill-2); }
-.tier-head .tier-name { font-weight: 600; color: var(--ink); font-size: var(--fs-14); }
-.tier-head .tier-range { color: var(--ink-3); font-size: var(--fs-12); }
-.tier-head .tier-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: var(--r-pill); background: var(--brand); color: var(--white); font-size: var(--fs-12); font-weight: 700; line-height: 22px; text-align: center; }
-.tier-head .chev { margin-left: auto; color: var(--ink-4); transition: transform .15s; }
-.tier-head .tier-count + .chev { margin-left: 4px; }
-.tier-row[data-open='true'] .chev { transform: rotate(180deg); }
-.tier-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
-.tier-tools { display: flex; justify-content: flex-end; padding: 6px 0; }
-.season-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
+/* Season picker: a chip row of the nine tiers, then the open tier's season boxes */
+.season-picker { display: grid; gap: 0; min-width: 0; }
+.tier-chips { gap: 6px; }
+.tier-chips .chip { flex: none; }
+.tier-chips .chip b { margin-left: 4px; color: var(--brand); font-weight: 700; }
+.tier-chips .chip[aria-pressed='true'] b { color: var(--white); }
+.season-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+.season-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin-top: 10px; }
+.season-head + .season-grid { margin-top: 6px; }
 .season-box { position: relative; display: grid; place-items: center; height: 36px; border: 1px solid var(--line); border-radius: var(--r-8); color: var(--ink-2); font-size: var(--fs-13); font-weight: 500; cursor: pointer; user-select: none; }
 .season-box input { position: absolute; opacity: 0; pointer-events: none; }
 .season-box:hover { border-color: var(--line-2); }
 .season-box:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
-.picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .picked button { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 10px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; }
 .picked button:hover { background: var(--line); }
 

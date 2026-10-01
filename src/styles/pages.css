@@ -39,18 +39,15 @@
 /* board */
 .board-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .kind-tabs { margin-top: 20px; }
-.kind-tabs .tab { display: inline-flex; align-items: center; gap: 6px; }
-.kind-tabs .tab .cicon { width: 22px; height: 22px; }
-@media (max-width: 640px) {
-  /* All five tabs fit on a phone without icons. */
-  .kind-tabs { gap: 16px; }
-  .kind-tabs .tab .cicon { display: none; }
-}
+.kind-tabs .tab b.zero { color: var(--ink-4); }
 .board-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 .exchange-pick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-15); font-weight: 600; color: var(--ink); }
-.exchange-pick .select { width: auto; height: 40px; padding-left: 12px; font-weight: 600; }
+.exchange-pick .seg { gap: 4px; }
+.exchange-pick .seg label { min-width: 0; height: 36px; padding: 0 12px; }
 .board-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 40px; margin-top: 32px; align-items: start; }
-.filter-panel { display: grid; gap: 0; }
+.board-layout.no-filters { grid-template-columns: minmax(0, 1fr); }
+/* The panel stays in view while the list scrolls and scrolls on its own when it is taller than the screen. */
+.filter-panel { position: sticky; top: calc(var(--header-h) + 16px); max-height: calc(100vh - var(--header-h) - 32px); overflow: auto; display: grid; gap: 0; scrollbar-width: thin; }
 .filter-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .filter-head strong { color: var(--ink); font-size: var(--fs-15); }
 .filter-group { padding: 18px 0; border-bottom: 1px solid var(--line); }
@@ -61,8 +58,9 @@
 .filter-section { margin-top: 20px; padding-bottom: 2px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 700; }
 .filter-section + .filter-group { padding-top: 10px; }
 .filter-group .choice { min-height: 38px; padding: 0 10px; font-size: var(--fs-13); }
+/* R S A B 잡 stay on one row in the panel, even with its scrollbar showing. */
+.filter-group .seg label { min-width: 44px; padding: 0 12px; }
 .filter-group .input { height: 40px; font-size: var(--fs-14); }
-.filter-group .season-grid { grid-template-columns: repeat(3, 1fr); }
 .range { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px; }
 .range > span { color: var(--ink-3); }
 .list-top { display: flex; gap: 8px; align-items: center; }
@@ -71,6 +69,9 @@
 .list-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
 .list-meta p { color: var(--ink-2); font-size: var(--fs-14); }
 .list-meta p b { color: var(--ink); }
+.list-tools { display: flex; align-items: center; gap: 16px; }
+.list-tools .switch { color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.empty-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 .list-meta .select { width: auto; height: 36px; border: 0; padding-right: 30px; background-position: right 6px center; font-size: var(--fs-14); font-weight: 600; color: var(--ink-2); }
 .active-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .active-filters button { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 12px; border-radius: var(--r-pill); font-size: var(--fs-13); font-weight: 600; }
@@ -79,14 +80,16 @@
 .board-notice { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 14px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); }
 .board-notice .btn { margin-left: auto; }
 @media (max-width: 960px) {
+  .board-write { display: none; }
   .board-layout { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 20px; }
   .filter-panel { display: none; }
   .filter-open { display: inline-flex; }
   .sheet-filters { display: grid; }
 }
 @media (max-width: 640px) {
-  .kind-tabs { margin-top: 12px; }
-  .kind-tabs .tab { font-size: var(--fs-15); }
+  /* All five tabs fit on a phone. */
+  .kind-tabs { margin-top: 12px; gap: 16px; }
+  .list-tools { gap: 8px; }
   .board-notice { flex-wrap: wrap; }
   .board-notice .btn { margin-left: 0; }
 }

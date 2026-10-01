@@ -30,11 +30,32 @@ function writeHref(params: URLSearchParams, path: string) {
     return '/write' + (q.toString() ? '?' + q : '');
 }
 
+// The last board address per tab (filters included, page left out) for this browser tab, so the
+// header tabs and the bottom-nav '거래' return to the same filters. Storage can be unavailable.
+const LAST = 'zg:last:';
+function lastBoard(kind: string) {
+    try { return sessionStorage.getItem(LAST + kind); } catch { return null; }
+}
+function rememberBoard(params: URLSearchParams) {
+    const kind = params.get('kind');
+    if (!isTradeKind(kind)) return;
+    const q = new URLSearchParams(params);
+    q.delete('page');
+    try {
+        sessionStorage.setItem(LAST + kind, '/trade?' + q.toString());
+        sessionStorage.setItem(LAST + 'kind', kind);
+    } catch { /* not remembered */ }
+}
+
 function Shell() {
     const { me, unread, requireLogin, openAuth, openApply, logout } = useApp();
     const { path, params, parts } = useLocation();
     const page = parts[0] || '';
     const write = writeHref(params, path);
+    // Stored while rendering, so the links below already point at the board on screen.
+    if (page === 'trade') rememberBoard(params);
+    const lastKind = lastBoard('kind');
+    const tradeHref = (lastKind && lastBoard(lastKind)) || '/trade?kind=sell';
     // The fixed bottom bar is hidden where the screen has its own fixed bar (write form, chat room).
     const hideBottomNav = page === 'write' || page === 'edit' || (page === 'chat' && !!parts[1]);
     useEffect(() => { document.body.classList.toggle('no-bottom-nav', hideBottomNav); }, [hideBottomNav]);
@@ -79,7 +100,7 @@ function Shell() {
             <div className="container header-inner">
                 <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} />좀비고 거래소</Link>
                 <nav className="nav" aria-label="주 메뉴">
-                    {TRADE_KINDS.map(kind => <Link key={kind} to={'/trade?kind=' + kind} aria-current={page === 'trade' && params.get('kind') === kind ? 'page' : undefined}>{KIND_NAMES[kind]}</Link>)}
+                    {TRADE_KINDS.map(kind => <Link key={kind} to={lastBoard(kind) || '/trade?kind=' + kind} aria-current={page === 'trade' && params.get('kind') === kind ? 'page' : undefined}>{KIND_NAMES[kind]}</Link>)}
                     <Link to="/guide" className="nav-guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>
                 </nav>
                 <div className="header-right">
@@ -133,7 +154,7 @@ function Shell() {
         </footer>}
         {!hideBottomNav && <nav className="bottom-nav" aria-label="하단 메뉴">
             <Link to="/" aria-current={page === '' ? 'page' : undefined}><House size={22} />홈</Link>
-            <Link to="/trade?kind=buy" aria-current={page === 'trade' ? 'page' : undefined}><LayoutList size={22} />거래</Link>
+            <Link to={tradeHref} aria-current={page === 'trade' ? 'page' : undefined}><LayoutList size={22} />거래</Link>
             <button type="button" onClick={compose}><PenLine size={22} />글쓰기</button>
             <button type="button" onClick={() => go('/chat')} aria-current={page === 'chat' ? 'page' : undefined}><MessageCircle size={22} />채팅{unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}</button>
             <button type="button" onClick={() => me ? void navigate('/profile/' + me.id) : openAuth('login')} aria-current={page === 'profile' || page === 'me' ? 'page' : undefined}><UserRound size={22} />내 정보</button>
