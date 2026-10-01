@@ -173,6 +173,16 @@
 .owner-tools .owner-bump .btn { height: 56px; }
 .owner-delete { justify-self: center; margin-top: 4px; color: var(--danger); }
 .owner-delete:hover { color: var(--danger); }
+/* 가측 신청 next to 삭제 under the owner tools (WP65). */
+.owner-more { display: flex; justify-content: center; gap: 20px; margin-top: 4px; }
+.owner-more .owner-delete { margin-top: 0; }
+.owner-service:hover { color: var(--ink); }
+/* 운영진 가측가 (WP65): brand text, no fill. */
+.appraised-line { margin: 6px 0 0; color: var(--brand); font-size: var(--fs-14); font-weight: 600; }
+.appraised-tag { color: var(--brand); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+.service-post { margin: 0; color: var(--ink); font-size: var(--fs-15); line-height: 1.5; overflow-wrap: anywhere; }
+.service-coupon { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: var(--fs-14); }
+.service-coupon b { font-weight: 600; }
 .owner-hint { color: var(--ink-3); font-size: var(--fs-13); }
 .promo-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .promo-row .switch { color: var(--ink); font-weight: 600; }
@@ -189,7 +199,7 @@
   .side-card { position: static; margin-top: 8px; }
   /* The price with its struck earlier 즉거가 sits under the title; the fixed bar shows the current price only. */
   .price-top { display: block; margin-top: 12px; }
-  .side-card > .price, .owner-tools { display: none; }
+  .side-card > .price, .side-card > .appraised-line, .owner-tools { display: none; }
   .author-box-top { display: flex; margin-top: 16px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
   .side-card:has(.side-actions), .side-card:has(.owner-tools) { gap: 0; padding: 16px; }
   .side-card:has(.side-actions) > .side-actions, .author-box-side { display: none; }
@@ -558,10 +568,10 @@
    so a cell never splits '6시간마다' or '3만원'; a very narrow phone scrolls the table instead. */
 .grade-benefits { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-14); overflow-wrap: normal; }
 .grade-benefits .cell-line { display: block; }
-.grade-benefits thead th:first-child { width: 120px; }
+.grade-benefits thead th:first-child { width: 148px; }
 .grade-benefits th, .grade-benefits td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .grade-benefits thead th { border-bottom-color: var(--line-2); color: var(--ink); font-weight: 700; white-space: nowrap; }
-.grade-benefits tbody th { color: var(--ink-3); font-weight: 500; white-space: nowrap; }
+.grade-benefits tbody th { color: var(--ink-3); font-weight: 500; word-break: keep-all; }
 .grade-benefits td { color: var(--ink); font-weight: 600; }
 .grade-free { margin-top: 20px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-12); background: var(--white); }
 .grade-free h3 { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }

@@ -66,6 +66,8 @@ export type Post = {
     thumb?: string | null;
     // 조회수 (WP45).
     view_count?: number;
+    // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
+    appraised?: { price: number; at: number } | null;
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, applicationTitle, kstDateTime, type Application } from '../../shared/membership';
+import { REPORT_REASONS, dateText, manToWon, priceText, relativeTime, type Post, type User } from '../../shared/market';
+import { APPLICATION_STATUS_NAMES, SERVICE_NAMES, applicationTitle, kstDateTime, type Application, type ServiceKind } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
@@ -10,7 +10,7 @@ import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/u
 import { MemberPanel } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
 
-type TabId = 'applications' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
+type TabId = 'applications' | 'services' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
@@ -22,8 +22,8 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
-    const tab = (['applications', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; usage?: { relistsYesterday: number } } | null>(null);
+    const tab = (['applications', 'services', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
+    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; usage?: { relistsYesterday: number } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
@@ -33,12 +33,14 @@ export default function Manage({ tab: raw }: { tab?: string }) {
         <h1 className="page-title">매니저 메뉴</h1>
         <div className="mt-16"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
             { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
+            { id: 'services', label: <>중개·가측{summary?.openServices ? <b>{summary.openServices}</b> : null}</> },
             { id: 'members', label: '회원' },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
         ]} /></div>
         <div className="mt-24">
             {tab === 'applications' ? <Applications onChange={loadSummary} />
+                : tab === 'services' ? <Services onChange={loadSummary} />
                 : tab === 'members' ? <Members />
                 : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
@@ -76,6 +78,51 @@ function Applications({ onChange }: { onChange: () => void }) {
             footer={<button className="btn btn-dark btn-lg" onClick={() => rejecting && act(rejecting, 'reject', note)}>반려</button>}>
             <label className="field"><span className="field-label">반려 사유</span><input className="input" maxLength={300} value={note} onChange={e => setNote(e.target.value)} placeholder="채팅에 표시됨" /></label>
         </Modal>
+    </>;
+}
+
+// 중개·가측 신청 (WP65): open requests by grade priority (1순위 first), then oldest first.
+type ServiceRow = { id: number; kind: ServiceKind; user_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; post_id: number | null; post_title: string | null;
+    partner_id: string | null; partner_nickname: string | null; coupon: number; status: string; price: number | null; note: string; created_at: number; priority: number; conversation_id: string | null };
+function Services({ onChange }: { onChange: () => void }) {
+    const [rows, setRows] = useState<ServiceRow[] | null>(null), [member, setMember] = useState<string | null>(null), [busy, setBusy] = useState(0);
+    const [appraising, setAppraising] = useState<ServiceRow | null>(null), [price, setPrice] = useState(''), [cancelling, setCancelling] = useState<ServiceRow | null>(null);
+    const load = useCallback(() => api<{ requests: ServiceRow[] }>('manage/services?status=open').then(d => setRows(d.requests)).catch(e => toast.error(errorText(e))), []);
+    useEffect(() => { void load(); }, [load]);
+    const won = manToWon(price);
+    async function decide(r: ServiceRow, action: 'done' | 'cancel', amount?: number) {
+        if (busy) return;
+        setBusy(r.id);
+        try {
+            await api('manage/services/' + r.id, 'PATCH', { action, ...amount !== undefined ? { price: amount } : {} });
+            toast(action === 'done' ? `${SERVICE_NAMES[r.kind]} 완료` : '취소 완료');
+            setAppraising(null); setCancelling(null); setPrice('');
+            void load(); onChange();
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(0); }
+    }
+    if (!rows) return <SkeletonRows count={3} height={72} />;
+    return <>
+        {rows.length ? <ul className="simple-list">{rows.map(r => <li key={r.id}>
+            <span className="grow">
+                <strong>{r.priority}순위 · {SERVICE_NAMES[r.kind]} 신청</strong>
+                <span className="small">{r.post_id ? <Link to={'/posts/' + r.post_id}>{r.post_title || '글 ' + r.post_id}</Link> : '삭제된 글'}{r.partner_nickname && <> · 상대 {r.partner_id ? <Link to={'/profile/' + r.partner_id}>{r.partner_nickname}</Link> : r.partner_nickname}</>}{r.note && <> · {r.note}</>}</span>
+                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(r.user_id)}><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} /></button><span className="muted">{r.grade_trial && '플러스 체험 · '}{r.coupon ? '무료 쿠폰' : '유료'} · {relativeTime(r.created_at)}</span></span>
+            </span>
+            <span className="report-actions">
+                {r.conversation_id && <Link to={'/chat/' + r.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
+                <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => r.kind === 'appraise' ? (setPrice(''), setAppraising(r)) : void decide(r, 'done')}>완료</button>
+                <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => setCancelling(r)}>취소</button>
+            </span>
+        </li>)}</ul> : <EmptyState icon="file" title="대기 중인 중개·가측 신청이 없습니다" />}
+        <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
+        <Modal open={!!appraising} onClose={() => { if (!busy) setAppraising(null); }} title="가측 완료" description={appraising?.post_title || undefined}
+            footer={<button className="btn btn-primary btn-lg" disabled={!!busy || won === null || Number.isNaN(won)} onClick={() => appraising && won !== null && decide(appraising, 'done', won)}>완료</button>}>
+            <label className="field"><span className="field-label">가측가</span><div className="input-unit"><input className="input" type="number" inputMode="decimal" min="0.1" step="0.1" value={price} onChange={e => setPrice(e.target.value)} placeholder="예: 12" autoFocus /><span>만원</span></div>
+                {won !== null && !Number.isNaN(won) && <span className="field-hint">{priceText(won)} · 글에 운영진 가측가로 표시</span>}</label>
+        </Modal>
+        <Modal open={!!cancelling} onClose={() => { if (!busy) setCancelling(null); }} title="신청 취소" description={cancelling ? `${cancelling.nickname}님의 ${SERVICE_NAMES[cancelling.kind]} 신청${cancelling.coupon ? ' · 무료 쿠폰은 돌려줍니다.' : ''}` : ''}
+            footer={<><button className="btn btn-line" disabled={!!busy} onClick={() => setCancelling(null)}>닫기</button><button className="btn btn-dark" disabled={!!busy} onClick={() => cancelling && decide(cancelling, 'cancel')}>신청 취소</button></>} />
     </>;
 }
 

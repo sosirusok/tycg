@@ -11,7 +11,8 @@ import { Link, navigate, takeScrollRestore, withParams } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
-import { PriceLine } from '../components/PostCard';
+import { AppraisedLine, PriceLine } from '../components/PostCard';
+import { ServiceSheet } from '../components/ServiceSheet';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 
@@ -115,6 +116,8 @@ export function Detail({ id }: { id: string }) {
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
+    // 가측 신청 (WP65) from the owner's 더보기 menu.
+    const [appraise, setAppraise] = useState(false);
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
     const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
@@ -164,6 +167,8 @@ export function Detail({ id }: { id: string }) {
     // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
     const lostProxy = mine && post.kind === 'proxy_offer' && !manager && !me?.badges.includes('proxy');
     const openNow = post.status === 'open' && !post.hidden;
+    // 가측 신청 (WP65): an own open 판매·교환 account post; the manager performs it and needs none.
+    const canAppraise = mine && openNow && !manager && !suspended && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
 
     // 끌올: the wallet ('3/4') or '15:40부터 가능'.
     const wallet = usage && walletNow(usage, now);
@@ -249,7 +254,7 @@ export function Detail({ id }: { id: string }) {
                 </div>}
                 <h1 className="detail-title">{post.title}</h1>
                 {/* Phones: the full price line with every struck earlier 즉거가 sits under the title. */}
-                <div className="price-top"><PriceLine post={post} large /></div>
+                <div className="price-top"><PriceLine post={post} large /><AppraisedLine post={post} /></div>
                 <div className="detail-meta">
                     {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                     {post.hidden === 1 && <span className="status status-closed">숨김</span>}
@@ -277,6 +282,7 @@ export function Detail({ id }: { id: string }) {
 
             <aside className="side-card" aria-label="가격과 문의">
                 <PriceLine post={post} large />
+                <AppraisedLine post={post} />
                 {mine ? <div className="owner-tools">
                     <StatusSeg post={post} className="btn-block" onComplete={() => setTradeSheet(true)} />
                     {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>}
@@ -285,7 +291,11 @@ export function Detail({ id }: { id: string }) {
                         {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
                         {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     </>}
-                    <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
+                    {/* Wide screens have no 더보기 menu, so 가측 신청 is a quiet text button here. */}
+                    <div className="owner-more">
+                        {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={() => setAppraise(true)}>가측 신청</button>}
+                        <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
+                    </div>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
                     {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
@@ -316,6 +326,7 @@ export function Detail({ id }: { id: string }) {
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
                         {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
                         {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
+                        {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={() => setAppraise(true)}>가측 신청</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -340,6 +351,7 @@ export function Detail({ id }: { id: string }) {
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
+        {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."

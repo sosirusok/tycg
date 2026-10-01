@@ -17,11 +17,13 @@ const won = (n: number) => n.toLocaleString('ko-KR') + '원';
 
 // What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces), as
 // WP40 lists them (at most 3 data items per row; WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
+// 중개·가측 (WP65): '중개·가측 월 5회 무료', '중개·가측 무제한 무료' (엘리트 leads with it).
 export function gradeBenefits(id: string): string[] {
     const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
-    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`];
-    if (id === 'premium') return [wallet('premium')];
-    if (id === 'elite') return [wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
+    const services = (g: 'plus' | 'premium' | 'elite') => Number.isFinite(PERKS[g].serviceCoupons) ? `중개·가측 월 ${PERKS[g].serviceCoupons}회 무료` : '중개·가측 무제한 무료';
+    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`, services('plus')];
+    if (id === 'premium') return [wallet('premium'), services('premium')];
+    if (id === 'elite') return [services('elite'), wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
     return [];
 }
 

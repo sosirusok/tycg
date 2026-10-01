@@ -16,6 +16,7 @@ import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
+import { ServiceSheet } from '../components/ServiceSheet';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
@@ -153,6 +154,8 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const [messages, setMessages] = useState<Message[]>([]), [offers, setOffers] = useState<Offer[]>([]), [apps, setApps] = useState<Application[]>([]), [trades, setTrades] = useState<Trade[]>([]);
     // The 완료 sheet from the pinned bar, with this chat's partner preselected (WP43).
     const [tradeSheet, setTradeSheet] = useState(false);
+    // 중개 신청 (WP65) from the header menu, with this chat's post and partner filled in.
+    const [brokerSheet, setBrokerSheet] = useState(false);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
     const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
     const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false), [reporting, setReporting] = useState(false);
@@ -397,6 +400,9 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     // A member who answered '거래 아님' in this chat gets the request as a line button, not the main action.
     const deniedByMe = messages.some(m => m.sender_id === me.id && m.type === 'system' && m.body === '거래 아님');
     const acceptedHere = listing && listingOpen ? offers.find(o => o.post_id === listing.id && o.status === 'accepted') : undefined;
+    // 중개 신청: an open post of one of the two members, while the chat is usable (the manager performs it).
+    const canBroker = !!listing && listingOpen && !listing.hidden && !!partner && me.role !== 'manager' && partner.role !== 'manager' && !partner.deleted && !blocked && !suspended
+        && (ownListing || partner.id === listing.author_id);
 
     return <section className={'chat-room' + (managerView ? ' with-panel' : '')} aria-label="대화">
         <div className="room-main" onDragOver={onDragOver} onDrop={onDrop}>
@@ -414,6 +420,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                     <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
                     <DropdownMenu.Portal>
                         <DropdownMenu.Content className="menu" align="end" sideOffset={6}>
+                            {canBroker && <DropdownMenu.Item className="menu-item" onSelect={() => setBrokerSheet(true)}>중개 신청</DropdownMenu.Item>}
                             {me.role !== 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => setReporting(true)}>신고</DropdownMenu.Item>}
                             {!partner.deleted && <DropdownMenu.Item className="menu-item" onSelect={() => void toggleBlock()}>{blocked ? '차단 해제' : '차단'}</DropdownMenu.Item>}
                         </DropdownMenu.Content>
@@ -478,6 +485,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 </>}
             </form>
         </div>
+        {canBroker && listing && partner && <ServiceSheet open={brokerSheet} onClose={() => setBrokerSheet(false)} kind="broker" post={listing} partner={partner} />}
         {partner && me.role !== 'manager' && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={partner.id} nickname={partner.nickname} conversationId={id} />}
         <CompleteSheet post={tradeSheet && listing ? { id: listing.id, kind: listing.kind, title: listing.title, price: listing.price, price_mode: listing.price_mode, status: listing.status, thumb: listing.thumb, hidden: listing.hidden } : null} preselect={partner?.id} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { stick.current = true; void refreshListing(); void poll(false, true).then(() => activity.current()); }} />

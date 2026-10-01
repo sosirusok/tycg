@@ -11,7 +11,7 @@ import { gradeBenefits } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
-import { WalletGauge, useMinuteClock, type Usage } from '../components/Wallet';
+import { WalletGauge, couponItem, useMinuteClock, type Usage } from '../components/Wallet';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -168,7 +168,8 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
                         : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
-                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" />}
+                    {/* '끌올 3/5 · 1:20 후 충전 · 무료 중개·가측 3/5' (WP65 adds the last item; at most 3). */}
+                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" extra={couponItem(usage)} />}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
                     {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
                 </>}

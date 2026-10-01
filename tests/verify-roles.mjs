@@ -116,6 +116,9 @@ const calls = [
     ['POST', 'manage/notice', notice],
     ['POST', 'manage/visibility', { postId: post.data.id, hidden: true, reason: '허위 매물' }],
     ['POST', 'manage/report', { id: report.id, status: 'resolved' }],
+    // 중개·가측 (WP65): the list and the decision are the manager's alone.
+    ['GET', 'manage/services?status=open'],
+    ['PATCH', 'manage/services/1', { action: 'done', price: 100000 }],
 ];
 for (const [who, caller] of [['관리자 B', b], ['member A', a]]) {
     for (const [method, path, data] of calls) {

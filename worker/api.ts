@@ -14,6 +14,7 @@ import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
+import { servicesHandler } from './services';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 
 async function discardUnreadBody(req: Request) {
@@ -309,6 +310,8 @@ async function route(req: Request): Promise<Response> {
                 break;
             }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+            // 중개·가측 신청 (WP65).
+            case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

@@ -112,6 +112,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
                 <span className="post-card-time">{postTime(post)}</span>
                 {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
+                {post.appraised && <span className="appraised-tag">가측 {priceText(post.appraised.price)}</span>}
                 {flag}
             </div>
             <h3 className="post-card-title"><Link to={href}>{post.title}</Link></h3>
@@ -132,6 +133,13 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             {fav}
         </div> : fav}
     </article>;
+}
+
+// 운영진 가측가 under the price on the detail page (WP65): '운영진 가측 12만원 · 10월 3일', brand text, no fill.
+export function AppraisedLine({ post }: { post: Pick<Post, 'appraised'> }) {
+    if (!post.appraised) return null;
+    const day = new Date(post.appraised.at).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
+    return <p className="appraised-line">운영진 가측 {priceText(post.appraised.price)} · {day}</p>;
 }
 
 // Card for the home shelves (a horizontal row that scrolls sideways).
