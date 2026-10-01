@@ -169,16 +169,21 @@ check(old.data.posts.length > 0 && old.data.posts.every(p => p.bumped_at <= Date
 const search = await guest(`posts?q=${encodeURIComponent(`[budget] ${run} 19950`)}`);
 equal(search.data.posts.map(p => p.title), [`[budget] ${run} 19950`], 'a search still covers posts older than 30 days');
 
-// The featured part on a tab with no featured posts (other tabs have some): the same list with the
-// 프리미엄 매물 box and without it (featured=none). Without a kind there is no box either, but that list
+// The ad part (WP53) on a tab with no slot posts (other tabs have some): the same list with the
+// '광고 매물' box and without it (ads=none). Without a kind there is no box either, but that list
 // reads other rows, so the box is compared on the same tab.
-const withBox = await guest('posts?kind=buy&category=account&active=1'), withoutBox = await guest('posts?kind=buy&category=account&active=1&featured=none');
-equal([withBox.data.featured, withoutBox.data.featured, withBox.statements - withoutBox.statements], [[], undefined, 1], 'the 구매 tab has no featured posts; featured=none leaves the box statement out');
+const withBox = await guest('posts?kind=buy&category=account&active=1'), withoutBox = await guest('posts?kind=buy&category=account&active=1&ads=none');
+equal([withBox.data.ads, withoutBox.data.ads, withBox.statements - withoutBox.statements], [[], undefined, 1], 'the 구매 tab has no ads; ads=none leaves the box statement out');
 equal(withBox.data.posts.map(p => p.id), withoutBox.data.posts.map(p => p.id), 'the list is the same either way');
 const noKind = await guest('posts?active=1');
-equal(noKind.data.featured, undefined, 'a list without a kind has no box');
+equal(noKind.data.ads, undefined, 'a list without a kind has no box');
 console.log(`  (구매 with the box ${withBox.rows} rows, without ${withoutBox.rows}, no kind ${noKind.rows})`);
-atMost(withBox.rows - withoutBox.rows, 20, 'the featured part of a tab without featured posts costs ≤ 20 rows');
+atMost(withBox.rows - withoutBox.rows, 20, 'the ad part of a tab without slot posts costs ≤ 20 rows');
+// The 판매 tab holds the seller's three slot posts (not eligible: no grade): the candidates are read
+// through the posts_ad index only.
+const sellBox = await guest('posts?kind=sell&active=1'), sellPlain = await guest('posts?kind=sell&active=1&ads=none');
+equal(sellBox.data.ads, [], 'slot posts of a member without 프리미엄 are no ads');
+atMost(sellBox.rows - sellPlain.rows, 60, 'the ad part of a tab with 3 slot posts costs ≤ 60 rows');
 
 const mine = await seller(`posts?author=${sellerId}`);
 equal(mine.data.total, 301, "the seller's own list counts up to 301 too");
@@ -190,11 +195,11 @@ const one = await guest('posts/' + sell.data.posts[0].id);
 equal(one.status, 200, 'GET posts/<id> works');
 atMost(one.rows, 300, 'GET posts/<id> rows read');
 
-// One home request: shelves, 추천 매물 and notices.
+// One home request: shelves, 엘리트 매물 and notices.
 const home = await guest('home');
 equal([home.status, ...['sell', 'buy', 'proxy_offer'].map(k => Array.isArray(home.data.shelves[k]))], [200, true, true, true], 'GET /api/home returns the three shelves');
 check(home.data.shelves.sell.length === 6 && home.data.shelves.sell.every(p => p.status !== 'closed' && p.bumped_at > Date.now() - 30 * DAY), 'a shelf holds 6 active posts of the last 30 days');
-check(Array.isArray(home.data.featured) && Array.isArray(home.data.notices) && home.data.notices.length <= 4, 'GET /api/home returns 추천 매물 and at most 4 notices');
+check(Array.isArray(home.data.ads) && Array.isArray(home.data.notices) && home.data.notices.length <= 4, 'GET /api/home returns 엘리트 매물 and at most 4 notices');
 atMost(home.rows, 400, 'GET /api/home rows read');
 const homeMember = await seller('home');
 atMost(homeMember.rows, 400, 'GET /api/home (signed in) rows read');

@@ -113,8 +113,9 @@ try {
     // verify-deals (WP43) runs on this strict server, so completing posts and trade records meet the
     // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints), and verify-alerts (WP50: 알림함, its cron rows and read costs).
     // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now).
+    // verify-promo (WP53) checks the 광고 placements against the strict rules.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-auto.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-auto.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto sets up each scenario with wrangler d1 execute (about 1.7 s a call), so it gets longer.
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') ? 360000 : 180000);
     }

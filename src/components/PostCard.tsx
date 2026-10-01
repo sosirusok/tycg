@@ -42,7 +42,7 @@ const CARD_ITEMS = 4;
 
 
 // The category, or for an exchange post what is traded for what ('계정에서 클랜 구함').
-function subjectLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
+export function subjectLabel(post: Pick<Post, 'kind' | 'category' | 'details'>) {
     return post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : categoryName(post.category);
 }
 
@@ -106,9 +106,8 @@ export function listPhoto(post: Pick<Post, 'images' | 'thumb' | 'photo_count'>) 
 
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of
 // one board passes false. hideAuthor drops the author line on a member's own profile lists.
-// promoted is the board's '프리미엄 매물' box: a brand outline, no fill. flag goes at the end of the
-// meta line (찜한 글's '가격 내림').
-export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, promoted = false, flag }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; promoted?: boolean; flag?: ReactNode }) {
+// flag goes at the end of the meta line (찜한 글's '가격 내림').
+export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, flag }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; flag?: ReactNode }) {
     const { me, requireLogin } = useApp();
     const href = '/posts/' + post.id;
     const tags = orderedTags(post.tags, highlight);
@@ -128,7 +127,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
     </button>;
     // Flat row: text on the left, the photo on the right. The heart sits on the photo's corner,
     // or in the row's top-right corner when there is no photo.
-    return <article className={'post-card' + (post.status === 'closed' ? ' is-closed' : '') + (thumb ? ' has-thumb' : '') + (promoted ? ' is-promoted' : '')}>
+    return <article className={'post-card' + (post.status === 'closed' ? ' is-closed' : '') + (thumb ? ' has-thumb' : '')}>
         <div className="post-card-body" onClick={e => { if (!(e.target as HTMLElement).closest('a,button')) void navigate(href); }}>
             <div className="post-card-meta">
                 <span className="post-card-kind">{showKind ? `[${KIND_NAMES[post.kind]}] ${subjectLabel(post)}` : subjectLabel(post)}</span>
@@ -166,7 +165,8 @@ export function AppraisedLine({ post }: { post: Pick<Post, 'appraised'> }) {
 }
 
 // Card for the home shelves (a horizontal row that scrolls sideways).
-export function MiniCard({ post }: { post: Post }) {
+// href: the link (the home '엘리트 매물' row passes '?from=ad', WP53).
+export function MiniCard({ post, href = '/posts/' + post.id }: { post: Post; href?: string }) {
     const summary = postSummary(post);
     const tags = post.tags.slice(0, 2).map(tagName);
     const { thumb, thumbSrc, count } = listPhoto(post);
@@ -176,7 +176,7 @@ export function MiniCard({ post }: { post: Post }) {
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
     </>;
     // With a photo the text and the 64px 대표 sit side by side (grid 1fr 64px); without one it stays text only.
-    return <Link to={'/posts/' + post.id} className={'mini-card' + (post.status === 'closed' ? ' is-closed' : '')}>
+    return <Link to={href} className={'mini-card' + (post.status === 'closed' ? ' is-closed' : '')}>
         {thumb ? <div className="mini-card-top"><div className="mini-card-text">{head}</div>
             <span className="mini-card-thumb"><img src={thumbSrc} alt="" loading="lazy" />{count >= 2 && <span className="photo-count">{count}</span>}</span></div> : head}
         <PriceLine post={post} />

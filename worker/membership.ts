@@ -6,6 +6,7 @@ import { ensureChat, messageStatements, guardedMessageStatements } from './chat'
 import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import { enrolStatements } from './automation';
+import { adFillStatement } from './ads';
 import {
     AUTO_TEXT, GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
@@ -101,6 +102,8 @@ async function walletFill(userId: string, grade: GradeId, by: string, now: numbe
         // 자동 끌올 (WP52) is turned on with the grant: the row and the newest open posts up to the count of
         // the highest grade the member then holds.
         auto: enrolStatements(userId, top, now, granted, grantedArgs, true),
+        // 광고 (WP53): the member's newest open posts fill the grade's ad slots at once.
+        ads: Array.from({ length: PERKS[top].adSlots }, () => adFillStatement(userId, PERKS[top].adSlots, now, granted, grantedArgs)),
     };
 }
 
@@ -181,7 +184,7 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
             statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
-            statements.push(grant!.statement, grant!.wallet, ...grant!.auto);
+            statements.push(grant!.statement, grant!.wallet, ...grant!.auto, ...grant!.ads);
             message = grantLine(app.target, grant!.expires, grant!.bumpMax);
         }
     } else {
@@ -318,7 +321,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,u.ad_off,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
             const [grants, badges, apps, sanctions, trades, tradeCounts] = await db().batch([
@@ -356,6 +359,14 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             catch (e) { console.warn('Suspension notice not sent', e instanceof Error ? e.message : 'unknown'); }
             return json({ ok: true, suspended_until: until });
         }
+        // '광고 제외' (WP53): the member's posts are never shown as ads while it is on. The manager only.
+        if (p[3] === 'ad-off' && !p[4] && method === 'POST') {
+            requireManager(u);
+            const b = await body(req);
+            if (target.role === 'manager') fail(400, '매니저 계정은 광고에서 제외하지 않습니다.');
+            await db().prepare('UPDATE users SET ad_off=? WHERE id=?').bind(b.active ? 1 : 0, target.id).run();
+            return json({ ok: true, ad_off: !!b.active });
+        }
         if (p[3] === 'badges' && method === 'POST') {
             assertBadgeGranter(u);
             const b = await body(req);
@@ -373,13 +384,13 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (target.role === 'manager') fail(400, '매니저 계정에는 등급을 지급하지 않습니다.');
             if (target.deleted_at) fail(400, WITHDRAWN);
             const now = Date.now();
-            const { statement, wallet, auto, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
+            const { statement, wallet, auto, ads, expires, bumpMax } = await grantGradeStatements(p[2], b.grade, plan, u.id, null, now);
             // The member hears about a direct grant in the manager chat too, written only when the
             // grant row was written at this time. A member who blocked the manager gets no line.
             const chatId = await ensureChat(p[2], MANAGER_ID).catch(() => null);
             const granted = 'EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND grade=? AND granted_by=? AND granted_at=?)';
             const line = chatId ? guardedMessageStatements(chatId, u.id, grantLine(b.grade, expires, bumpMax), 'system', null, granted, [p[2], b.grade, u.id, now], now) : [];
-            if (!(await db().batch([statement, wallet, ...auto, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
+            if (!(await db().batch([statement, wallet, ...auto, ...ads, ...line]))[0].meta.changes) fail(409, GRADE_CHANGED);
             return json({ ok: true }, 201);
         }
         // A member who forgot their password gets a temporary one through the manager's chat.

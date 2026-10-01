@@ -129,21 +129,20 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // bumpGapMinutes. Manual 끌올 spends the wallet (owner override of 2026-10-01: 3/5/10/20, 6h/4h/90분/30분,
 // gap 6h/3h/1h/20분). The automation fields are the tier-table values for the packages that ship them
 // (자동 끌올: autoBumpPosts posts, one every autoEveryMinutes, paused after pauseDays without a visit;
-// 광고 매물: adSlots). Nothing reads them yet. boardSlots is the round-2 게시판 상단 노출, which the 광고
-// package (WP53) replaces with adSlots.
+// 광고 (WP53): adSlots of the member's open posts can be ads, and pauseDays is also the visit rule for ads).
 // serviceCoupons (WP65): 무료 중개·가측 per KST calendar month, shared between the two services
 // (Infinity = 무제한). A 플러스 무료 체험 gets none (serviceCouponsOf).
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
-    boardSlots: number; homeShelf: boolean; serviceCoupons: number;
+    serviceCoupons: number;
 };
 
-const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, boardSlots: 3, homeShelf: true, serviceCoupons: Infinity };
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false, serviceCoupons: 0 },
-    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, boardSlots: 0, homeShelf: false, serviceCoupons: 1 },
-    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, boardSlots: 1, homeShelf: false, serviceCoupons: 5 },
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0 },
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1 },
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5 },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -195,6 +194,28 @@ export function titleTier(grade: string | null | undefined, role?: string | null
 export const TITLE_STYLE_NAMES: Record<TitleTier, string> = { 0: '회색', 1: '검정', 2: '굵게', 3: '굵게·파랑' };
 // 링크 미리보기 (WP48): 플러스 and up (the 무료 체험 too) and the manager, per post (posts.link_preview).
 export const linkPreviewAllowed = (grade: string | null | undefined, role?: string | null) => titleTier(grade, role) >= 1;
+
+// 광고 (WP53, copy.md). Ads are built from the member's own open posts and never change list order.
+export const AD_TEXT = {
+    label: '광고',
+    box: '광고 매물',
+    home: '엘리트 매물',
+    similar: '비슷한 매물',
+    pin: '광고 고정',
+    unpin: '광고 빼기',
+    header: (used: number, slots: number) => `광고 ${used}/${slots} · 자동`,
+    views: (n: number) => `광고 유입 ${n}`,
+    error: '광고는 프리미엄부터 가능합니다.',
+    open: '거래중인 글만 광고할 수 있습니다.',
+    hint: '광고는 본인 인증 필요',
+    off: '광고 제외',
+    noIdentity: '본인 인증 없음 · 광고 제외',
+    more: (n: number) => `이 회원 글 ${n}개 더`,
+    sortNote: '정렬은 등급과 관계없습니다.',
+    orderNote: '광고는 목록 순서를 바꾸지 않습니다.',
+};
+// The ad slots of a grade rank (프리미엄 1, 엘리트 and 관리자 3); the manager has 3.
+export const adSlotsOfRank = (rank: number, manager = false) => manager ? MANAGER_PERKS.adSlots : perksOfRank(rank).adSlots;
 
 // 자동 끌올 (WP52) leaves this many 끌올 in the wallet for manual use: it runs only while 3 or more remain.
 export const AUTO_RESERVE = 2;

@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronRight, Search, X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
-import { TRIAL_KEEPS, gradeInfo } from '../../shared/membership';
+import { AD_TEXT, TRIAL_KEEPS, gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
 import { MiniCard } from '../components/PostCard';
+import { adHref } from '../components/AdCard';
+import { HomeAdCard } from '../components/HomeAdCard';
 
 
 type Notice = { id: number; title: string; created_at: number };
 
-type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; featured: Post[]; notices: Notice[] };
+type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; notices: Notice[] };
 
 // One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
 // the board list for that category.
@@ -46,13 +48,13 @@ function Shelf({ title, kind, withCategories = false, empty, initial, initialCat
     </section>;
 }
 
-// '추천 매물': posts that 엘리트 members (and the manager) put on the home page, across every board.
-// The row is left out while there are none.
-function FeaturedShelf({ posts }: { posts: Post[] }) {
+// '엘리트 매물' (WP53): up to 6 ads of 엘리트 members (and above), one per member, rotated every 10
+// minutes by the server. The row is left out while there are none.
+function EliteShelf({ posts }: { posts: Post[] }) {
     if (!posts.length) return null;
-    return <section className="section">
-        <div className="section-head"><h2 className="section-title">추천 매물</h2></div>
-        <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} />)}</div>
+    return <section className="section" aria-label={AD_TEXT.home}>
+        <div className="section-head"><h2 className="section-title">{AD_TEXT.home}</h2><span className="ad-label">{AD_TEXT.label}</span></div>
+        <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} href={adHref(p.id)} />)}</div>
     </section>;
 }
 
@@ -95,7 +97,7 @@ export function Home() {
         // Only the latest request may fill the page.
         const n = ++requests.current;
         api<HomeData>('home').then(d => { if (n === requests.current) setHome(d); })
-            .catch(() => { if (n === requests.current) setHome({ shelves: { sell: [], buy: [], proxy_offer: [] }, sellCategory: '', featured: [], notices: [] }); });
+            .catch(() => { if (n === requests.current) setHome({ shelves: { sell: [], buy: [], proxy_offer: [] }, sellCategory: '', ads: [], notices: [] }); });
     }, [viewer]);
     const notices = home?.notices || [];
     const search = (e: FormEvent) => { e.preventDefault(); void navigate(withParams('/trade', { q: q.trim() })); };
@@ -133,14 +135,14 @@ export function Home() {
                     <Link to="/guide#grade" className="promo">
                         <span className="promo-text">
                             <span className="promo-eyebrow">등급 혜택</span>
-                            <strong>프리미엄부터 게시판 상단 노출</strong>
+                            <strong>{gradeInfo(me?.grade).rank >= 1 ? `프리미엄부터 ${AD_TEXT.box}` : '플러스부터 자동 끌올'}</strong>
                         </span>
                         <span className="promo-cta">혜택 보기<ChevronRight size={18} /></span>
                     </Link>
                     <button type="button" className="promo-x" aria-label="닫기" onClick={closePromo}><X size={18} /></button>
                 </div>}
 
-            <FeaturedShelf posts={home?.featured || []} />
+            <EliteShelf posts={home?.ads || []} />
             <Shelf key={'sell' + (home ? 1 : 0)} title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." initial={home?.shelves.sell ?? null} initialCategory={home?.sellCategory} />
             <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." initial={home?.shelves.buy ?? null} />
             <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." initial={home?.shelves.proxy_offer ?? null} />
@@ -151,5 +153,6 @@ export function Home() {
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>
         </div>
+        <HomeAdCard ads={home ? home.ads || [] : null} />
     </div>;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -29,8 +29,8 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
     ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
     ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
-    ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
-    ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
+    // 광고 (WP53): where the member's own open posts can show as ads, from PERKS.adSlots.
+    ['광고', g => { const n = PERKS[g.id].adSlots; return n ? [`게시판 상단 ${n}개`, '거래완료 글 하단', ...gradeInfo(g.id).rank >= 3 ? ['홈'] : []].join(' · ') : '-'; }],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
     // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
     ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
@@ -115,6 +115,8 @@ export default function Guide() {
             </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
+                <li>{AD_TEXT.sortNote}</li>
+                <li>{AD_TEXT.orderNote}</li>
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>

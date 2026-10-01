@@ -1,17 +1,18 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStats, withMember, isSuspended, setting, mayHaveBlocks, digest, MANAGER_ID, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStatsStatement, tradeStatsOf, withMember, isSuspended, setting, mayHaveBlocks, digest, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
-import { SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
+import { AD_TEXT, SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
 import { favoritesNotify, notifyStatement } from './notifications';
 import { newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
+import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -113,6 +114,9 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         if (p.author_id !== viewer?.id && viewer?.role !== 'manager') delete p.hidden_reason;
         const featured = p.featured_at !== null && p.featured_at !== undefined;
         delete p.featured_at;
+        // 광고 (WP53): '광고 고정/빼기' and '광고 유입 12' are the author's (and the manager's) only.
+        if (p.author_id !== viewer?.id && viewer?.role !== 'manager') { delete p.featured_pin; delete p.promo_views; }
+        delete p.ad_rank;
         delete p.title_key;
         // 링크 미리보기 (WP48): lists carry neither field; GET /posts/:id adds the cards it may show
         // (shownCards) and the author's switch.
@@ -381,30 +385,15 @@ async function validatePost(b: any, u: User, existing?: any) {
     return { linkPreview: linkPreview ? 1 : 0, bodyStyle, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
 }
 
-// Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
-// slots for their grade when the list is read (프리미엄 1, 엘리트 and above 3, the manager 3), newest
-// featured first. A grade that ended loses its slots at once; nothing is deleted.
-// f reads only the featured posts (the posts_featured partial index), and the box statements are
-// driven from `shown` (featuredSelect), so a tab without featured posts costs a few rows, not a scan.
-export function featuredCte(now: number) {
-    return {
-        sql: `WITH f AS (SELECT p.id,ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.featured_at DESC) AS n,
-            CASE WHEN p.author_id='${MANAGER_ID}' THEN 3 ELSE (SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=p.author_id AND (g.expires_at IS NULL OR g.expires_at>?)) END AS r
-            FROM posts p INDEXED BY posts_featured WHERE p.featured_at IS NOT NULL AND p.status='open' AND p.hidden=0 AND p.bumped_at>?),
-            shown AS (SELECT id,r FROM f WHERE n<=CASE WHEN r>=3 THEN 3 WHEN r=2 THEN 1 ELSE 0 END) `,
-        args: [now, now - 72 * HOUR],
-    };
-}
-export const featuredSelect = postSelect.replace(' FROM posts p JOIN users u ', ' FROM shown s CROSS JOIN posts p ON p.id=s.id JOIN users u ');
-
 // The filters every list shares: the manager's hidden posts, members under 이용 정지 (boards, search,
 // 찜, profile lists and both promotion boxes leave them out until the suspension ends; authors still see
 // their own list), the authors the viewer blocked (boards only) and 대리(진행) posts whose author lost
 // 대리 인증. None of them joins users, so a count reads posts only.
+export const SUSPENDED_AUTHORS = 'p.author_id NOT IN (SELECT id FROM users WHERE suspended_until>?)';
 export function baseFilters(u: User | null, author: string | null, now: number) {
     const where: string[] = [], values: unknown[] = [];
     if (!u || author !== u.id) {
-        where.push('p.hidden=0', 'p.author_id NOT IN (SELECT id FROM users WHERE suspended_until>?)');
+        where.push('p.hidden=0', SUSPENDED_AUTHORS);
         values.push(now);
     }
     if (author) { where.push('p.author_id=?'); values.push(author); }
@@ -605,40 +594,43 @@ async function listPosts(req: Request, url: URL) {
     if (scope === 'recent') order = '(SELECT created_at FROM history WHERE post_id=p.id AND user_id=?) DESC';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
-    const cte = featuredCte(now);
     // 내 글 (counts=1) also reads each row's 자동 끌올 state (WP52), one primary-key lookup per row.
     const ownCounts = !!u && author === u.id && !scope && s.get('counts') === '1';
-    // Home '추천 매물' (GET /api/home has it too): featured posts of 엘리트 and above across every tab,
-    // with the same hidden, block and 대리 인증 rules as the boards.
-    if (s.get('featured') === 'home') {
-        const r = (await db().batch([...backfill, db().prepare(cte.sql + featuredSelect + clause + ' AND s.r>=3 ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6))])).at(-1)!;
-        return json({ posts: await decorate(r.results, u), total: r.results.length, page: 1, size });
-    }
-    // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
-    // posts stay in the list, so counts and paging do not change.
-    // featured=none asks for the plain list without the box.
-    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && s.get('featured') !== 'none' && s.get('status') !== 'closed';
+    // Board '광고 매물' box (WP53): page 1 of a tab in 최신순, in the 진행중 view (the board's default; with
+    // 거래완료 included there is no box), with the page's own filters, when the tab holds more than 16
+    // 진행중 posts (the list's own count). The list below keeps its order, counts and paging; the box leaves
+    // out posts already in the first 5 rows. ads=none (or the older featured=none) asks for the list alone.
+    const noBox = s.get('ads') === 'none' || s.get('featured') === 'none';
+    const activeOnly = s.get('active') === '1' || s.get('status') === 'open' || s.get('status') === 'reserved';
+    const withAds = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && !noBox && activeOnly;
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
     // The count stops at 301 rows (capped: '300+'; the profile and 내 글 keep paging while pages come back
     // full) and joins users only for a search (it matches nicknames).
     const countCap = ` LIMIT ${COUNT_CAP + 1}`;
+    const ad = adWhere(now, 2), adBase = withAds ? adFilters(where, values) : null;
     const r = (await db().batch([
         ...backfill,
         db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
         db().prepare((ownCounts ? ownSelect : postSelect) + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
-        ...withFeatured ? [db().prepare(cte.sql + featuredSelect + clause + ' ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
+        ...adBase ? [db().prepare(`${adSelect()} WHERE ${ad.sql} AND ${adBase.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...ad.args, ...adBase.values)] : [],
     ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
-    const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
-    const posts = await decorate(r[1].results, u);
+    const total = Number((r[0].results[0] as any).count) || 0;
+    let ads: any[] | undefined;
+    if (withAds) {
+        const top = new Set((r[1].results as any[]).slice(0, 5).map(p => p.id));
+        ads = total > BOX_MIN_OPEN ? stripAdRank(rotate((r[r.length - 1].results as any[]).filter(p => !top.has(p.id)), boxSeed(now, s), BOX_SIZE)) : [];
+    }
+    // One decorate for the page and the box (tags, 찜 and price history in one batch).
+    const decorated = await decorate([...r[1].results, ...ads || []], u);
+    const posts = decorated.slice(0, r[1].results.length), adCards = ads ? decorated.slice(r[1].results.length) : undefined;
     if (scope === 'favorites') await addPriceDrops(posts, u!.id);
     // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
     // post and started a chat from it. The profile lists do not ask, so they skip these reads.
     if (ownCounts) await addOwnCounts(posts);
-    const total = Number((r[0].results[0] as any).count) || 0;
-    return json({ posts, total, page, size, ...total > COUNT_CAP ? { capped: true } : {}, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+    return json({ posts, total, page, size, ...total > COUNT_CAP ? { capped: true } : {}, ...counts ? { counts } : {}, ...adCards ? { ads: adCards } : {} });
 }
 
 // 찜한 글: a sale whose 즉거가 is below the price the member saw when saving it carries price_drop
@@ -706,10 +698,14 @@ async function bumpPost(u: User, post: any) {
     const perks = perksOf(u), now = Date.now(), gapMs = perks.bumpGapMinutes * 60000;
     const capped = Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
     const moved = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND bumped_at=?)';
+    // 광고 (WP53): a 끌올 makes the post the member's newest ad slot (unless '광고 빼기').
+    const ads = perks.adSlots;
     const r = await db().batch([
-        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,touched_at=? WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,touched_at=?,featured_at=CASE WHEN ?>0 AND featured_pin>=0 THEN ? ELSE featured_at END
+            WHERE id=? AND author_id=? AND status='open' AND hidden=0 AND bumped_at<=?
             AND (CASE WHEN bump_count=0 THEN created_at ELSE bumped_at END)<=?${capped ? ` AND (SELECT ${WALLET_NOW} FROM users WHERE id=?)>=1` : ''}`)
-            .bind(now, now, post.id, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+            .bind(now, now, ads, now, post.id, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+        ...ads ? [adTrimStatement(u.id, ads)] : [],
         // A pending '끌올 가능' 알림 is no longer needed.
         db().prepare(`UPDATE post_auto SET bump_remind=0 WHERE post_id=? AND bump_remind>0 AND ${moved}`).bind(post.id, post.id, now),
         ...capped ? [db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-1,
@@ -744,33 +740,34 @@ export function walletJson(stored: { bump_tokens: number; bump_at: number } | un
     return { bumpTokens: w.tokens, bumpMax: perks.bumpMax, bumpRefillMin: perks.bumpRefillMinutes, nextRefillAt: w.nextRefillAt };
 }
 
-// 게시판 상단 노출 on or off. Turning one on while every slot is used drops the author's oldest
-// featured posts in the same batch. Only open, non-hidden posts use a slot: a 예약중 or hidden post
-// keeps its featured_at and returns to the box when it is 거래중 again (if a slot is free then).
-// Which featured posts are shown is decided when lists are read (featuredCte), against the
-// author's grade at that time.
-export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND status='open' AND hidden=0";
+// The member's ad posts now (me/usage '광고 2/3 · 자동'): the slot posts that are open and visible.
+export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND featured_pin>=0 AND status='open' AND hidden=0";
+// PUT /posts/:id/feature (WP53): {active:true} '광고 고정' keeps the post in a slot (a pin beyond the
+// grade's slots unpins the member's oldest pin, which goes back to automatic); {active:false} '광고 빼기'
+// keeps it out of the ads and frees its slot for the newest automatic post. 프리미엄 and above only.
 async function featurePost(req: Request, u: User, post: any) {
-    const b = await body(req), perks = perksOf(u), now = Date.now(), active = !!b.active;
-    const mine = FEATURED_MINE;
+    const b = await body(req), slots = perksOf(u).adSlots, now = Date.now(), active = !!b.active;
+    if (!slots) fail(403, AD_TEXT.error);
     if (active) {
-        if (!perks.boardSlots) fail(403, '게시판 상단 노출은 프리미엄부터 가능합니다.');
-        if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 상단에 노출할 수 있습니다.');
-        if (post.status !== 'open' || post.hidden) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+        if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 광고할 수 있습니다.');
+        if (post.status !== 'open' || post.hidden) fail(409, AD_TEXT.open);
     }
-    const dropped = active
-        ? (await db().prepare(`SELECT id,title FROM posts WHERE ${mine} AND id!=? ORDER BY featured_at DESC LIMIT -1 OFFSET ?`).bind(u.id, post.id, perks.boardSlots - 1).all<{ id: number; title: string }>()).results
+    const pins = "author_id=? AND featured_pin=1 AND status='open' AND hidden=0";
+    const replaced = active
+        ? (await db().prepare(`SELECT id,title FROM posts WHERE ${pins} AND id!=? ORDER BY featured_at DESC LIMIT -1 OFFSET ?`).bind(u.id, post.id, slots - 1).all<{ id: number; title: string }>()).results
         : [];
-    const openNow = "EXISTS(SELECT 1 FROM posts WHERE id=? AND status='open' AND hidden=0)";
     const r = await db().batch([
-        ...dropped.length ? [db().prepare(`UPDATE posts SET featured_at=NULL WHERE id IN (SELECT value FROM json_each(?)) AND ${openNow}`).bind(JSON.stringify(dropped.map(d => d.id)), post.id)] : [],
-        active ? db().prepare(`UPDATE posts SET featured_at=? WHERE id=? AND ${openNow}`).bind(now, post.id, post.id) : db().prepare('UPDATE posts SET featured_at=NULL WHERE id=?').bind(post.id),
-        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${mine}`).bind(u.id),
+        active ? db().prepare("UPDATE posts SET featured_pin=1,featured_at=? WHERE id=? AND status='open' AND hidden=0").bind(now, post.id)
+            : db().prepare('UPDATE posts SET featured_pin=-1,featured_at=NULL WHERE id=?').bind(post.id),
+        ...replaced.length ? [db().prepare('UPDATE posts SET featured_pin=0 WHERE id IN (SELECT value FROM json_each(?)) AND featured_pin=1').bind(JSON.stringify(replaced.map(x => x.id)))] : [],
+        adTrimStatement(u.id, slots),
+        ...active ? [] : [adFillStatement(u.id, slots, now)],
+        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${FEATURED_MINE}`).bind(u.id),
     ]);
-    if (active && !r[r.length - 2].meta.changes) fail(409, '거래중인 글만 상단에 노출할 수 있습니다.');
+    if (active && !r[0].meta.changes) fail(409, AD_TEXT.open);
     return json({
-        featured: active, slots: perks.boardSlots, used: Number((r[r.length - 1].results[0] as any)?.n) || 0,
-        replaced: dropped.length ? { id: dropped[0].id, title: dropped[0].title } : null,
+        pinned: active, featured: active, slots, used: Number((r[r.length - 1].results[0] as any)?.n) || 0,
+        replaced: replaced.length ? { id: replaced[0].id, title: replaced[0].title } : null,
     });
 }
 
@@ -801,7 +798,7 @@ async function patchPrice(req: Request, u: User, post: any) {
 }
 
 // PATCH /posts/:id/status {status:'closed', partnerId?, amount?} (WP43): 완료 is final and one batch.
-// The post closes (closed_at, and 게시판 상단 노출 ends), its pending 제시 end (an accepted one survives
+// The post closes (closed_at, and its 광고 slot ends), its pending 제시 end (an accepted one survives
 // only when its sender is the partner named), and with a partner the pending trade record and its
 // '거래 확인 요청' card follow, guarded on this very completion (and on the post not being hidden). Under
 // 이용 정지, or on a post the manager has hidden, the post can still be completed, without a trade
@@ -830,6 +827,8 @@ async function completePost(req: Request, u: User, post: any) {
         // '판매완료 · 제목' (WP50) to every member who saved the post, guarded on this very completion; the
         // member named as the partner gets the trade request instead.
         favoritesNotify('fav_closed', post.id, post.author_id, `${statusName(post.kind, 'closed')} · ${post.title}`, now, 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0) AND x.user_id IS NOT ?', [...guardArgs, typeof b.partnerId === 'string' && b.partnerId ? b.partnerId : null]),
+        // 광고 (WP53): the freed slot takes the member's newest automatic open post.
+        ...perksOf(u).adSlots ? [adFillStatement(u.id, perksOf(u).adSlots, now, guard, guardArgs)] : [],
     ]);
     if (!r[0].meta.changes) fail(409, '이미 완료된 글입니다.');
     // r[0] is the post, then the three statements that end the 제시, then the plan's DELETE and INSERT.
@@ -844,12 +843,13 @@ const GUEST_VIEWS_MAX = 5000;
 
 // One 조회: a member counts once per 6 hours per post (the 최근 본 글 row it also refreshes, which
 // moved here from POST /view; the 100-row trim runs on 1 view in 10), a guest once per address, post
-// and KST day in this isolate. Returns 1 when the view counted.
-async function countView(req: Request, u: User | null, postId: number): Promise<number> {
-    const now = Date.now();
+// and KST day in this isolate. Returns 1 when the view counted. A counted view that came from an ad
+// (?from=ad, WP53) also counts as '광고 유입'.
+async function countView(req: Request, u: User | null, postId: number, fromAd = false): Promise<number> {
+    const now = Date.now(), promo = fromAd ? 1 : 0;
     if (u) {
         const r = await db().batch([
-            db().prepare('UPDATE posts SET view_count=view_count+1 WHERE id=? AND NOT EXISTS(SELECT 1 FROM history WHERE user_id=? AND post_id=? AND created_at>?)').bind(postId, u.id, postId, now - 6 * HOUR),
+            db().prepare('UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=? AND NOT EXISTS(SELECT 1 FROM history WHERE user_id=? AND post_id=? AND created_at>?)').bind(promo, postId, u.id, postId, now - 6 * HOUR),
             db().prepare('INSERT INTO history(user_id,post_id,created_at) VALUES(?,?,?) ON CONFLICT(user_id,post_id) DO UPDATE SET created_at=excluded.created_at').bind(u.id, postId, now),
             ...Math.random() < 0.1 ? [db().prepare('DELETE FROM history WHERE user_id=? AND post_id NOT IN(SELECT post_id FROM history WHERE user_id=? ORDER BY created_at DESC LIMIT 100)').bind(u.id, u.id)] : [],
         ]);
@@ -860,7 +860,7 @@ async function countView(req: Request, u: User | null, postId: number): Promise<
     guestViews.delete(key);
     guestViews.set(key, day);
     while (guestViews.size > GUEST_VIEWS_MAX) guestViews.delete(guestViews.keys().next().value!);
-    await db().prepare('UPDATE posts SET view_count=view_count+1 WHERE id=?').bind(postId).run();
+    await db().prepare('UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=?').bind(promo, postId).run();
     return 1;
 }
 
@@ -870,13 +870,24 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[1] && method === 'GET' && !p[2]) {
         const u = await currentUser(req), post = await visiblePost(p[1], u);
         // 조회수 (WP45): the detail page asks with view=1 once per post and KST day; the author never counts.
-        if (url.searchParams.get('view') === '1' && post.author_id !== u?.id) post.view_count = (Number(post.view_count) || 0) + await countView(req, u, post.id);
-        // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43) for the author box; none for a withdrawn author.
+        if (url.searchParams.get('view') === '1' && post.author_id !== u?.id) {
+            post.view_count = (Number(post.view_count) || 0) + await countView(req, u, post.id, url.searchParams.get('from') === 'ad');
+        }
+        // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43) for the author box (none for a withdrawn author),
+        // and under a completed post '비슷한 매물' (WP53): other advertisers' open posts of the same tab, in
+        // the same batch. An open post never carries ads (its seller keeps the buyer).
+        const now = Date.now(), closed = post.status === 'closed';
+        const reads = [...!post.author_deleted_at ? [tradeStatsStatement(post.author_id)] : [], ...closed ? [similarStatement(post, u, now)] : []];
+        const got = reads.length ? await db().batch(reads) : [];
         if (!post.author_deleted_at) {
-            const stats = await tradeStats(post.author_id);
+            const stats = tradeStatsOf(got[0].results as any[]);
             Object.assign(post, { author_trade_count: stats.trade_count, author_deal_sum: stats.deal_sum, author_good_count: stats.good_count });
         }
-        const out = (await decorate([post], u, true))[0];
+        const similar = closed ? stripAdRank(pickSimilar(got[got.length - 1].results as any[], post, now)) : [];
+        const all = await decorate([post, ...similar], u, true);
+        const out = all[0];
+        // Lists carry only the 대표 photo; the ad cards are list rows.
+        if (closed) out.ads = all.slice(1).map(a => ({ ...a, images: a.images.slice(0, 1), link_preview: undefined, body_style: undefined }));
         out.link_cards = await shownCards(req, post, out.author_grade, out.role);
         // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
         if (u && u.id === post.author_id) out.auto = await postAutoOf(post.id);
@@ -903,7 +914,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
     }
-    // 이용 정지 stops writing, 끌올, 상단 노출 and price changes; closing (거래완료) or deleting a post still works.
+    // 이용 정지 stops writing, 끌올, 광고 고정·빼기 and price changes; closing (거래완료) or deleting a post still works.
     if ((p[2] === 'bump' && method === 'POST') || (p[2] === 'feature' && method === 'PUT') || (p[2] === 'price' && method === 'PATCH') || (!p[2] && (method === 'POST' || method === 'PUT'))) requireActive(u);
     if (p[2] === 'bump' && method === 'POST') return bumpPost(u, existing);
     if (p[2] === 'feature' && method === 'PUT') return featurePost(req, u, existing);
@@ -1019,10 +1030,11 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const spent = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='bump' AND created_at=? AND post_id=${newPost})`;
     const fresh = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='fresh' AND created_at=? AND post_id=${newPost})`, eventArgs = [u.id, now, ...newArgs];
     const r = await db().batch([
-        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,touched_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview,body_style)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,? WHERE ${guard}`)
+        // 광고 (WP53): a new post is the member's newest ad slot (featured_at), trimmed to the grade's slots below.
+        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,touched_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview,body_style,featured_at)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,?,? WHERE ${guard}`)
             .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, now, ...placeArgs, key,
-                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, perks.adSlots ? now : null, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
@@ -1047,6 +1059,7 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
         // The buyer named on the sale hears that the same listing is up again (WP50), when it is visible.
         ...sold ? [notifyStatement('same_listing', `SELECT ? AS user_id,? AS ref,n.id AS post_id,? AS actor_id,? AS text FROM ${newPost} n
             WHERE n.id IS NOT NULL AND EXISTS(SELECT 1 FROM posts WHERE id=n.id AND hidden=0)`, [soldTo(relist!, u.id), String(relist!.post_id), u.id, `‘${relist!.title || v.title}’ 글과 같은 매물이 다시 올라왔습니다.`, ...newArgs], now)] : [],
+        ...perks.adSlots ? [adTrimStatement(u.id, perks.adSlots)] : [],
         db().prepare(`SELECT ${spent} AS bump,${fresh} AS fresh,(SELECT bumped_at FROM posts WHERE id=${newPost}) AS bumped_at,(SELECT bump_tokens FROM users WHERE id=?) AS bump_tokens,(SELECT bump_at FROM users WHERE id=?) AS bump_at`)
             .bind(...eventArgs, ...eventArgs, ...newArgs, u.id, u.id),
     ]);

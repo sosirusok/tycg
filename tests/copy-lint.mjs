@@ -23,7 +23,9 @@ const BANNED = [
 
 // Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone. WP43 retires
 // 예약중 everywhere (two states), with the accept line that named it and the old 마감 line.
-const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은', '예약중', '글 상태가 바뀌어 제시가 마감되었습니다.', '예약 걸어둘게요'];
+// 광고 (WP53) replaces the round-2 '프리미엄 매물' box and its 게시판 상단 노출 switch.
+const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은', '예약중', '글 상태가 바뀌어 제시가 마감되었습니다.', '예약 걸어둘게요',
+    '프리미엄 매물', '상단 고정', '상단 노출 빼기', '게시판 상단 노출'];
 // Wallet wording that must stay in the source (copy.md, style guide §6). Each entry is a literal
 // fragment; templated strings are split at their variables.
 const REQUIRED = [
@@ -44,6 +46,9 @@ const REQUIRED = [
     '자동 끌올은 플러스부터 가능합니다.', '자동 끌올 글 변경 완료', '자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.', '자동 끌올 쉬는 중 · 모든 글이 1페이지에 있습니다',
     '답장하지 않은 채팅이 있어 자동 끌올을 멈췄습니다. 답장하면 다시 시작됩니다.', '7일 동안 변경이 없어 자동 끌올을 멈췄습니다.', '체험 중 자동 끌올은 유료 등급 다음 순서입니다.',
     '자동 끌올은 한 번에 글 1개씩 · 2개는 직접 끌올용으로 남김', '자동 끌올은 게시판 활동량에 맞춰 제한됩니다.', '설정은 그대로 남고, 플러스를 신청하면 바로 다시 켜집니다.',
+    // 광고 (WP53, copy.md).
+    "'광고'", "'광고 매물'", "'엘리트 매물'", "'비슷한 매물'", "'광고 고정'", "'광고 빼기'", '광고 유입 ', '광고는 프리미엄부터 가능합니다.', '광고는 본인 인증 필요',
+    "'광고 제외'", '본인 인증 없음 · 광고 제외', '정렬은 등급과 관계없습니다.', '광고는 목록 순서를 바꾸지 않습니다.', '이 회원 글 ', '게시판 상단 ', '거래완료 글 하단',
 ];
 
 async function files(dir, recursive, test) {

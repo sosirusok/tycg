@@ -1,6 +1,7 @@
 import { db, fail, requireUser, json, body, isManager, isSuspended } from './http';
 import { notifyStatement } from './notifications';
 import { walletJson } from './posts';
+import { adTrimManyStatement } from './ads';
 import { TRADE_KINDS, categoriesForKind, type User } from '../shared/market';
 import { AUTO_RESERVE, AUTO_TEXT, MANAGER_PERKS, PERKS, gradeInfo, kstDate, kstDayStart, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
@@ -64,6 +65,8 @@ type Due = {
 };
 type Candidate = { id: number; author_id: string; kind: string; bumped_at: number; rn: number };
 type Plan = { u: string; n: number; s: string; pa: number | null; b: number | null };
+// One auto bump: post, member, the member's gap, wallet cap and refill, and ad slots (WP53).
+type Bump = { p: number; u: string; g: number; m: number; r: number; a: number };
 
 // Members due for a look: on, not paused for 'away', due by now. The rank, whether they pay and the
 // wallet come along. Bind now ×4.
@@ -204,7 +207,7 @@ export async function bumpJob(now: number) {
     // the earliest due.
     const share = (d: Due) => num(d.auto_today) / Math.max(1, 24 * 60 / perksFor(num(d.rank), d.role === 'manager').autoEveryMinutes - 2);
     const order = [...looked].sort((a, b) => (Number(!!b.paying || b.role === 'manager') - Number(!!a.paying || a.role === 'manager')) || share(a) - share(b) || num(a.next) - num(b.next));
-    const perTab = new Map<string, number>(), bumps: { p: number; u: string; g: number; m: number; r: number }[] = [];
+    const perTab = new Map<string, number>(), bumps: Bump[] = [];
     let delayed = 0;
     const allowed = (kind: string) => (perTab.get(kind) || 0) < PER_TAB && (a60.get(kind) || 0) < tabLimit(o60.get(kind) || 0) && bumps.length < PER_TICK && doneToday + bumps.length < cap;
     for (const d of order) {
@@ -230,7 +233,7 @@ export async function bumpJob(now: number) {
         if (!pick) { delayed++; plans.set(d.id, { u: d.id, n: now + BUSY_MS, s: 'busy', pa: null, b: null }); continue; }
         perTab.set(pick.kind, (perTab.get(pick.kind) || 0) + 1);
         a60.set(pick.kind, (a60.get(pick.kind) || 0) + 1);
-        bumps.push({ p: pick.id, u: d.id, ...w });
+        bumps.push({ p: pick.id, u: d.id, ...w, a: perks.adSlots });
         plans.set(d.id, { u: d.id, n: now + perks.autoEveryMinutes * MIN, s: '', pa: null, b: pick.id });
     }
     await db().batch(writeStatements(bumps, [...plans.values()], notices, now, day, delayed));
@@ -239,20 +242,23 @@ export async function bumpJob(now: number) {
 
 // Call 3. The posts move only while the post still qualifies and the wallet still holds 3 (2 stay for
 // manual use); the wallet, the event (auto=1), auto_today and the counter follow only where the post
-// moved at exactly this time. A bump that did not land is looked at again in 10 minutes.
-function writeStatements(bumps: { p: number; u: string; g: number; m: number; r: number }[], plans: Plan[], notices: { u: string; f: string; t: string }[], now: number, day: string, delayed: number) {
-    const j = `(SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.u') AS u,json_extract(value,'$.g') AS g,json_extract(value,'$.m') AS m,json_extract(value,'$.r') AS r FROM json_each(?))`;
+// moved at exactly this time. A bump that did not land is looked at again in 10 minutes. A moved post
+// of a member with 광고 slots (WP53) becomes their newest slot, and the slots are trimmed after.
+function writeStatements(bumps: Bump[], plans: Plan[], notices: { u: string; f: string; t: string }[], now: number, day: string, delayed: number) {
+    const j = `(SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.u') AS u,json_extract(value,'$.g') AS g,json_extract(value,'$.m') AS m,json_extract(value,'$.r') AS r,json_extract(value,'$.a') AS a FROM json_each(?))`;
     const list = JSON.stringify(bumps), moved = (col: string) => `EXISTS(SELECT 1 FROM posts mp WHERE mp.id=${col} AND mp.bumped_at=?)`;
     const steps = 'CAST((?-bump_at)/j.r AS INTEGER)';
     const out: D1PreparedStatement[] = [];
     if (bumps.length) out.push(
-        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1 FROM ${j} j WHERE posts.id=j.p AND posts.author_id=j.u AND posts.status='open' AND posts.hidden=0 AND posts.bumped_at<=?
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,featured_at=CASE WHEN j.a>0 AND posts.featured_pin>=0 THEN ? ELSE posts.featured_at END
+            FROM ${j} j WHERE posts.id=j.p AND posts.author_id=j.u AND posts.status='open' AND posts.hidden=0 AND posts.bumped_at<=?
             AND (CASE WHEN posts.bump_count=0 THEN posts.created_at ELSE posts.bumped_at END)<=?-j.g
-            AND (j.m=0 OR (SELECT MIN(j.m,bump_tokens+CAST((?-bump_at)/j.r AS INTEGER)) FROM users WHERE id=j.u)>?)`).bind(now, list, now, now, now, AUTO_RESERVE),
+            AND (j.m=0 OR (SELECT MIN(j.m,bump_tokens+CAST((?-bump_at)/j.r AS INTEGER)) FROM users WHERE id=j.u)>?)`).bind(now, now, list, now, now, now, AUTO_RESERVE),
         db().prepare(`UPDATE users SET bump_tokens=MIN(j.m,bump_tokens+${steps})-1,bump_at=CASE WHEN bump_tokens+${steps}>=j.m THEN ? ELSE bump_at+${steps}*j.r END
             FROM ${j} j WHERE users.id=j.u AND j.m>0 AND ${moved('j.p')}`).bind(now, now, now, now, list, now),
         db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at,auto) SELECT j.u,j.p,'bump',?,1 FROM ${j} j WHERE ${moved('j.p')}`).bind(now, list, now),
     );
+    if (bumps.some(b => b.a > 0)) out.push(adTrimManyStatement(JSON.stringify(bumps.filter(b => b.a > 0).map(b => ({ u: b.u, a: b.a })))));
     if (plans.length) out.push(db().prepare(`UPDATE automation SET bump_next_at=CASE WHEN j.b IS NOT NULL AND NOT ${moved('j.b')} THEN ? ELSE j.n END,
             pause_reason=j.s,paused_at=j.pa,auto_today=auto_today+(j.b IS NOT NULL AND ${moved('j.b')}),updated_at=?
         FROM (SELECT json_extract(value,'$.u') AS u,json_extract(value,'$.n') AS n,json_extract(value,'$.s') AS s,json_extract(value,'$.pa') AS pa,json_extract(value,'$.b') AS b FROM json_each(?)) j

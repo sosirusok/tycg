@@ -217,6 +217,8 @@ equal(listed(elite2).length, 20, 'the 엘리트 member lists 20 posts');
 await tick(at(11));
 equal(autoEvents(elite2).length, 1, 'one tick bumps exactly 1 of the 20 posts');
 equal(sql(`SELECT title FROM posts WHERE id=${autoEvents(elite2)[0].post_id}`)[0].title, `[QA] e2 ${run} 19`, 'the oldest-bumped one');
+// 광고 (WP53): an auto 끌올 makes the post the member's newest ad slot, as a manual one does.
+equal(sql(`SELECT id,featured_at FROM posts WHERE author_id='${elite2.user.id}' AND featured_at IS NOT NULL`), [{ id: autoEvents(elite2)[0].post_id, featured_at: at(11) }], 'the auto-bumped post takes an ad slot');
 await tick(at(11, 10));
 equal(autoEvents(elite2).length, 1, 'the next tick 10 minutes later bumps none (every 30 minutes)');
 await tick(at(11, 30));
@@ -224,6 +226,7 @@ equal([autoEvents(elite2).length, autoRow(elite2).pause_reason], [1, 'idle'], '3
 sql(fill('buy', 'goods_coupon', at(11, 35), 5) + dueAt(elite2));
 await tick(at(11, 40));
 equal(autoEvents(elite2).length, 2, 'once 5 newer posts push it out of the top 5 the next one goes');
+equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE author_id='${elite2.user.id}' AND featured_at IS NOT NULL`)[0].n, 2, 'two auto bumps, two of the 3 엘리트 ad slots');
 
 // 4. The reserve: 2 끌올 stay for manual use.
 const plus2 = await register('plus2');

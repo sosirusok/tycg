@@ -18,7 +18,8 @@ import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { gradeInfo } from '../../shared/membership';
+import { AD_TEXT, gradeInfo } from '../../shared/membership';
+import { AdSection } from '../components/AdCard';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
@@ -26,7 +27,9 @@ type Row = [string, ReactNode];
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
     author_created_at?: number; author_prev_nickname?: string;
     // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
-    auto?: { bump: boolean; remindAt: number | null } };
+    auto?: { bump: boolean; remindAt: number | null };
+    // '비슷한 매물' (WP53): other members' ads under a completed post only.
+    ads?: Post[] };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -128,14 +131,15 @@ export function Detail({ id }: { id: string }) {
     // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
     const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
-    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
+    // A view that came from an ad (?from=ad) counts as '광고 유입' too (WP53).
+    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' + (new URLSearchParams(location.search).get('from') === 'ad' ? '&from=ad' : '') : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     // Waits for the session check, so a full page load asks for the post once.
     useEffect(() => { if (!ready) return; void load(); }, [id, me?.id, ready]);
-    // The author's counters for 끌올 and 게시판 상단 노출.
+    // The author's 끌올 counters.
     useEffect(() => { if (mine) void loadUsage(); else setUsage(null); }, [mine, me?.id]);
-    // Under 이용 정지 the author may only complete or delete the post (no 끌올, 상단 노출, 가격 수정, 수정).
+    // Under 이용 정지 the author may only complete or delete the post (no 끌올, 가격 수정, 수정).
     const suspended = !!me?.suspended_until && me.suspended_until > now;
     const closedAt = post?.status === 'closed' ? post.closed_at ?? post.updated_at : null;
     // Retention (WP45): 90 days after 완료 only the 대표 photo stays.
@@ -190,7 +194,6 @@ export function Detail({ id }: { id: string }) {
         : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
     // 자동 끌올 (WP52): 플러스 and up (the 체험 too) and the manager, on an open post.
     const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
-    const slots = usage?.perks.boardSlots || 0, slotsUsed = usage?.featured.length || 0;
 
     async function startChat() {
         requireLogin(async () => {
@@ -221,19 +224,6 @@ export function Detail({ id }: { id: string }) {
         setBusy(true);
         try { await api(`posts/${post!.id}/bump`, 'POST', {}); toast('끌올 완료'); await Promise.all([load(), loadUsage()]); setNow(Date.now()); }
         catch (e) { toast.error(errorText(e)); void loadUsage(); }
-        finally { setBusy(false); }
-    }
-    async function feature(active: boolean) {
-        if (busy) return;
-        setBusy(true);
-        try {
-            const d = await api<{ featured: boolean; replaced: { id: number; title: string } | null }>(`posts/${post!.id}/feature`, 'PUT', { active });
-            setPost({ ...post!, featured: d.featured });
-            toast(d.featured ? '상단 노출 완료' : '상단 노출 해제');
-            if (d.replaced) toast(`‘${d.replaced.title}’ 상단 노출 해제`);
-            void loadUsage();
-        }
-        catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
     async function remove() {
@@ -300,6 +290,8 @@ export function Detail({ id }: { id: string }) {
                     {!mine && <button type="button" className="btn btn-text small" onClick={() => requireLogin(() => setReport(true))}><Flag size={15} />신고</button>}
                     <span className="grow" /><span>글 번호 {post.id}</span>
                 </div>
+                {/* '비슷한 매물' (WP53): under a completed post only, never under a live seller's post. */}
+                {!!post.ads?.length && <AdSection title={AD_TEXT.similar} posts={post.ads} className="ad-similar" />}
             </article>
 
             <aside className="side-card" aria-label="가격과 문의">
@@ -324,14 +316,6 @@ export function Detail({ id }: { id: string }) {
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
-                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing.
-                    A completed post shows it only while still featured, so it can be turned off. */}
-                {mine && usage && (post.status !== 'closed' || (!!post.featured && slots > 0)) && (slots > 0
-                    ? <div className="promo-row">
-                        <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || suspended || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
-                        <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
-                    </div>
-                    : <Link to="/guide#grade" className="promo-up">게시판 상단 노출은 프리미엄부터</Link>)}
                 {autoAllowed && openNow && <div className="promo-row">
                     <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
                     <Link to="/me/auto" className="owner-hint">설정</Link>

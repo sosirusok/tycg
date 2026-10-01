@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, AUTO_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -31,7 +33,10 @@ const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수
 // traded: a completed post that holds a trade record. askable: '거래 기록 요청' can still be sent for it
 // (not hidden, no live record, under the post's 3 requests).
 // auto: in the 자동 끌올 list (the '자동' chip); remind_at: a pending '끌올 가능' 알림 (WP52).
-type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean; auto?: boolean; remind_at?: number | null };
+// 광고 (WP53): featured is a slot post now, featured_pin 1 '광고 고정' / -1 '광고 빼기', promo_views the
+// first views that came from an ad.
+type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number; traded?: boolean; askable?: boolean; auto?: boolean; remind_at?: number | null;
+    featured?: boolean; featured_pin?: number; promo_views?: number };
 // 찜한 글: a sale whose 즉거가 fell after it was saved (from: the price then, to: now). The card's price
 // line already strikes the earlier 즉거가, so the meta line shows only the tag.
 type SavedPost = Post & { price_drop?: { from: number; to: number } };
@@ -65,14 +70,16 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
 
 // A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
 // 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
-function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete }: {
-    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onRemind: () => void; onComplete: () => void;
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete, onAd }: {
+    post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onRemind: () => void; onComplete: () => void; onAd: (pin: boolean) => void;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
     const price = post.kind === 'exchange' ? exchangeLabel(post.category, post.details.wantedCategory) : listingPrice(post);
     const closed = post.status === 'closed';
     // A post completed as '사이트 밖 거래 · 기록 없음' can still get its record within 7 days (the same sheet).
+    // 광고 (WP53): 프리미엄 and above; the row menu pins or removes an open post.
+    const adSlots = usage?.perks.adSlots || 0, adMenu = adSlots > 0 && !closed && !post.hidden && !closeOnly;
     const recordable = closed && post.traded === false && post.askable !== false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
@@ -82,14 +89,24 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
                 {closed && <span className="status status-closed">{closedLabel(post.kind)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {post.auto && !closed && <span className="tag tag-auto">자동</span>}
+                {post.featured && !closed && !post.hidden && adSlots > 0 && <span className="tag tag-line">{AD_TEXT.label}</span>}
                 <b>{price}</b>
             </div>
-            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}</span>
+            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</span>
         </div>
         <div className="seller-actions">
             {!closed && <button type="button" className={'btn btn-line btn-sm seller-bump' + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={bump.remind ? onRemind : onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
             {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
             {recordable && <button type="button" className="btn btn-line btn-sm seller-status" onClick={onComplete}>거래 기록 요청</button>}
+            {adMenu && <DropdownMenu.Root modal={false}>
+                <DropdownMenu.Trigger className="icon-btn seller-more" aria-label="더보기" disabled={busy}><MoreHorizontal size={20} /></DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                    <DropdownMenu.Content className="menu" align="end" sideOffset={6}>
+                        {post.featured_pin !== 1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(true)}>{AD_TEXT.pin}</DropdownMenu.Item>}
+                        {post.featured_pin !== -1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(false)}>{AD_TEXT.unpin}</DropdownMenu.Item>}
+                    </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+            </DropdownMenu.Root>}
         </div>
     </li>;
 }
@@ -174,6 +191,16 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         const at = await setBumpRemind(post.id);
         if (at) patchPost(post.id, { remind_at: at });
     }
+    // '광고 고정' / '광고 빼기' (WP53): other rows can gain or lose their slot, so the list and the header reload.
+    async function setAd(post: OwnPost, pin: boolean) {
+        try {
+            const d = await api<{ replaced: { id: number; title: string } | null }>(`posts/${post.id}/feature`, 'PUT', { active: pin });
+            toast(pin ? `${AD_TEXT.pin} 완료` : `${AD_TEXT.unpin} 완료`);
+            if (d.replaced) toast(`‘${d.replaced.title}’ ${AD_TEXT.pin} 해제`);
+            setRev(n => n + 1);
+            void loadUsage();
+        } catch (e) { toast.error(errorText(e)); }
+    }
     async function keepAll() {
         try { await api('me/automation/continue', 'POST', {}); void navigate('/me/posts', { replace: true }); }
         catch (e) { toast.error(errorText(e)); }
@@ -193,8 +220,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                         <button type="button" className="btn btn-line btn-sm" onClick={() => void keepAll()}>모두 계속</button>
                     </div>}
                     {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
+                    {!suspended && !!usage?.perks.adSlots && <p className="wallet-gauge mine-ad">{AD_TEXT.header(usage.featured.length, usage.perks.adSlots)}</p>}
                     {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)}
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)}
                         onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })} />)}</ul>
                     {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
