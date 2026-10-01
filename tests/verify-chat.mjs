@@ -103,5 +103,32 @@ check(waiting.every(c => c.pending_applications > 0), '신청 대기 rows all ha
 equal((await manager(`applications/${pending.data.id}`, 'PATCH', { action: 'reject', note: '자료 부족' })).status, 200, 'manager rejects');
 check(!(await manager('chats?filter=applications')).data.chats.some(c => c.id === pending.data.chatId), 'a decided application leaves 신청 대기');
 
+// Unread counters (WP42): conversations keep each side's unread count, so chats/unread and the list
+// rows read the counters instead of counting messages.
+const reader = await register('rdr'), writer = await register('wrt');
+const before = Date.now() - 1;
+const pairChat = (await writer('chats', 'POST', { userId: reader.user.id })).data.id;
+for (const text of ['하나', '둘', '셋']) equal((await writer(`chats/${pairChat}/messages`, 'POST', { body: text })).status, 201, 'B sends A: ' + text);
+equal((await reader('chats/unread')).data.unread, 3, 'A: chats/unread = 3');
+equal((await reader('chats')).data.chats.find(c => c.id === pairChat)?.unread, 3, 'A: the chat row shows 3 unread');
+equal((await writer('chats/unread')).data.unread, 0, 'B: nothing unread (own messages)');
+const sinceRows = await reader('chats?since=' + before);
+equal([sinceRows.status, sinceRows.data.chats.map(c => c.id)], [200, [pairChat]], 'GET chats?since=<t before> returns only that chat');
+check(typeof sinceRows.data.at === 'number', 'the list answers with the server time for the next ?since');
+equal((await reader('chats?since=' + (Date.now() + 60000))).data.chats, [], 'GET chats?since=<later> returns no rows');
+equal((await reader('chats?since=abc')).status, 400, 'a bad since is 400');
+const lastId = (await reader(`chats/${pairChat}/messages`)).data.messages.at(-1).id;
+equal((await reader(`chats/${pairChat}/read`, 'POST', { lastId })).status, 200, 'A marks read');
+equal((await reader('chats/unread')).data.unread, 0, 'A: chats/unread = 0 after reading');
+equal((await reader('chats')).data.chats.find(c => c.id === pairChat)?.unread, 0, 'A: the chat row shows 0 unread');
+equal((await reader(`chats/${pairChat}/messages`, 'POST', { body: '네' })).status, 201, 'A replies');
+equal([(await writer('chats/unread')).data.unread, (await reader('chats/unread')).data.unread], [1, 0], 'the reply counts for B only');
+// A post card ('listing') never counts as unread: B asks about A's post, and A gets 1 unread.
+const readerPost = await reader('posts', 'POST', { kind: 'sell', category: 'other', title: `[QA] 카드 글 ${run}`, body: '자동 검증', price: 50000, status: 'open', tags: [], images: [], details: {} });
+equal(readerPost.status, 201, 'A writes a post');
+equal((await writer(`chats/${pairChat}/messages`, 'POST', { body: '이 글 문의', postId: readerPost.data.id })).status, 201, 'B asks about it (card and text)');
+equal((await reader('chats/unread')).data.unread, 1, 'A: 1 unread (the card does not count)');
+await reader('posts/' + readerPost.data.id, 'DELETE');
+
 for (const id of created) await manager('posts/' + id, 'DELETE');
 console.log(`\n${checks} chat checks passed`);

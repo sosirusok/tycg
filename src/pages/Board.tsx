@@ -13,10 +13,12 @@ import { PostCard } from '../components/PostCard';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
+// The server counts up to 300 posts (more shows '300+'); paging then stops at the last full page.
+const COUNT_CAP = 300;
 
 // Lists already seen in this tab, per member and query (the 20 most recent). Back and tab
 // switches render from here at once while a background request checks for changes.
-type ListData = { posts: Post[]; total: number; featured?: Post[]; counts?: Record<string, number> };
+type ListData = { posts: Post[]; total: number; capped?: boolean; featured?: Post[]; counts?: Record<string, number> };
 const listCache = new Map<string, ListData>();
 function cacheGet(key: string) {
     const hit = listCache.get(key);
@@ -44,8 +46,9 @@ const searchName = (labels: string[]) => { const name = labels.join(', '); retur
 // address only; without it the request asks for open and reserved posts (active=1).
 function allowedKeys(ctx: Ctx) {
     const { kind, category } = ctx;
-    const keys = ['kind', 'category', 'q', 'closed', 'page', 'sort', 'badge'];
-    if (kind === 'all') return ['q', 'closed', 'page', 'badge'];
+    // old=1 is '오래된 글 보기': posts not bumped in the last 30 days too.
+    const keys = ['kind', 'category', 'q', 'closed', 'page', 'sort', 'badge', 'old'];
+    if (kind === 'all') return ['q', 'closed', 'page', 'badge', 'old'];
     if (kind === 'exchange') keys.push('wantedCategory');
     if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord');
     if (kind !== 'exchange') keys.push('min', 'max');
@@ -270,7 +273,7 @@ export function Board() {
         api<ListData>('posts?' + queryString)
             .then(d => {
                 if (!alive) return;
-                const next: ListData = { posts: d.posts, total: d.total, featured: d.featured, counts: d.counts };
+                const next: ListData = { posts: d.posts, total: d.total, capped: d.capped, featured: d.featured, counts: d.counts };
                 const same = JSON.stringify(listCache.get(key)) === JSON.stringify(next);
                 if (!same) cachePut(key, next);
                 setFetched(prev => same && prev?.key === key ? prev : { key, ...(same ? listCache.get(key)! : next), error: '' });
@@ -355,7 +358,12 @@ export function Board() {
         else void navigate(writeHref);
     });
     const submit = (e: FormEvent) => { e.preventDefault(); update({ q: q.trim() }); };
-    const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
+    const totalPages = !data ? 0 : data.capped ? Math.floor(COUNT_CAP / PAGE_SIZE) : Math.ceil(data.total / PAGE_SIZE);
+    const totalText = data ? (data.capped ? COUNT_CAP + '+' : data.total.toLocaleString()) : '';
+    // Boards list the last 30 days; after the last page the member can go on into older posts, on the
+    // same page number so the posts already seen stay on top. A search already covers every post.
+    const showOld = !!data && !data.error && !data.capped && query.get('old') !== '1' && !query.get('q') && page >= totalPages;
+    const openOld = () => { const next = new URLSearchParams(query); next.set('old', '1'); void navigate('/trade?' + next.toString()); };
     const title = kind === 'all' ? (params.get('q') ? '검색 결과' : '전체') : KIND_NAMES[kind];
     const highlight = readTags(query.get('tags'));
 
@@ -407,7 +415,7 @@ export function Board() {
                     {me && !isSaved && <button type="button" className="btn btn-line btn-xs save-search" disabled={savingSearch} onClick={() => void saveSearch()}>이 조건 저장</button>}
                     <button type="button" className="clear" onClick={clearAll}>전체 해제</button></div>}
                 <div className="list-meta">
-                    <p aria-live="polite">{loading ? '불러오는 중' : <><b>{data!.total.toLocaleString()}</b>건</>}</p>
+                    <p aria-live="polite">{loading ? '불러오는 중' : <><b>{totalText}</b>건</>}</p>
                     <div className="list-tools">
                         <label className="switch"><input type="checkbox" checked={closed} onChange={e => update({ closed: e.target.checked ? '1' : '' })} />거래완료 포함</label>
                         {kind !== 'all' && kind !== 'exchange' && <select className="select" aria-label="정렬" value={query.get('sort') || 'latest'} onChange={e => update({ sort: e.target.value === 'latest' ? '' : e.target.value })}>
@@ -430,9 +438,10 @@ export function Board() {
                     {Array.from({ length: Math.min(5, totalPages) }, (_, i) => Math.max(1, Math.min(page - 2, totalPages - 4)) + i).map(n => <button type="button" key={n} aria-current={n === page ? 'page' : undefined} onClick={() => goPage(n)}>{n}</button>)}
                     <button type="button" disabled={page >= totalPages} onClick={() => goPage(page + 1)}>다음</button>
                 </nav>}
+                {showOld && <div className="list-more"><button type="button" className="btn btn-line" onClick={openOld}>오래된 글 보기</button></div>}
             </section>
         </div>
-        {filters && <Modal open={sheet} onClose={() => setSheet(false)} title="필터" footer={<><button className="btn btn-line" onClick={clearAll}>초기화</button><button className="btn btn-primary" onClick={() => setSheet(false)}>{loading ? '결과 보기' : `${data!.total.toLocaleString()}건 보기`}</button></>}>
+        {filters && <Modal open={sheet} onClose={() => setSheet(false)} title="필터" footer={<><button className="btn btn-line" onClick={clearAll}>초기화</button><button className="btn btn-primary" onClick={() => setSheet(false)}>{loading ? '결과 보기' : `${totalText}건 보기`}</button></>}>
             <div className="sheet-filters"><Filters ctx={ctx} params={query} update={update} /></div>
         </Modal>}
     </div>;

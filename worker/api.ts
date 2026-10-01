@@ -12,6 +12,8 @@ import { kstDate, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
+import { homeHandler } from './home';
+import { meterOn, localRequest, metered, meterHeaders } from './meter';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -265,7 +267,16 @@ async function stats() {
     });
 }
 
+// With the test meter on (READ_BUDGET=on, requests to 127.0.0.1 or localhost only), the response
+// carries X-Rows-Read, X-Rows-Written, X-D1-Calls and X-D1-Statements for the whole request.
 export async function handleApi(req: Request) {
+    if (!meterOn() || !localRequest(req)) return route(req);
+    const { result, meter } = await metered(() => route(req));
+    for (const [k, v] of Object.entries(meterHeaders(meter))) result.headers.set(k, v);
+    return result;
+}
+
+async function route(req: Request): Promise<Response> {
     try {
         const url = new URL(req.url), p = url.pathname.slice(5).split('/').filter(Boolean), method = req.method;
         if (method !== 'GET') csrf(req);
@@ -278,6 +289,8 @@ export async function handleApi(req: Request) {
                 break;
             }
             case 'stats': if (method === 'GET') return await stats(); break;
+            // The whole home page (shelves, 추천 매물, notices) in one request (WP42).
+            case 'home': if (method === 'GET' && !p[1]) return await homeHandler(req, url); break;
             case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first() });
             case 'posts': {
                 // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).

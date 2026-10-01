@@ -23,12 +23,18 @@ export async function ensureChat(a: string, b: string) {
     return (await db().prepare('SELECT id FROM conversations WHERE user_a=? AND user_b=?').bind(...pair).first<any>()).id as string;
 }
 
+// Unread messages per side (0019_read_budget: a_unread for user_a, b_unread for user_b), recounted
+// from the messages_unread index. A trigger adds one per new message whichever path inserts it; the
+// recount in the same UPDATE as updated_at also heals counts the previous Worker left behind.
+const recount = (side: 'a' | 'b') => `(SELECT COUNT(*) FROM messages um WHERE um.conversation_id=conversations.id AND um.sender_id!=conversations.user_${side} AND um.read_at IS NULL AND um.type!='listing')`;
+export const UNREAD_RECOUNT = `a_unread=${recount('a')},b_unread=${recount('b')}`;
+
 // Inserts a message (and its photo links) and bumps the conversation in one transaction.
 export function messageStatements(conversationId: string, senderId: string, text: string, type = 'text', referenceId: string | null = null, attachments: string[] = [], at = Date.now()) {
     return [
         db().prepare('INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) VALUES(?,?,?,?,?,?,?)').bind(conversationId, senderId, text, type, referenceId, JSON.stringify(attachments), at),
         ...attachments.length ? [db().prepare('INSERT OR IGNORE INTO message_images(message_id,upload_id) SELECT (SELECT MAX(id) FROM messages WHERE conversation_id=? AND sender_id=?),value FROM json_each(?)').bind(conversationId, senderId, JSON.stringify(attachments))] : [],
-        db().prepare('UPDATE conversations SET updated_at=? WHERE id=?').bind(at, conversationId),
+        db().prepare(`UPDATE conversations SET updated_at=?,${UNREAD_RECOUNT} WHERE id=?`).bind(at, conversationId),
     ];
 }
 
@@ -36,7 +42,7 @@ export function messageStatements(conversationId: string, senderId: string, text
 export function guardedMessageStatements(conversationId: string, senderId: string, text: string, type: string, referenceId: string | null, guard: string, args: unknown[], at = Date.now()) {
     return [
         db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,?,?,'[]',? WHERE ${guard}`).bind(conversationId, senderId, text, type, referenceId, at, ...args),
-        db().prepare(`UPDATE conversations SET updated_at=? WHERE id=? AND ${guard}`).bind(at, conversationId, ...args),
+        db().prepare(`UPDATE conversations SET updated_at=?,${UNREAD_RECOUNT} WHERE id=? AND ${guard}`).bind(at, conversationId, ...args),
     ];
 }
 
@@ -99,8 +105,11 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     // Polled on every page for the header badge. It also returns the member's current
     // badges and grade so a grant shows up without reloading the page. The post card written
     // before a first message is not a message of its own, so it never counts as unread.
+    // The sum of the member's side of the unread counters, read from the partial indexes that hold
+    // only chats with something unread.
     if (p[1] === 'unread' && method === 'GET') {
-        const r = await db().prepare("SELECT COUNT(*) AS n FROM conversations c JOIN messages m ON m.conversation_id=c.id AND m.sender_id!=? AND m.read_at IS NULL AND m.type!='listing' WHERE c.user_a=? OR c.user_b=?").bind(u.id, u.id, u.id).first<any>();
+        const r = await db().prepare('SELECT (SELECT COALESCE(SUM(a_unread),0) FROM conversations WHERE user_a=? AND a_unread>0)+(SELECT COALESCE(SUM(b_unread),0) FROM conversations WHERE user_b=? AND b_unread>0) AS n')
+            .bind(u.id, u.id).first<{ n: number }>();
         return json({ unread: r?.n || 0, user: u });
     }
     if (!p[1] && method === 'GET') {
@@ -111,17 +120,27 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
         // The row also names the post the chat is about (title and first photo) while the viewer can see it,
         // by the same rule as visiblePost: not hidden, and a 대리(진행) post only while its author holds 대리 인증.
+        // ?since=<ms> (the list's own polls) returns only the chats updated after that time, which the
+        // page merges into the list it has. The 100 newest chats are picked first from the
+        // (user_a|user_b, updated_at) indexes, so the details below are read for those rows only, and
+        // each row's unread count is the member's side of the counters.
+        const sinceRaw = url.searchParams.get('since'), since = sinceRaw === null ? 0 : Number(sinceRaw);
+        if (!Number.isSafeInteger(since) || since < 0) fail(400, '채팅 목록 조건을 확인해 주세요.');
+        const at = Date.now();
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
-            (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND sender_id!=? AND read_at IS NULL AND type!='listing') AS unread,
+            CASE WHEN c.user_a=? THEN c.a_unread ELSE c.b_unread END AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications,
             lp.title AS last_post_title,json_extract(lp.images,'$[0]') AS last_post_thumb
-            FROM conversations c JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
+            FROM (SELECT id FROM (SELECT id,updated_at FROM conversations WHERE user_a=? AND updated_at>? UNION ALL SELECT id,updated_at FROM conversations WHERE user_b=? AND updated_at>?) mine
+                WHERE EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=mine.id)
+                ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=mine.id AND a.status='pending')" : ''} ORDER BY updated_at DESC LIMIT 100) picked
+            CROSS JOIN conversations c ON c.id=picked.id
+            JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
             LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.author_id=? OR ?='manager' OR (lp.hidden=0 AND (lp.kind!='proxy_offer'
                 OR EXISTS(SELECT 1 FROM users au WHERE au.id=lp.author_id AND au.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=lp.author_id AND b.badge='proxy'))))
-            WHERE (c.user_a=? OR c.user_b=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)
-            ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=c.id AND a.status='pending')" : ''} ORDER BY c.updated_at DESC LIMIT 100`)
-            .bind(u.id, u.id, u.id, u.role, u.id, u.id).all();
-        return json({ chats: r.results.map(partner) });
+            ORDER BY c.updated_at DESC`)
+            .bind(u.id, u.id, since, u.id, since, u.id, u.id, u.role).all();
+        return json({ chats: r.results.map(partner), at });
     }
     // Opening a chat from a post only checks the post and makes sure the chat exists. The post's
     // card is written with the first message (see below), so an unused 채팅하기 notifies nobody.
@@ -207,7 +226,12 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         await chatMember(p[1], u.id);
         const b = await body(req);
         if (!Number.isSafeInteger(b.lastId)) fail(400, '메시지 번호를 확인해 주세요.');
-        await db().prepare('UPDATE messages SET read_at=? WHERE conversation_id=? AND sender_id!=? AND read_at IS NULL AND id<=?').bind(Date.now(), p[1], u.id, b.lastId).run();
+        // The reader's side of the counter is recounted in the same batch (messages after lastId stay unread).
+        const side = (c: 'a' | 'b') => `${c}_unread=CASE WHEN user_${c}=? THEN ${recount(c)} ELSE ${c}_unread END`;
+        await db().batch([
+            db().prepare('UPDATE messages SET read_at=? WHERE conversation_id=? AND sender_id!=? AND read_at IS NULL AND id<=?').bind(Date.now(), p[1], u.id, b.lastId),
+            db().prepare(`UPDATE conversations SET ${side('a')},${side('b')} WHERE id=?`).bind(u.id, u.id, p[1]),
+        ]);
         return json({ ok: true });
     }
     return null;

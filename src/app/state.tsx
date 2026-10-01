@@ -47,6 +47,49 @@ export function setPageTitle(name: string) {
     applyTitle();
 }
 
+// Adaptive polling (WP42): every 30 s while the member did something in the last 5 minutes, then
+// every 120 s, and nothing after 30 idle minutes or while the tab is hidden, until the member comes
+// back (pointer, keys, focus or the tab shown again), which also polls at once.
+const POLL_ACTIVE = 30000, POLL_IDLE = 120000, ACTIVE_FOR = 5 * 60000, STOP_AFTER = 30 * 60000;
+let lastActive = Date.now();
+const sleepers = new Set<() => void>();
+function markActive() {
+    lastActive = Date.now();
+    if (!document.hidden && sleepers.size) [...sleepers].forEach(wake => wake());
+}
+if (typeof window !== 'undefined') {
+    for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) window.addEventListener(type, markActive, { passive: true, capture: true });
+    window.addEventListener('focus', markActive);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) markActive(); });
+}
+
+// Calls `poll` on that schedule while `enabled`; the first call is up to the caller.
+export function useAdaptivePoll(poll: () => void, enabled: boolean) {
+    const ref = useRef(poll);
+    ref.current = poll;
+    useEffect(() => {
+        if (!enabled) return;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const schedule = () => {
+            const idle = Date.now() - lastActive;
+            timer = setTimeout(tick, idle < ACTIVE_FOR ? POLL_ACTIVE : POLL_IDLE);
+        };
+        const tick = () => {
+            timer = undefined;
+            if (document.hidden || Date.now() - lastActive > STOP_AFTER) { sleepers.add(wake); return; }
+            ref.current();
+            schedule();
+        };
+        const wake = () => {
+            sleepers.delete(wake);
+            ref.current();
+            if (timer === undefined) schedule();
+        };
+        schedule();
+        return () => { if (timer !== undefined) clearTimeout(timer); sleepers.delete(wake); };
+    }, [enabled]);
+}
+
 const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -82,15 +125,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api<{ unread: number; user: User }>('chats/unread').then(d => { setUnread(d.unread); updateMe(d.user); }).catch(() => {});
     }, [signedIn, updateMe]);
 
-    // Every 30 s while the tab is visible (keeps Worker requests low), and when the tab comes back.
+    // At sign-in, then on the adaptive schedule above (keeps Worker requests low).
     useEffect(() => {
         if (!signedIn) { setUnread(0); return; }
         refreshUnread();
-        const timer = setInterval(() => { if (!document.hidden) refreshUnread(); }, 30000);
-        const onVisible = () => { if (!document.hidden) refreshUnread(); };
-        document.addEventListener('visibilitychange', onVisible);
-        return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
     }, [signedIn, refreshUnread]);
+    useAdaptivePoll(refreshUnread, signedIn);
 
     useEffect(() => { unreadCount = unread; applyTitle(); }, [unread]);
 

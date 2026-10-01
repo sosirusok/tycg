@@ -29,11 +29,14 @@ function sql(command) {
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data) => {
-        const response = await fetch(base + '/api/' + path, {
+        const send = () => fetch(base + '/api/' + path, {
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: data === undefined ? undefined : JSON.stringify(data),
         });
+        // The local server closes idle keep-alive connections while the wrangler SQL checks run; a request
+        // that lands on such a closed connection never reached the Worker, so it is sent once more.
+        const response = await send().catch(e => { if (e?.cause?.code === 'UND_ERR_SOCKET') return send(); throw e; });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         const raw = await response.text();

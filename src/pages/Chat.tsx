@@ -10,7 +10,7 @@ import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type App
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { useApp } from '../app/state';
+import { useAdaptivePoll, useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
@@ -73,19 +73,38 @@ export default function Chat({ id }: { id?: string }) {
     // The manager can narrow the list to chats with a waiting application (신청 대기).
     const [filter, setFilter] = useState<ChatFilter>('all');
     const view = me?.role === 'manager' ? filter : 'all';
-    // A failed refresh keeps the list on screen; it never turns into an empty list.
-    const loadChats = useCallback(() => {
-        api<{ chats: ChatItem[] }>('chats' + (view === 'applications' ? '?filter=applications' : '')).then(d => { setChats(d.chats); setListError(null); })
-            .catch(e => setListError(e instanceof ApiError ? e.status : 0));
+    // A failed refresh keeps the list on screen; it never turns into an empty list. After the first
+    // load, the list asks only for the chats updated since its last answer (?since=, a minute of overlap
+    // for clock drift) and merges them in. The manager's 신청 대기 view always reloads whole, since its
+    // rows also leave when an application is handled.
+    const since = useRef<number | null>(null);
+    const loadChats = useCallback((full = false) => {
+        const merge = !full && view === 'all' && since.current !== null;
+        const path = view === 'applications' ? 'chats?filter=applications' : merge ? `chats?since=${since.current}` : 'chats';
+        api<{ chats: ChatItem[]; at?: number }>(path).then(d => {
+            if (view === 'all' && typeof d.at === 'number') since.current = Math.max(0, d.at - 60000);
+            setChats(prev => {
+                if (!merge || !prev) return d.chats;
+                const fresh = new Map(d.chats.map(c => [c.id, c]));
+                return [...d.chats, ...prev.filter(c => !fresh.has(c.id))].sort((a, b) => b.updated_at - a.updated_at).slice(0, 100);
+            });
+            setListError(null);
+        }).catch(e => setListError(e instanceof ApiError ? e.status : 0));
     }, [view]);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
         setChats(null); setListError(null);
-        loadChats();
-        const t = setInterval(() => { if (!document.hidden) loadChats(); }, 20000);
-        return () => clearInterval(t);
+        since.current = null;
+        loadChats(true);
     }, [me?.id, loadChats]);
+    useAdaptivePoll(loadChats, !!me);
+    // The open room marked its messages read: its row shows none at once, then the list catches up.
+    const roomActivity = () => {
+        if (id) setChats(list => list && list.map(c => c.id === id ? { ...c, unread: 0 } : c));
+        loadChats();
+        refreshUnread();
+    };
 
     if (!me) return <div className="container page"><EmptyState icon="lock" title="로그인이 필요합니다" action={<button className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} /></div>;
 
@@ -101,7 +120,7 @@ export default function Chat({ id }: { id?: string }) {
                     </div>}
                 </div>
                 {listError === 401 ? <EmptyState icon="lock" title="로그인이 필요합니다" action={<button type="button" className="btn btn-primary" onClick={() => requireLogin()}>로그인</button>} />
-                    : chats === null && listError !== null ? <EmptyState title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(); }}>다시 시도</button>} />
+                    : chats === null && listError !== null ? <EmptyState title="채팅을 불러오지 못했습니다" action={<button type="button" className="btn btn-line" onClick={() => { setListError(null); loadChats(true); }}>다시 시도</button>} />
                     : chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
                     : chats.length === 0 ? (view === 'applications' ? <EmptyState title="대기 중인 신청이 없습니다" /> : <EmptyState icon="message" title="채팅 내역이 없습니다" />)
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
@@ -115,7 +134,7 @@ export default function Chat({ id }: { id?: string }) {
                         {c.last_post_thumb && <img className="chat-item-thumb" src={imageUrl(c.last_post_thumb)} alt="" loading="lazy" />}
                     </Link></li>)}</ul>}
             </aside>
-            {id ? <Room key={id} id={id} me={me} onActivity={() => { loadChats(); refreshUnread(); }} onGrant={() => void refreshMe().catch(() => {})} />
+            {id ? <Room key={id} id={id} me={me} onActivity={roomActivity} onGrant={() => void refreshMe().catch(() => {})} />
                 : !empty && <section className="chat-room chat-empty"><p className="chat-pick">채팅방을 선택하세요</p></section>}
         </div>
     </div>;

@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { Buffer } from 'node:buffer';
 import { db, fail } from './http';
+import { countR2 } from './meter';
 
 // Photos go to R2 when a bucket is bound. Otherwise they are kept in D1 as base64
 // text so the site works on an account without R2. D1 rows are limited to 2 MB,
@@ -24,6 +25,7 @@ export async function putPhoto(id: string, bytes: Uint8Array, mime: string, stor
     if (storage === 'r2') {
         const b = bucket();
         if (!b) fail(503, '사진 저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        countR2();
         await b.put('uploads/' + id, bytes, { httpMetadata: { contentType: mime } });
         return;
     }
@@ -32,12 +34,21 @@ export async function putPhoto(id: string, bytes: Uint8Array, mime: string, stor
 }
 
 export async function getPhoto(id: string, storage: Storage): Promise<BodyInit | null> {
-    if (storage === 'r2') return (await bucket()?.get('uploads/' + id))?.body ?? null;
+    if (storage === 'r2') { countR2(); return (await bucket()?.get('uploads/' + id))?.body ?? null; }
     const row = await db().prepare('SELECT data FROM upload_blobs WHERE id=?').bind(id).first<{ data: string }>();
     return row ? new Uint8Array(Buffer.from(row.data, 'base64')) : null;
 }
 
 export async function deletePhoto(id: string, storage: Storage) {
-    if (storage === 'r2') await bucket()?.delete('uploads/' + id);
+    if (storage === 'r2') { countR2(); await bucket()?.delete('uploads/' + id); }
     else await db().prepare('DELETE FROM upload_blobs WHERE id=?').bind(id).run();
+}
+
+// Removes many R2 photos in one call (R2 takes up to 1,000 keys per delete). D1 photos need nothing
+// here: their upload_blobs rows go with the uploads rows (ON DELETE CASCADE).
+export async function deleteR2Photos(ids: string[]) {
+    const b = bucket();
+    if (!b || !ids.length) return;
+    countR2();
+    await b.delete(ids.map(id => 'uploads/' + id));
 }

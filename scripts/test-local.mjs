@@ -95,10 +95,13 @@ try {
     delete built.assets;
     const noR2 = path.join(path.dirname(config), 'wrangler.no-r2.json');
     await writeFile(noR2, JSON.stringify(built));
+    // READ_BUDGET=on turns on the read and call meter (worker/meter.ts) on this server only: responses
+    // carry X-Rows-Read and friends, and the cron stores its counts in settings 'sys:last_cron_meter'.
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password')], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor('http://127.0.0.1:8791', fallback);
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs'])) {
+    // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-budget.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
 } catch (error) {

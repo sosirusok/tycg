@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { suspendUntilText, type User } from '../shared/market';
 import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
+import { meteredDb } from './meter';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -9,7 +10,8 @@ export const MANAGER_NICKNAME = '우와오';
 export function db() {
     const d = (env as Partial<Env>).DB;
     if (!d) throw new Error('DB unavailable');
-    return d;
+    // The test meter (READ_BUDGET=on, local only) counts through a wrapper; otherwise the binding itself.
+    return meteredDb(d);
 }
 
 export class ApiError extends Error {
@@ -139,10 +141,10 @@ export async function currentUser(r: Request): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
         .bind(token, now).first<any>();
     if (!row) return null;
-    const { session_expires_at, last_seen_at, trial_at, ...user } = row;
+    const { session_expires_at, last_seen_at, trial_at, has_blocks, ...user } = row;
     const writes: D1PreparedStatement[] = [];
     if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
     if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
@@ -165,8 +167,16 @@ export async function currentUser(r: Request): Promise<User | null> {
             }
         } catch (e) { console.warn('Trial catch-up failed', e instanceof Error ? e.message : 'unknown'); }
     }
-    return withMember(user) as User;
+    const member = withMember(user) as User;
+    // Whether the member blocked anyone, for the board lists (never sent: not enumerable).
+    Object.defineProperty(member, HAS_BLOCKS, { value: !!has_blocks, enumerable: false });
+    return member;
 }
+
+// Set on the members currentUser returns: false when they blocked nobody, so lists skip the per-post
+// block check. Any other user object (or a missing flag) counts as having blocks.
+const HAS_BLOCKS = Symbol('hasBlocks');
+export const mayHaveBlocks = (u: User) => (u as unknown as Record<symbol, unknown>)[HAS_BLOCKS] !== false;
 
 // 플러스 무료 체험 window (settings 'sys:trial_start' and 'sys:trial_end', written by 0016_plus_trial
 // and the manager's card). A missing value means closed. Cached for 60 s per isolate; the manager's

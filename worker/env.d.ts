@@ -11,10 +11,21 @@ interface Env {
     // Test only: 'relaxed' lifts the post caps (open posts, posts per day, same title) for requests
     // to 127.0.0.1 or localhost. scripts/test-local.mjs sets it for the API suites; deploys never do.
     POST_LIMITS?: string;
+    // Test only: 'on' turns on the read and call meter (worker/meter.ts) for requests to 127.0.0.1 or
+    // localhost and for scheduled runs. scripts/test-local.mjs sets it; wrangler.jsonc and deploys never do.
+    READ_BUDGET?: string;
 }
 
 declare module 'cloudflare:workers' {
     export const env: Env;
+}
+
+// Minimal typing for AsyncLocalStorage, which `nodejs_compat` provides (the test meter).
+declare module 'node:async_hooks' {
+    export class AsyncLocalStorage<T> {
+        run<R>(store: T, fn: () => R): R;
+        getStore(): T | undefined;
+    }
 }
 
 // Minimal typing for the Node Buffer that `nodejs_compat` provides (base64 codec).

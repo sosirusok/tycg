@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeColumns, withMember, setting, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeColumns, withMember, setting, mayHaveBlocks, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins,
@@ -8,6 +8,12 @@ import {
 import { SITE_RULES, perksOf, rulesOf, kstDayStart, titleKey, gapText, walletOf, type Perks } from '../shared/membership';
 
 const HOUR = 3600000;
+const DAY = 24 * HOUR;
+// Board and home lists show posts bumped in the last 30 days (WP42); '오래된 글 보기' (old=1), a search,
+// a profile, 내 글, 찜 and 최근 본 글 cover every post.
+export const LIST_WINDOW = 30 * DAY;
+// Counts stop at 301 rows: the board shows '300+' and pages up to the last full page.
+export const COUNT_CAP = 300;
 
 // "15:40" on the Korean clock, rounded up to the minute so the time shown is never early.
 export function clock(t: number) {
@@ -283,14 +289,35 @@ async function validatePost(b: any, u: User, existing?: any) {
 // Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
 // slots for their grade when the list is read (프리미엄 1, 엘리트 and above 3, the manager 3), newest
 // featured first. A grade that ended loses its slots at once; nothing is deleted.
-function featuredCte(now: number) {
+// f reads only the featured posts (the posts_featured partial index), and the box statements are
+// driven from `shown` (featuredSelect), so a tab without featured posts costs a few rows, not a scan.
+export function featuredCte(now: number) {
     return {
         sql: `WITH f AS (SELECT p.id,ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.featured_at DESC) AS n,
-            CASE WHEN u.role='manager' THEN 3 ELSE (SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=p.author_id AND (g.expires_at IS NULL OR g.expires_at>?)) END AS r
-            FROM posts p JOIN users u ON u.id=p.author_id WHERE p.featured_at IS NOT NULL AND p.status='open' AND p.hidden=0 AND p.bumped_at>?),
+            CASE WHEN p.author_id='${MANAGER_ID}' THEN 3 ELSE (SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=p.author_id AND (g.expires_at IS NULL OR g.expires_at>?)) END AS r
+            FROM posts p INDEXED BY posts_featured WHERE p.featured_at IS NOT NULL AND p.status='open' AND p.hidden=0 AND p.bumped_at>?),
             shown AS (SELECT id,r FROM f WHERE n<=CASE WHEN r>=3 THEN 3 WHEN r=2 THEN 1 ELSE 0 END) `,
         args: [now, now - 72 * HOUR],
     };
+}
+export const featuredSelect = postSelect.replace(' FROM posts p JOIN users u ', ' FROM shown s CROSS JOIN posts p ON p.id=s.id JOIN users u ');
+
+// The filters every list shares: the manager's hidden posts, members under 이용 정지 (boards, search,
+// 찜, profile lists and both promotion boxes leave them out until the suspension ends; authors still see
+// their own list), the authors the viewer blocked (boards only) and 대리(진행) posts whose author lost
+// 대리 인증. None of them joins users, so a count reads posts only.
+export function baseFilters(u: User | null, author: string | null, now: number) {
+    const where: string[] = [], values: unknown[] = [];
+    if (!u || author !== u.id) {
+        where.push('p.hidden=0', 'p.author_id NOT IN (SELECT id FROM users WHERE suspended_until>?)');
+        values.push(now);
+    }
+    if (author) { where.push('p.author_id=?'); values.push(author); }
+    // (Only for a member who blocked someone: the check probes blocks once per post read.)
+    else if (u && mayHaveBlocks(u)) { where.push('p.author_id NOT IN (SELECT target_id FROM blocks WHERE user_id=?)'); values.push(u.id); }
+    where.push("(p.kind!='proxy_offer' OR p.author_id=? OR EXISTS(SELECT 1 FROM users ur WHERE ur.id=p.author_id AND ur.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))");
+    values.push(u?.id || '');
+    return { where, values };
 }
 
 // Posts the previous Worker wrote during a deploy have bumped_at=0 and would sort last. For the
@@ -298,32 +325,20 @@ function featuredCte(now: number) {
 // list (an indexed UPDATE that usually changes nothing), so rows the previous Worker writes while
 // both versions still serve are covered too. The daily cleanup does the same.
 let isolateStart = 0;
-function bumpBackfill(now: number) {
+export function bumpBackfill(now: number) {
     isolateStart ||= now;
     return now - isolateStart < HOUR ? [db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0')] : [];
 }
 
 async function listPosts(req: Request, url: URL) {
-    const backfill = bumpBackfill(Date.now());
-    const u = await currentUser(req), s = url.searchParams, where: string[] = [], values: any[] = [];
+    const now = Date.now(), backfill = bumpBackfill(now);
+    const u = await currentUser(req), s = url.searchParams;
     const author = s.get('author');
-    // Authors see their own hidden posts in their own list; nobody else sees hidden posts in a list.
-    // A member under 이용 정지 is left out the same way (boards, search, 찜, profile lists and both
-    // promotion boxes, which share this clause) until the suspension ends.
-    if (!u || author !== u.id) {
-        where.push('p.hidden=0', '(u.suspended_until IS NULL OR u.suspended_until<=?)');
-        values.push(Date.now());
-    }
+    const { where, values } = baseFilters(u, author, now) as { where: string[]; values: any[] };
     for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'reserved', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
         if (v && allowed.includes(v)) { where.push('p.' + col + '=?'); values.push(v); }
     }
-    if (author) { where.push('p.author_id=?'); values.push(author); }
-    // Boards skip the authors the viewer blocked; a blocked member's profile still lists their posts.
-    else if (u) { where.push('p.author_id NOT IN (SELECT target_id FROM blocks WHERE user_id=?)'); values.push(u.id); }
-    // 대리(진행) posts are listed only while the author holds 대리 인증 (authors still see their own).
-    where.push("(p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))");
-    values.push(u?.id || '');
     if (s.get('active') === '1') where.push("p.status!='closed'");
     if (s.get('mode') && ['fixed', 'offer', 'negotiate'].includes(s.get('mode')!)) {
         where.push("(CASE WHEN p.price_mode='legacy' THEN CASE WHEN p.price IS NULL THEN 'negotiate' ELSE 'fixed' END ELSE p.price_mode END)=?");
@@ -471,30 +486,34 @@ async function listPosts(req: Request, url: URL) {
         where.push(`p.id IN(SELECT post_id FROM ${scope === 'favorites' ? 'favorites' : 'history'} WHERE user_id=?)`);
         values.push(u.id);
     }
+    // The 30-day window for boards (see LIST_WINDOW); old=1 is '오래된 글 보기'.
+    if (!q && !author && !scope && s.get('old') !== '1') { where.push('p.bumped_at>?'); values.push(now - LIST_WINDOW); }
     // 최신순 follows 끌올; created_at stays the time the post was written.
     const sort = s.get('sort');
     let order = sort === 'price-low' ? 'p.price IS NULL,p.price ASC' : sort === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.bumped_at DESC';
     if (scope === 'recent') order = '(SELECT created_at FROM history WHERE post_id=p.id AND user_id=?) DESC';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
-    const cte = featuredCte(Date.now());
-    // Home '추천 매물': featured posts of 엘리트 and above across every tab, with the same hidden,
-    // block and 대리 인증 rules as the boards.
+    const cte = featuredCte(now);
+    // Home '추천 매물' (GET /api/home has it too): featured posts of 엘리트 and above across every tab,
+    // with the same hidden, block and 대리 인증 rules as the boards.
     if (s.get('featured') === 'home') {
-        const r = (await db().batch([...backfill, db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown WHERE r>=3) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6))])).at(-1)!;
+        const r = (await db().batch([...backfill, db().prepare(cte.sql + featuredSelect + clause + ' AND s.r>=3 ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?').bind(...cte.args, ...values, Math.min(size, 6))])).at(-1)!;
         return json({ posts: await decorate(r.results, u), total: r.results.length, page: 1, size });
     }
     // Board '프리미엄 매물' box: page 1 of a tab in 최신순, with the page's own filters. The same
     // posts stay in the list, so counts and paging do not change.
-    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope;
+    // featured=none asks for the plain list without the box.
+    const withFeatured = page === 1 && (!sort || sort === 'latest') && TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) && !author && !scope && s.get('featured') !== 'none';
     // A search across every tab also returns how many results each tab has.
     const withCounts = !!q && !TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]);
+    // The count stops at 301 rows and joins users only for a search (it matches nicknames).
     const r = (await db().batch([
         ...backfill,
-        db().prepare('SELECT COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause).bind(...values),
+        db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause} LIMIT ${COUNT_CAP + 1})`).bind(...values),
         db().prepare(postSelect + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
-        ...withFeatured ? [db().prepare(cte.sql + postSelect + clause + ' AND p.id IN (SELECT id FROM shown) ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
+        ...withFeatured ? [db().prepare(cte.sql + featuredSelect + clause + ' ORDER BY p.bumped_at DESC,p.id DESC LIMIT 3').bind(...cte.args, ...values)] : [],
     ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
     const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
@@ -503,7 +522,8 @@ async function listPosts(req: Request, url: URL) {
     // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
     // post and started a chat from it. The profile lists do not ask, so they skip these reads.
     if (u && author === u.id && !scope && s.get('counts') === '1') await addOwnCounts(posts);
-    return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
+    const total = Number((r[0].results[0] as any).count) || 0;
+    return json({ posts, total, page, size, ...total > COUNT_CAP ? { capped: true } : {}, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
 }
 
 // 찜한 글: a sale whose 즉거가 is below the price the member saw when saving it carries price_drop
