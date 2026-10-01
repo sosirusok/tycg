@@ -80,6 +80,13 @@ export function postTime(p: Pick<Post, 'created_at' | 'bumped_at' | 'bump_count'
     return (p.bump_count || 0) > 0 && p.bumped_at && p.bumped_at <= now ? '끌올 ' + relativeTime(p.bumped_at) : relativeTime(p.created_at);
 }
 
+// The 대표 photo of a list row (WP46): the inline thumbnail the editor made (no image request), else
+// the photo itself; count is how many photos the post has (lists carry only the 대표).
+export function listPhoto(post: Pick<Post, 'images' | 'thumb' | 'photo_count'>) {
+    const thumb = post.images[0] as string | undefined;
+    return { thumb, thumbSrc: post.thumb || (thumb ? imageUrl(thumb) : ''), count: post.photo_count ?? post.images.length };
+}
+
 // showKind adds the board name as a plain-text prefix ('[판매] 계정') for mixed lists; a list of
 // one board passes false. hideAuthor drops the author line on a member's own profile lists.
 // promoted is the board's '프리미엄 매물' box: a brand outline, no fill. flag goes at the end of the
@@ -98,8 +105,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             onChange?.();
         } catch (e) { toast.error(errorText(e)); }
     }
-    // The inline thumbnail the editor made (no image request), else the 대표 photo itself.
-    const thumb = post.images[0], thumbSrc = post.thumb || (thumb ? imageUrl(thumb) : '');
+    const { thumb, thumbSrc, count } = listPhoto(post);
     const fav = me?.id !== post.author_id && <button type="button" className={'post-card-fav' + (post.favorite ? ' on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}>
         <Heart size={thumb ? 18 : 20} fill={post.favorite ? 'currentColor' : 'none'} />
     </button>;
@@ -129,7 +135,7 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             </div>
         </div>
         {thumb ? <div className="post-card-side">
-            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={thumbSrc} alt="" loading="lazy" /></Link>
+            <Link to={href} className="post-card-thumb" tabIndex={-1} aria-hidden="true"><img src={thumbSrc} alt="" loading="lazy" />{count >= 2 && <span className="photo-count">{count}</span>}</Link>
             {fav}
         </div> : fav}
     </article>;
@@ -146,10 +152,16 @@ export function AppraisedLine({ post }: { post: Pick<Post, 'appraised'> }) {
 export function MiniCard({ post }: { post: Post }) {
     const summary = postSummary(post);
     const tags = post.tags.slice(0, 2).map(tagName);
-    return <Link to={'/posts/' + post.id} className="mini-card">
+    const { thumb, thumbSrc, count } = listPhoto(post);
+    const head = <>
         <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
         <h3>{post.title}</h3>
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
+    </>;
+    // With a photo the text and the 64px 대표 sit side by side (grid 1fr 64px); without one it stays text only.
+    return <Link to={'/posts/' + post.id} className="mini-card">
+        {thumb ? <div className="mini-card-top"><div className="mini-card-text">{head}</div>
+            <span className="mini-card-thumb"><img src={thumbSrc} alt="" loading="lazy" />{count >= 2 && <span className="photo-count">{count}</span>}</span></div> : head}
         <PriceLine post={post} />
         {/* The time sits on the meta line, as on PostCard, so the author row holds only the name line. */}
         <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} compact /></div>

@@ -75,7 +75,9 @@ export type Post = {
     price_mode: string;
     accepts_offers: number;
     details: Record<string, string>;
+    // Lists carry only the 대표 (images[0]) and photo_count; GET /posts/:id carries every photo (WP46).
     images: string[];
+    photo_count?: number;
     favorite?: boolean;
     hidden: number;
 };

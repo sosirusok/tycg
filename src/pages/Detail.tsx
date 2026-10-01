@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal, X } from 'lucide-react';
-import { Dialog, DropdownMenu } from 'radix-ui';
+import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan,
@@ -13,6 +13,7 @@ import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { AppraisedLine, PriceLine } from '../components/PostCard';
 import { ServiceSheet } from '../components/ServiceSheet';
+import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 
@@ -111,7 +112,7 @@ export function Detail({ id }: { id: string }) {
     const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
-    const [lightbox, setLightbox] = useState<string | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+    const [lightbox, setLightbox] = useState<number | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
@@ -263,7 +264,8 @@ export function Detail({ id }: { id: string }) {
                 {/* On phones the author and their verification checks come right under the title. */}
                 <AuthorBox post={post} own={mine} className="author-box-top" />
                 {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
-                {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(img)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading="lazy" /></button>)}</div>}
+                {/* The first 2 photos load with the page, the rest as they scroll in (WP46). */}
+                {post.images.length > 0 && <div className="gallery">{post.images.map((img, i) => <button type="button" key={img} onClick={() => setLightbox(i)} aria-label={`사진 ${i + 1} 크게 보기`}><img src={imageUrl(img)} alt="" loading={i < 2 ? 'eager' : 'lazy'} /></button>)}</div>}
 
                 {info.length > 0 && <section className="detail-section">
                     <h2>{sectionTitle}</h2>
@@ -338,16 +340,7 @@ export function Detail({ id }: { id: string }) {
             <button type="button" className="btn btn-primary" onClick={startChat}>채팅하기</button>
         </div>}
 
-        <Dialog.Root open={!!lightbox} onOpenChange={o => { if (!o) setLightbox(null); }}>
-            <Dialog.Portal>
-                <Dialog.Overlay className="lightbox" onClick={() => setLightbox(null)} />
-                <Dialog.Content className="lightbox-content" aria-describedby={undefined} onClick={() => setLightbox(null)}>
-                    <Dialog.Title className="sr-only">사진 크게 보기</Dialog.Title>
-                    {lightbox && <img src={imageUrl(lightbox)} alt="" />}
-                    <Dialog.Close className="icon-btn lightbox-close" aria-label="닫기"><X size={26} /></Dialog.Close>
-                </Dialog.Content>
-            </Dialog.Portal>
-        </Dialog.Root>
+        <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(p)} />}
         <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />

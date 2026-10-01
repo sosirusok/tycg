@@ -77,7 +77,9 @@ export function shownPriceHistory(history: { price: number; changed_at: number }
     return kept;
 }
 
-export async function decorate(rows: any[], viewer?: Viewer) {
+// Lists (full false) carry only the 대표 (images[0]) and photo_count (WP46); GET /posts/:id and the
+// price edit that returns the post (full true) carry every photo.
+export async function decorate(rows: any[], viewer?: Viewer, full = false) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
     const [tags, wantedTags, favs, histories] = await db().batch([
@@ -107,10 +109,11 @@ export async function decorate(rows: any[], viewer?: Viewer) {
         const appraised = p.appraised_price !== null && p.appraised_price !== undefined && p.appraised_at !== null && p.appraised_at !== undefined && p.updated_at <= p.appraised_at
             ? { price: p.appraised_price, at: p.appraised_at } : null;
         if (viewer?.role !== 'manager') { delete p.appraised_price; delete p.appraised_at; }
+        const parsed = parse(p.images, []), images: string[] = Array.isArray(parsed) ? parsed : [];
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
             price_mode: p.price_mode === 'legacy' ? (p.price === null ? 'negotiate' : 'fixed') : p.price_mode,
-            details: parse(p.details, {}), images: parse(p.images, []),
+            details: parse(p.details, {}), images: full ? images : images.slice(0, 1), photo_count: images.length,
             tags: tags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
@@ -705,7 +708,7 @@ async function patchPrice(req: Request, u: User, post: any) {
         ...hasPrice ? priceHistoryStatements(post.id, 'sell', price, now) : [],
         db().prepare(`UPDATE posts SET ${sets.join(',')},updated_at=? WHERE id=? AND kind='sell'`).bind(...args, now, post.id),
     ]);
-    return json({ post: (await decorate([await rawPost(post.id)], u))[0] });
+    return json({ post: (await decorate([await rawPost(post.id)], u, true))[0] });
 }
 
 // PATCH /posts/:id/status {status:'closed', partnerId?, amount?} (WP43): 완료 is final and one batch.
@@ -781,7 +784,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
             const stats = await tradeStats(post.author_id);
             Object.assign(post, { author_trade_count: stats.trade_count, author_deal_sum: stats.deal_sum, author_good_count: stats.good_count });
         }
-        return json({ post: (await decorate([post], u))[0] });
+        return json({ post: (await decorate([post], u, true))[0] });
     }
     const u = await requireUser(req);
     await limit('post:' + u.id, 50, 60000);

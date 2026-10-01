@@ -32,16 +32,16 @@ function equal(actual, expected, name) {
 
 function client() {
     let cookie = '';
-    return async (path, method = 'GET', data) => {
+    return async (path, method = 'GET', data, upload) => {
         const response = await fetch(base + '/api/' + path, {
             method,
             redirect: 'error',
             signal: AbortSignal.timeout(15000),
             headers: {
                 ...(cookie ? { Cookie: cookie } : {}),
-                ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+                ...(upload ? { 'Content-Type': upload.type } : data === undefined ? {} : { 'Content-Type': 'application/json' }),
             },
-            body: data === undefined ? undefined : JSON.stringify(data),
+            body: upload ? upload.bytes : data === undefined ? undefined : JSON.stringify(data),
         });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
@@ -164,6 +164,30 @@ try {
         .find(post => post.id === saleId);
     check(Boolean(listedSale), 'public search includes the sale');
     equal(history(listedSale), [600000, 500000], 'list and detail expose the same price history');
+    equal([listedSale.images, listedSale.photo_count], [[], 0], 'a list row without photos has no 대표 and photo_count 0');
+
+    // 대표 이미지 (WP46): list rows carry only images[0] and photo_count; the post itself carries every photo.
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const shots = [];
+    for (let i = 0; i < 3; i++) {
+        const up = await seller('uploads', 'POST', undefined, { type: 'image/png', bytes: Uint8Array.from(Buffer.concat([png, Buffer.from(run + i)])) });
+        equal(up.status, 201, `photo ${i + 1} uploads`);
+        shots.push(up.data.id);
+    }
+    equal(new Set(shots).size, 3, 'three distinct photos');
+    const photosId = await create(seller, { ...common, category: 'other', tags: [], title: `[로컬 QA] ${run}-photos`, images: shots }, 'post with 3 photos');
+    const photoRow = (await search({ q: run + '-photos' })).find(post => post.id === photosId);
+    check(Boolean(photoRow), 'the photo post is in the list');
+    equal(photoRow.images.length, 1, 'a list row has images.length 1');
+    equal(photoRow.images[0], shots[0], 'the list row carries the 대표 (images[0])');
+    equal(photoRow.photo_count, 3, 'a list row has photo_count 3');
+    const photoDetail = await read(photosId);
+    equal(photoDetail.images, shots, 'the detail has all 3 photos in order');
+    equal(photoDetail.photo_count, 3, 'the detail has photo_count 3');
+    await edit(seller, photosId, { ...common, category: 'other', tags: [], title: `[로컬 QA] ${run}-photos`, images: [shots[2], shots[0], shots[1]] }, '대표로 moves the 3rd photo to the front');
+    const recovered = (await search({ q: run + '-photos' })).find(post => post.id === photosId);
+    equal([recovered.images, recovered.photo_count], [[shots[2]], 3], 'the list follows the new 대표');
+    equal((await read(photosId)).images, [shots[2], shots[0], shots[1]], 'the others keep their order');
 
     equal((await guest('posts/' + saleId, 'PUT', sale)).status, 401, 'anonymous edits are denied');
     equal((await validator('posts/' + saleId, 'PUT', { ...sale, price: 1 })).status, 403,
@@ -346,7 +370,7 @@ try {
     }
     if (fixtureUsers.length) {
         // No production/remote option is accepted. Only this run's exact fixture IDs are removed.
-        // Test members have no chat, report, upload, or offer records.
+        // Test members have no chat, report or offer records; their photos go with them (uploads cascade).
         try {
             assert.ok(fixtureUsers.every(user => /^[a-f0-9-]{36}$/.test(user.id)
                 && new RegExp(`^v9_${run}_[0-2]$`).test(user.username)), 'Unexpected fixture identity');

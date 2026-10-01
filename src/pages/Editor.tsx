@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Lock, X } from 'lucide-react';
+import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, RECORD_PREFERENCES, TRADE_KINDS,
@@ -7,12 +7,13 @@ import {
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { SITE_RULES } from '../../shared/membership';
-import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, imageUrl, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
 import { SameListingSheet, type Dup } from '../components/SameListingSheet';
+import { PhotoGrid } from '../components/PhotoGrid';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 type Form = {
@@ -346,7 +347,6 @@ export default function Editor({ id }: { id?: string }) {
             if (fileInput.current) fileInput.current.value = '';
         }
     }
-    const moveImage = (i: number, d: number) => { const a = [...form.images]; [a[i], a[i + d]] = [a[i + d], a[i]]; patch({ images: a }); };
     // A screenshot pasted anywhere on the page, or a photo dropped on it, goes into 사진 like one picked
     // from the album. Text pastes and drags are left alone, also text that comes with a picture of it
     // (Excel, Word) pasted into a field; a dropped file never replaces the page.
@@ -394,9 +394,11 @@ export default function Editor({ id }: { id?: string }) {
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
-            // The list thumbnail of the 대표 photo (WP45). Without one (no WebP in this browser) the list shows
-            // the photo itself, and an edit keeps the thumbnail it had while the 대표 is the same.
-            const thumb = form.images[0] ? await makeThumb(form.images[0]) : null;
+            // The list thumbnail of the 대표 photo (WP45), made again whenever images[0] changed (WP46) or the
+            // post has none. Without one (no WebP in this browser) the list shows the photo itself, and an
+            // edit keeps the thumbnail it had while the 대표 is the same.
+            const cover = form.images[0], had = post.current;
+            const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
             const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
@@ -612,26 +614,15 @@ export default function Editor({ id }: { id?: string }) {
                     </div>
                 </section>
 
-                <Section title="사진" desc={`첫 장이 대표 사진 · ${photoCount}`}>
+                <section className="ed-section">
+                    <div className="ed-head ed-head-row"><h2>사진</h2><span className="ed-photo-count">{photoCount}</span></div>
                     <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void addPhotos(Array.from(e.target.files || []))} />
-                    <div className="photo-grid">
-                        {form.images.map((img, i) => <div className="photo" key={img}>
-                            <img src={imageUrl(img)} alt={`사진 ${i + 1}`} />
-                            {i === 0 && <b className="photo-main">대표</b>}
-                            <button type="button" className="photo-remove" aria-label={`사진 ${i + 1} 빼기`} onClick={() => patch({ images: form.images.filter(v => v !== img) })}><X size={14} /></button>
-                            <div className="photo-move">
-                                <button type="button" disabled={i === 0} aria-label="앞으로" onClick={() => moveImage(i, -1)}><ChevronLeft size={14} /></button>
-                                <button type="button" disabled={i === form.images.length - 1} aria-label="뒤로" onClick={() => moveImage(i, 1)}><ChevronRight size={14} /></button>
-                            </div>
-                        </div>)}
-                        {form.images.length < photoCap && <button type="button" className="photo-add" disabled={uploading} onClick={() => fileInput.current?.click()}>
-                            {uploading ? <LoaderCircle size={24} className="spin" /> : <ImagePlus size={26} />}<span>{uploading ? '올리는 중' : photoCount}</span>
-                        </button>}
-                    </div>
+                    <PhotoGrid images={form.images} onChange={images => patch({ images })} canAdd={form.images.length < photoCap} uploading={uploading} onAdd={() => fileInput.current?.click()} />
+                    {form.images.length > 0 && <p className="field-hint mt-8">대표 사진이 목록에 표시</p>}
                     {progress && <p className="field-hint mt-8" role="status">사진 올리는 중 {progress.done}/{progress.total}</p>}
                     {photoLine && !progress && <p className="field-hint mt-8 ed-photo-usage">{photoLine}</p>}
                     {photoPost && <p className="field-hint mt-8 ed-used">‘{photoPost.title}’ 글에 있는 사진입니다. {usedWait ? <span className="nowrap">{readyClock(usedWait)}부터 끌올 가능</span> : <button type="button" className="ed-used-bump" onClick={() => void bumpUsed(photoPost.id)}>끌올</button>}</p>}
-                </Section>
+                </section>
 
                 {error && <p className="alert alert-danger" role="alert">{error}</p>}
                 {!id && freshLine && <p className="field-hint ed-fresh">{freshLine}</p>}
