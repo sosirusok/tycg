@@ -229,10 +229,12 @@ export const TRIAL_MS = TRIAL_DAYS * 86400000;
 export type TrialState = { endsAt: number | null; popup: boolean; ended: boolean; capped: boolean };
 
 // The popup's benefit rows, from the 플러스 limits the Worker enforces right now. Later packages
-// append a row once their feature ships (자동 끌올, 제목·글자색·링크 미리보기).
+// append a row once their feature ships (자동 끌올; 제목·글자색·링크 미리보기 joined with WP48 and WP49).
 export type TrialRow = { icon: string; title: string; text: string };
 export const TRIAL_ROWS: TrialRow[] = [
     { icon: 'megaphone', title: `끌올 ${PERKS.plus.bumpMax}개 · ${gapText(PERKS.plus.bumpRefillMinutes)}마다 충전`, text: `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다 끌올 (일반 ${gapText(PERKS.normal.bumpGapMinutes)})` },
+    // 제목 강조 검정 (WP48), the 플러스 글자 꾸미기 with 글자색 (WP49) and 링크 미리보기 (WP48).
+    { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
 ];
 
 const kstParts = (t: number) => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../../shared/market';
 import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
 import { findLinks } from '../../shared/links';
+import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -17,6 +18,9 @@ import { SameListingSheet, type Dup } from '../components/SameListingSheet';
 import { PhotoGrid } from '../components/PhotoGrid';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
+// 글자 꾸미기 sheet (WP49), loaded when first opened.
+const StyleSheet = lazy(() => import('../components/StyleSheet'));
+
 type Form = {
     kind: TradeKind; category: string; title: string; body: string;
     price: string; // 만원
@@ -24,21 +28,23 @@ type Form = {
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
     link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
+    body_style: Mark[]; // 글자 꾸미기 (WP49): ranges over body, shifted as it is typed; drafts carry them
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true, body_style: [] };
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
     const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
+    form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
 }
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -190,7 +196,10 @@ export default function Editor({ id }: { id?: string }) {
         lastSaved.current = saved ? JSON.stringify(next) : '';
         setVersion(v => v + 1);
     };
-    const fromDraft = ({ savedAt: _s, ...rest }: Draft) => { void _s; return normalize(rest); };
+    // A draft keeps only the 꾸미기 of the member's current grade (the post itself comes read-filtered).
+    const rank = me ? styleRank(me.grade, me.role) : 0;
+    const fromDraft = ({ savedAt: _s, ...rest }: Draft) => { void _s; const f = normalize(rest); return { ...f, body_style: normalizeMarks(f.body, f.body_style, rank) }; };
+    const [styling, setStyling] = useState(false);
     // Photos that came with a restored draft (or the post) are looked up too, so the used-photo line
     // below the grid also shows for them.
     useEffect(() => {
@@ -289,6 +298,8 @@ export default function Editor({ id }: { id?: string }) {
     }
 
     const patch = (v: Partial<Form>) => { dirty.current = true; setForm(f => ({ ...f, ...v })); };
+    // Typing moves the 꾸미기 ranges with the text (WP49).
+    const patchBody = (body: string) => { dirty.current = true; setForm(f => ({ ...f, body, body_style: shiftOnEdit(f.body, body, f.body_style) })); };
     const setDetail = (key: string, value: string) => patch({ details: { ...formRef.current.details, [key]: value } });
 
     function changeKind(kind: TradeKind) {
@@ -402,7 +413,7 @@ export default function Editor({ id }: { id?: string }) {
             // edit keeps the thumbnail it had while the 대표 is the same.
             const cover = form.images[0], had = post.current;
             const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, ...thumb ? { thumb } : {} };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -613,10 +624,13 @@ export default function Editor({ id }: { id?: string }) {
                 <section className="ed-section">
                     <div className="field">
                         <div className="row"><label className="field-label grow" htmlFor="body">내용 <em>*</em></label>
-                            <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patch({ body: template(kind, category) })}>양식 불러오기</button></div>
-                        <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patch({ body: e.target.value })}
+                            <button type="button" className="btn btn-text small" disabled={!!form.body.trim()} onClick={() => patchBody(template(kind, category))}>양식 불러오기</button></div>
+                        <textarea id="body" className="textarea" required maxLength={10000} value={form.body} onChange={e => patchBody(e.target.value)}
                             placeholder={bodyPlaceholder(kind, category)} />
-                        <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span></div>
+                        <div className="row"><span className="field-hint grow">비번, 인증번호는 쓰지 마세요.</span><span className="field-hint nowrap">{form.body.length.toLocaleString()} / 10,000</span>
+                            <button type="button" className="btn btn-line btn-sm ed-style-btn" disabled={!form.body.trim()} onClick={() => setStyling(true)}>{form.body_style.length ? `꾸미기 ${form.body_style.length}` : '꾸미기'}</button></div>
+                        {styling && <Suspense fallback={null}><StyleSheet body={form.body} marks={form.body_style} rank={rank} onClose={() => setStyling(false)}
+                            onChange={m => { dirty.current = true; setForm(f => ({ ...f, body_style: m })); }} /></Suspense>}
                         {previewAllowed && hasLink && <label className="switch mt-8"><input type="checkbox" checked={form.link_preview} onChange={e => patch({ link_preview: e.target.checked })} />링크 미리보기</label>}
                     </div>
                 </section>

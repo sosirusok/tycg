@@ -274,7 +274,7 @@ export function Detail({ id }: { id: string }) {
                 </section>}
                 {post.body.trim() && <section className="detail-section">
                     <h2>내용</h2>
-                    <div className="body-text"><RichBody text={post.body} cards={post.link_cards} /></div>
+                    <div className="body-text"><RichBody text={post.body} cards={post.link_cards} marks={post.body_style?.m} /></div>
                 </section>}
                 <div className="row muted small detail-tools">
                     <button type="button" className="btn btn-text small" onClick={() => { void navigator.clipboard?.writeText(location.href).then(() => toast('링크 복사 완료')); }}><Link2 size={15} />링크 복사</button>

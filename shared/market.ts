@@ -1,6 +1,7 @@
 // Trade rules shared by the API Worker and the web client.
 import type { BadgeId, GradeId } from './membership';
 import type { LinkCard } from './links';
+import type { BodyStyle } from './richtext';
 
 export const LATEST_SEASON = 32;
 
@@ -84,6 +85,8 @@ export type Post = {
     // 링크 미리보기 (WP48), GET /posts/:id only: the author's switch and the cards the post may show.
     link_preview?: boolean;
     link_cards?: LinkCard[];
+    // 글자 꾸미기 (WP49), GET /posts/:id only: the ranges the author's current grade may show, or null.
+    body_style?: BodyStyle | null;
 };
 
 export function seasonsOf(tier: (typeof TIERS)[number], latest = LATEST_SEASON) {

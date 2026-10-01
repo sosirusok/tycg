@@ -9,6 +9,7 @@ import { SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perk
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
+import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -103,6 +104,11 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         delete p.link_cards;
         if (full) p.link_preview = p.link_preview !== 0;
         else delete p.link_preview;
+        // 글자 꾸미기 (WP49): the detail only, filtered by the author's current grade, and only while the
+        // ranges still belong to this exact body (n, h); lists never carry it.
+        const style = full ? shownStyle(p.body_style, p.body, styleRank(p.author_grade, p.role)) : null;
+        delete p.body_style;
+        if (full) p.body_style = style;
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
@@ -322,7 +328,17 @@ async function validatePost(b: any, u: User, existing?: any) {
     // PATCH /posts/:id/status completes a post.
     // 링크 미리보기 (WP48): on by default; an edit that leaves it out keeps the post's switch.
     const linkPreview = b.link_preview === undefined ? (existing ? existing.link_preview !== 0 : true) : !!b.link_preview;
-    return { linkPreview: linkPreview ? 1 : 0, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
+    // 글자 꾸미기 (WP49): ranges over the body as sent, checked against the author's grade, shifted to the
+    // trimmed body. An edit that leaves body_style out keeps the stored ranges while they still match.
+    let bodyStyle = '';
+    if (b.body_style === undefined) {
+        if (existing?.body_style && shownStyle(existing.body_style, content, 3)) bodyStyle = existing.body_style;
+    } else {
+        const checked = validateStyle(b.body_style, b.body, styleRank(u.grade, u.role));
+        if (!checked.ok) fail(400, STYLE_ERROR);
+        bodyStyle = checked.style ? JSON.stringify(checked.style) : '';
+    }
+    return { linkPreview: linkPreview ? 1 : 0, bodyStyle, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
 }
 
 // Promoted posts shown now: open, not hidden, bumped in the last 72 hours and within the author's
@@ -941,10 +957,10 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
     const spent = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='bump' AND created_at=? AND post_id=${newPost})`;
     const fresh = `EXISTS(SELECT 1 FROM post_events WHERE user_id=? AND kind='fresh' AND created_at=? AND post_id=${newPost})`, eventArgs = [u.id, now, ...newArgs];
     const r = await db().batch([
-        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,? WHERE ${guard}`)
+        db().prepare(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,accepts_offers,details,images,thumb,created_at,updated_at,bumped_at,title_key,bump_count,relist,hidden,hidden_reason,link_preview,body_style)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,? WHERE ${guard}`)
             .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, ...placeArgs, key,
-                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
+                relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
@@ -1001,10 +1017,10 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
     const key = print.title_key, self = "(SELECT id FROM posts WHERE id=? AND status!='closed')";
     await db().batch([
         ...priceHistoryStatements(existing.id, v.kind, v.price, now),
-        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,updated_at=?,
+        db().prepare(`UPDATE posts SET kind=?,title=?,title_key=?,body=?,price=?,category=?,price_mode=?,accepts_offers=?,details=?,images=?,thumb=?,link_preview=?,body_style=?,updated_at=?,
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)
-            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
+            .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, v.bodyStyle, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
         db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),

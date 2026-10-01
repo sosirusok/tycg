@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
 import { BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
@@ -22,6 +23,7 @@ const STEPS = [
 // A cell may hold two lines (영구 and 6개월 prices), each its own line.
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
+const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
 const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
@@ -33,6 +35,8 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
     ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
     ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
+    // 글자 꾸미기 (WP49): the tools of each grade, shown on the post detail only.
+    ['글자 꾸미기', g => STYLE_LADDER[styleRank(g.id)]],
     // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
     // 운영진 가측가 on the post for every grade (paid requests too).
     // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).

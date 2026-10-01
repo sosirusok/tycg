@@ -14,7 +14,8 @@
   --line-2: #c7ced6;
   --fill: #f2f4f7;
   --fill-2: #f7f8fa;
-  --danger: #e5332a;
+  /* 빨강 for errors and the 글자색 빨강 (WP49): 4.86:1 on white (AA). */
+  --danger: #d92b22;
   /* Type scale */
   --fs-12: 12px;
   --fs-13: 13px;
