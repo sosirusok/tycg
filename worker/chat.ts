@@ -131,7 +131,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             const [r, seen, offers, applications] = await db().batch([
                 db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
                 db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
-                db().prepare('SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?').bind(p[1]),
+                // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
+                db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
                 db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
             ]);
             const messages = r.results.map((m: any) => ({ ...m, attachments: parse(m.attachments, []) }));

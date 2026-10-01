@@ -12,7 +12,7 @@ import { MemberPanel } from '../components/MemberPanel';
 
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
-type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string };
+type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'badges' | 'created_at'> & { deleted?: boolean };
 // The post the chat is about, pinned under the room header.
 type Listing = { id: number; title: string; kind: string; price: number | null; price_mode: string; status: string; thumb: string | null; author_id: string; currentOffer: number | null };
@@ -135,6 +135,19 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         return [...map.values()].sort((a, b) => a.id - b.id);
     });
 
+    // The pinned bar follows the post: it is read again when a 제시 changes state, when a post card,
+    // 제시 or system line arrives (예약중 after 수락, 마감), and once a minute while the room is open,
+    // so a status set on the post page or by the other member shows up too.
+    const offerState = useRef(''), listingAt = useRef(0);
+    const refreshListing = useCallback(() => {
+        listingAt.current = Date.now();
+        return api<{ chat: { partner: Partner; blocked: boolean; listing: Listing | null } }>('chats/' + id).then(d => {
+            setPartner(d.chat.partner); setBlocked(d.chat.blocked);
+            // Before the first message the bar shows the post from 채팅하기, which the chat does not know yet.
+            if (d.chat.listing || !aboutPost.current) setListing(d.chat.listing);
+        }).catch(() => {});
+    }, [id]);
+
     const markRead = useCallback((list: Message[]) => {
         const lastIncoming = [...list].reverse().find(m => m.sender_id !== me.id && !m.read_at);
         if (lastIncoming) api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(() => activity.current()).catch(() => {});
@@ -146,6 +159,9 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         if (d.messages.length) { merge(d.messages); last.current = Math.max(last.current, ...d.messages.map(m => m.id)); idle.current = 0; markRead(d.messages); }
         else idle.current++;
         setOffers(d.offers); setApps(d.applications); setReadThrough(d.readThrough); setBlocked(d.blocked);
+        const offerKey = d.offers.map(o => o.id + ':' + o.status).join(',');
+        if (!initial && (offerKey !== offerState.current || d.messages.some(m => m.type === 'listing' || m.type === 'offer' || m.type === 'system') || Date.now() - listingAt.current > 60000)) void refreshListing();
+        offerState.current = offerKey;
         // When an application is decided, the member's badges and the manager's panel update right away.
         let decided = false;
         for (const a of d.applications) {
@@ -155,10 +171,11 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
         }
         if (decided) { setPanelVersion(v => v + 1); grant.current(); }
         return d.messages.length;
-    }, [id, markRead]);
+    }, [id, markRead, refreshListing]);
 
     useEffect(() => {
         let alive = true;
+        listingAt.current = Date.now();
         api<{ chat: { partner: Partner; blocked: boolean; listing: Listing | null } }>('chats/' + id).then(d => {
             if (!alive) return;
             setPartner(d.chat.partner); setBlocked(d.chat.blocked); setListing(d.chat.listing);
@@ -273,6 +290,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
             await api(`posts/${offer.post_id}/price`, 'PATCH', { currentOffer: offer.amount });
             toast('현젯 변경 완료');
             setListing(l => l && l.id === offer.post_id ? { ...l, currentOffer: offer.amount } : l);
+            setOffers(list => list.map(o => o.post_id === offer.post_id ? { ...o, post_current_offer: offer.amount } : o));
         } catch (err) { toast.error(errorText(err)); }
     }
     async function toggleBlock() {
@@ -325,7 +343,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                         {m.type === 'system' ? <div className="sys-msg">{m.body}</div>
                             : m.type === 'listing' ? <ListingCard postId={Number(m.reference_id)} title={m.body} />
                             : m.type === 'application' ? <AppCard app={apps.find(a => a.id === m.reference_id)} fallback={m.body} me={me} partner={partner} mine={mine} at={m.created_at} busy={appBusy === m.reference_id} onAction={appAction} next={decided && decided === m.reference_id ? nextApp : undefined} />
-                            : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} onMark={markOffer} current={listing} />
+                            : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} onMark={markOffer} />
                             : <div className={'bubble-row' + (mine ? ' mine' : '')}>
                                 <div className="bubble-col">
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
@@ -362,12 +380,13 @@ function ListingCard({ postId, title }: { postId: number; title: string }) {
     return <Link to={'/posts/' + postId} className="event-card listing-card"><CIcon name="money-bag" size={28} /><span className="grow"><span className="muted small">문의한 글</span><strong>{title}</strong></span></Link>;
 }
 
-function OfferCard({ offer, me, onAction, onMark, current }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void; onMark: (o: Offer) => void; current: Listing | null }) {
+function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void; onMark: (o: Offer) => void }) {
     if (!offer) return <div className="sys-msg">가격 제시</div>;
     const received = offer.sender_id !== me.id;
-    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯.
+    // The seller can show a waiting or accepted 제시 below the 즉거가 as the post's 현젯, unless it already is.
+    // Each poll brings the post's own 현젯 with its 제시, so this holds when the bar shows another post too.
     const markable = received && offer.post_author_id === me.id && offer.post_kind === 'sell' && offer.post_price !== null && offer.amount < offer.post_price
-        && (offer.status === 'pending' || offer.status === 'accepted') && !(current?.id === offer.post_id && current.currentOffer === offer.amount);
+        && (offer.status === 'pending' || offer.status === 'accepted') && offer.post_current_offer !== offer.amount;
     return <div className="event-card">
         <span className="muted small">{received ? '받은 제시' : '보낸 제시'} · <Link to={'/posts/' + offer.post_id}>{offer.title}</Link></span>
         <strong className="event-amount">{priceText(offer.amount)}</strong>

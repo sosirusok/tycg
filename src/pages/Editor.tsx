@@ -85,7 +85,7 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
     const errorId = id ? id + '-error' : undefined;
     return <label className="field"><span className="field-label">{label}</span>
         <div className={unit ? 'input-unit' : undefined}>
-            {/* Whole numbers keep only their leading digits (2.5 leaves 2, not 25). */}
+            {/* Whole numbers drop separators (1,400,000) and keep only their leading digits (2.5 leaves 2, not 25). */}
             {decimal
                 ? <input id={id} className="input" placeholder={placeholder} value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
                     type="number" inputMode="decimal" min="0" max={max} step="any" onChange={e => onChange(e.target.value)} />
@@ -93,8 +93,10 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
                     max={max} onChange={onChange} />}
             {unit && <span>{unit}</span>}
         </div>
+        {/* 만원 fields show the amount in 원; a whole number of five digits or more (미네랄) shows its separators. */}
         {error ? <span className="field-error" id={errorId} role="alert">{error}</span>
-            : decimal && value && !Number.isNaN(manToWon(value)) && manToWon(value) !== null && <span className="field-hint">{manToWon(value)!.toLocaleString('ko-KR')}원</span>}
+            : decimal ? value && !Number.isNaN(manToWon(value)) && manToWon(value) !== null && <span className="field-hint">{manToWon(value)!.toLocaleString('ko-KR')}원</span>
+            : value.length >= 5 && <span className="field-hint">{Number(value).toLocaleString('ko-KR')}</span>}
     </label>;
 }
 
@@ -153,6 +155,10 @@ export default function Editor({ id }: { id?: string }) {
     const holding = useRef(false);
     holding.current = banner?.mode === 'offer';
     const draftKey = id || 'new';
+    const unsaved = () => dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current;
+    // This form is not auto-saved while that draft waits, so moving to another page in the app asks
+    // first: stay, leave without it, or save it over the waiting draft. Holds the answer's resolver.
+    const [leaveAsk, setLeaveAsk] = useState<null | ((leave: boolean) => void)>(null);
 
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
@@ -218,8 +224,10 @@ export default function Editor({ id }: { id?: string }) {
     useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, banner]);
     useEffect(() => {
         if (!loaded) return;
-        setLeaveGuard(async () => { await persist(); return true; });
-        const unsaved = () => dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current;
+        setLeaveGuard(async () => {
+            if (holding.current && unsaved()) return new Promise<boolean>(resolve => setLeaveAsk(() => resolve));
+            await persist(); return true;
+        });
         const warn = (e: BeforeUnloadEvent) => { if (unsaved()) e.preventDefault(); };
         window.addEventListener('beforeunload', warn);
         return () => {
@@ -229,6 +237,15 @@ export default function Editor({ id }: { id?: string }) {
             if (unsaved() && !holding.current) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
         };
     }, [loaded]);
+
+    async function answerLeave(choice: 'stay' | 'leave' | 'save') {
+        const resolve = leaveAsk;
+        if (!resolve) return;
+        // A failed save keeps the question open; its error shows as a toast.
+        if (choice === 'save' && !(await persist(true))) return;
+        setLeaveAsk(null);
+        resolve(choice !== 'stay');
+    }
 
     function startOver() {
         replaceForm(post.current ? fromPost(post.current) : initial, false);
@@ -494,5 +511,7 @@ export default function Editor({ id }: { id?: string }) {
         </form>
         <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분 변경" description="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => setPendingKind(null)}>취소</button><button type="button" className="btn btn-danger-solid" onClick={() => { if (pendingKind) applyKind(pendingKind); }}>바꾸기</button></>} />
+        <Modal open={!!leaveAsk} onClose={() => void answerLeave('stay')} title="저장되지 않은 글" description="이 글을 임시저장하면 이전에 임시저장된 글은 지워집니다."
+            footer={<><button type="button" className="btn btn-line" onClick={() => void answerLeave('stay')}>취소</button><button type="button" className="btn btn-danger" onClick={() => void answerLeave('leave')}>나가기</button><button type="button" className="btn btn-primary" onClick={() => void answerLeave('save')}>임시저장</button></>} />
     </div>;
 }

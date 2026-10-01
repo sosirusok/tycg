@@ -24,7 +24,7 @@ type Offer = {
 };
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
-// The author's own list adds bump_count, fav_count and chat_count to each post.
+// Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
 type OwnPost = Post & { bump_count?: number; fav_count?: number; chat_count?: number };
 // GET /me/usage (null limits are the manager's: no cap).
 type Usage = {
@@ -96,7 +96,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
-    const pagePath = (t: TabId, n: number) => 'posts?' + new URLSearchParams({ ...(t === 'posts' ? { author: me!.id } : { scope: t }), size: String(PAGE_SIZE), page: String(n) });
+    const pagePath = (t: TabId, n: number) => 'posts?' + new URLSearchParams({ ...(t === 'posts' ? { author: me!.id, counts: '1' } : { scope: t }), size: String(PAGE_SIZE), page: String(n) });
     useEffect(() => {
         if (!me) return;
         let alive = true;

@@ -86,9 +86,11 @@ export function Segmented<T extends string>({ options, value, onChange, name, al
 }
 
 // Whole-number field: a text input with the number keypad (a number input reports '' for '2.' and
-// accepts 'e'). Only the leading digits count, so the first other character ends the number: typing
-// '2.5' leaves 2 and '1e5' leaves 1, because digits typed right after it are ignored until the member
-// deletes or replaces something. Leading zeros go and the value stays within min and max.
+// accepts 'e'). Thousands separators and spaces are dropped first, so '1,400,000' typed or pasted
+// gives 1400000, and full-width digits count as digits. After that only the leading digits count, so
+// any other character ends the number: typing '2.5' leaves 2 and '1e5' leaves 1, because digits typed
+// right after it are ignored until the member deletes or replaces something. Leading zeros go and the
+// value stays within min and max.
 type IntegerProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type' | 'min' | 'max'> & { value: string; onChange: (v: string) => void; max?: number; min?: number };
 export function IntegerInput({ value, onChange, max, min = 0, onFocus, onBlur, ...rest }: IntegerProps) {
     const ended = useRef(false);
@@ -96,7 +98,7 @@ export function IntegerInput({ value, onChange, max, min = 0, onFocus, onBlur, .
         onFocus={e => { ended.current = false; onFocus?.(e); }}
         onBlur={e => { ended.current = false; onBlur?.(e); }}
         onChange={e => {
-            const raw = e.target.value;
+            const raw = e.target.value.normalize('NFKC').replace(/[,\s]/g, '');
             if (ended.current && value && raw.length > value.length && raw.startsWith(value)) return;
             const digits = raw.match(/^\d*/)?.[0] ?? '';
             ended.current = digits.length > 0 && digits.length < raw.length;

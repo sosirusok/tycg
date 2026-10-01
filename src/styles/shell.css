@@ -126,9 +126,11 @@
 .grade-manager { background: var(--ink); border-color: var(--ink); color: var(--white); }
 .verified { display: inline-flex; align-items: center; flex: none; gap: 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
 .verified svg { color: var(--brand); flex: none; }
-/* Compact rows (lists, chat, header menu): one line, short badge names, the nickname ellipsizes first. */
-.name-line.compact { flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; line-height: 20px; }
-.name-line.compact .nick { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Compact rows (lists, chat, header menu): one line with short badge names. The nickname ellipsizes
+   first but keeps at least five characters; a chip or badge that still does not fit wraps to a
+   second line, which is clipped, so it drops out whole instead of being cut in half. */
+.name-line.compact { flex-wrap: wrap; gap: 0 4px; height: 20px; min-width: 0; overflow: hidden; line-height: 20px; }
+.name-line.compact .nick { flex: 1 1 5em; min-width: 0; max-width: max-content; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name-line.compact .v-full { display: none; }
 .name-line:not(.compact) .v-short { display: none; }
 .name-line-lg .nick { font-size: var(--fs-24); font-weight: 700; }

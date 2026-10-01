@@ -440,13 +440,15 @@ async function listPosts(req: Request, url: URL) {
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
     const featured = withFeatured ? await decorate(r[r.length - 1].results, u) : undefined;
     const posts = await decorate(r[1].results, u);
-    // The author's own list (내 글) also shows how many members saved each post and started a chat from it.
-    if (u && author === u.id && !scope) await addOwnCounts(posts);
+    // The author's own list (내 글, which asks with counts=1) also shows how many members saved each
+    // post and started a chat from it. The profile lists do not ask, so they skip these reads.
+    if (u && author === u.id && !scope && s.get('counts') === '1') await addOwnCounts(posts);
     return json({ posts, total: (r[0].results[0] as any).count, page, size, ...counts ? { counts } : {}, ...featured ? { featured } : {} });
 }
 
 // fav_count: favorites of the post. chat_count: chats opened from the post (a 'listing' message
-// carries the post id in reference_id). One grouped read each for the whole page.
+// carries the post id in reference_id). One grouped read each for the whole page, on the
+// favorites_post and messages_listing indexes (migration 0010_trade_count_indexes).
 async function addOwnCounts(posts: any[]) {
     if (!posts.length) return;
     const ids = JSON.stringify(posts.map(p => p.id));

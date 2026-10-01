@@ -134,10 +134,11 @@ export function MiniCard({ post }: { post: Post }) {
     const summary = postSummary(post);
     const tags = post.tags.slice(0, 2).map(tagName);
     return <Link to={'/posts/' + post.id} className="mini-card">
-        <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span></div>
+        <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
         <h3>{post.title}</h3>
         {(tags.length > 0 || summary.length > 0) && <div className="post-card-specs">{tags.map(t => <span className="tag" key={t}>{t}</span>)}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
         <PriceLine post={post} />
-        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /><span className="muted small nowrap">{postTime(post)}</span></div>
+        {/* The time sits on the meta line, as on PostCard, so the author row holds only the name line. */}
+        <div className="post-card-author"><NameLine nickname={post.nickname} grade={post.author_grade} role={post.role} badges={post.author_badges} compact /></div>
     </Link>;
 }
