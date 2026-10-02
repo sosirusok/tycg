@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, MATCH_TEXT, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, matchGuideText, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, MATCH_TEXT, PERKS, REPORT_TEXT, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, linkPreviewAllowed, matchGuideText, priorityCell, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -44,7 +44,10 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     // 운영진 가측가 on the post for every grade (paid requests too).
     // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
     ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
-    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
+    ['중개·가측 처리 순서', g => priorityCell(g.id)],
+    // 신고 처리 순서 and the manager's unread chats (WP60): the same order by grade, the 체험 as 일반.
+    [REPORT_TEXT.order, g => priorityCell(g.id)],
+    [REPORT_TEXT.chatOrder, g => priorityCell(g.id)],
     ['운영진 가측가 표시', () => 'O'],
     // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
     ['조건 알림', g => filterAlertText(PERKS[g.id])],
@@ -146,6 +149,8 @@ export default function Guide() {
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
                 <li>중개·가측: 내 판매·교환 계정 글의 더보기에서 가측 신청, 채팅의 더보기에서 중개 신청. 무료 횟수가 없으면 유료이며 수수료는 매니저가 채팅으로 안내합니다. 플러스 체험 중에는 무료 횟수가 없습니다.</li>
                 <li>운영진 가측가는 글을 수정하면 표시되지 않습니다.</li>
+                <li>{REPORT_TEXT.urgentNote}</li>
+                <li>{REPORT_TEXT.demoteNote}</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>

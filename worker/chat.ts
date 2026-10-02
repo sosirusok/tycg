@@ -1,6 +1,6 @@
 import { fillTemplate, type User } from '../shared/market';
-import { CHAT_AUTO_TEXT, MATCH_TEXT, awayWindow, perksOf } from '../shared/membership';
-import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
+import { CHAT_AUTO_TEXT, MATCH_TEXT, awayWindow, managerChatOrder, perksOf } from '../shared/membership';
+import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, paidRankSql, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
 import { assertNoBlockedLinks, hasBlockedLinks } from './unfurl';
@@ -136,6 +136,9 @@ async function autoReplyStatements(req: Request, conversationId: string, sender:
     return out;
 }
 
+// The manager's list reads at most this many unread chats besides the 100 newest (WP60).
+const UNREAD_FIRST = 200;
+
 function partner(row: any) {
     const { deleted_at, suspended_until, ...rest } = row;
     const m: Record<string, unknown> = withMember(rest);
@@ -174,20 +177,33 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         const sinceRaw = url.searchParams.get('since'), since = sinceRaw === null ? 0 : Number(sinceRaw);
         if (!Number.isSafeInteger(since) || since < 0) fail(400, '채팅 목록 조건을 확인해 주세요.');
         const at = Date.now();
+        // The manager's list (WP60, not the '신청 대기' view): unread chats first, by the member's paid rank
+        // (priority: grants the manager made, so a 플러스 체험 counts as 일반), then the oldest unread message
+        // (unread_since); read chats newest first (managerChatOrder, which the page also applies when it
+        // merges a ?since= answer). Besides the 100 newest chats it reads up to UNREAD_FIRST unread ones,
+        // the most pressing first, from the partial unread indexes.
+        const ordered = isManager(u) && !filter;
+        const unreadSince = (conv: string, sender: string) => `(SELECT MIN(m.created_at) FROM messages m WHERE m.conversation_id=${conv} AND m.sender_id=${sender} AND m.read_at IS NULL AND m.type!='listing')`;
+        const waiting = ordered ? `UNION SELECT id FROM (SELECT q.id FROM (SELECT id,user_a,user_b FROM conversations WHERE user_a=? AND a_unread>0 AND updated_at>?
+                UNION ALL SELECT id,user_a,user_b FROM conversations WHERE user_b=? AND b_unread>0 AND updated_at>?) q
+                JOIN users o ON o.id=CASE WHEN q.user_a=? THEN q.user_b ELSE q.user_a END ORDER BY ${paidRankSql('o')} DESC,${unreadSince('q.id', 'o.id')} LIMIT ${UNREAD_FIRST})` : '';
         const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
             CASE WHEN c.user_a=? THEN c.a_unread ELSE c.b_unread END AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications,
             lp.title AS last_post_title,json_extract(lp.images,'$[0]') AS last_post_thumb
-            FROM (SELECT id FROM (SELECT id,updated_at FROM conversations WHERE user_a=? AND updated_at>? UNION ALL SELECT id,updated_at FROM conversations WHERE user_b=? AND updated_at>?) mine
+            ${ordered ? `,${paidRankSql('u')} AS priority,${unreadSince('c.id', 'u.id')} AS unread_since` : ''}
+            FROM (SELECT id FROM (SELECT id FROM (SELECT id,updated_at FROM conversations WHERE user_a=? AND updated_at>? UNION ALL SELECT id,updated_at FROM conversations WHERE user_b=? AND updated_at>?) mine
                 WHERE EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=mine.id)
-                ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=mine.id AND a.status='pending')" : ''} ORDER BY updated_at DESC LIMIT 100) picked
+                ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=mine.id AND a.status='pending')" : ''} ORDER BY updated_at DESC LIMIT 100) ${waiting}) picked
             CROSS JOIN conversations c ON c.id=picked.id
             JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
             LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.author_id=? OR ?='manager' OR (lp.hidden=0 AND (lp.kind!='proxy_offer'
                 OR EXISTS(SELECT 1 FROM users au WHERE au.id=lp.author_id AND au.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=lp.author_id AND b.badge='proxy'))))
             ORDER BY c.updated_at DESC`)
-            .bind(u.id, u.id, since, u.id, since, u.id, u.id, u.role).all();
-        return json({ chats: r.results.map(partner), at });
+            .bind(u.id, u.id, since, u.id, since, ...ordered ? [u.id, since, u.id, since, u.id] : [], u.id, u.id, u.role).all();
+        const chats = r.results.map(partner);
+        if (ordered) chats.sort((a: any, b: any) => managerChatOrder(a, b));
+        return json({ chats, at });
     }
     // Opening a chat from a post only checks the post and makes sure the chat exists. The post's
     // card is written with the first message (see below), so an unused 채팅하기 notifies nobody.

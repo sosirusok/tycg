@@ -635,6 +635,9 @@
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
 .report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 신고 (WP60): '대기 3' and '처리' over their lists; each row's reason with how long it waited (or the outcome). */
+.list-title { margin: 0 0 8px; color: var(--ink); font-size: var(--fs-16); font-weight: 700; }
+.report-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 /* A handled row is grayed by its text color, not opacity, so its check marks never turn into a pale brand. */
 .simple-list li.is-done :is(strong, .small, .muted, .nick) { color: var(--ink-3); }
 .simple-list strong, .strong-link { color: var(--ink); font-weight: 700; }

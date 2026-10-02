@@ -195,13 +195,61 @@ export function nextKstMonthStart(t: number) {
     const d = new Date(t + KST);
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - KST;
 }
-// Handling order (1순위 first) for 중개·가측 requests: 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the
-// 플러스 체험 4. The report ordering (WP60) is meant to reuse this helper when it ships.
+// The paid rank that orders the manager's work (중개·가측, 신고 and unread chats, WP60): 3 for 엘리트 and
+// 관리자 (rank 3 and up, the owner rule), 2 프리미엄, 1 플러스, 0 for 일반 and the 플러스 체험.
+export function priorityRank(grade: string | null | undefined, trial?: boolean | null) {
+    return trial ? 0 : Math.max(0, Math.min(3, gradeInfo(grade).rank));
+}
+// Handling order (1순위 first) for 중개·가측 requests, 신고 and the manager's chats: 엘리트·관리자 1,
+// 프리미엄 2, 플러스 3, 일반 and the 플러스 체험 4.
 export function gradePriority(grade: string | null | undefined, trial?: boolean | null) {
-    if (grade === 'elite' || grade === 'admin') return 1;
-    if (grade === 'premium') return 2;
-    if (grade === 'plus' && !trial) return 3;
-    return 4;
+    return 4 - priorityRank(grade, trial);
+}
+// The Guide cell for an order by grade: '1순위', and for 플러스 '3순위 (체험 4순위)'.
+export const priorityCell = (grade: GradeId) => `${gradePriority(grade)}순위${grade === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`;
+
+// 신고 처리 순서 (WP60, decisions item 5g): 사기·먹튀 and 회수·해킹 계정 first whoever reports, then the
+// reporter's paid rank (reporter_rank, from the grades the manager granted, so the 체험 counts as 일반), then
+// the oldest. A reporter with REPORT_DEMOTE or more 기각 in 30 days loses both. The reported member's
+// grade is never read, and an automatic '같은 매물 (자동)' report (auto, filed as the manager) is rank 0.
+export const URGENT_REPORT_REASONS: readonly string[] = ['사기·먹튀', '회수·해킹 계정'];
+export const REPORT_DEMOTE = 2;
+export type ReportRank = { id?: number; reason: string; reporter_rank: number; reporter_dismissed_30d: number; created_at: number; auto?: boolean };
+export function reportRank(r: ReportRank) {
+    const demoted = r.reporter_dismissed_30d >= REPORT_DEMOTE;
+    return { urgent: !demoted && URGENT_REPORT_REASONS.includes(r.reason), rank: demoted || r.auto ? 0 : Math.max(0, Math.min(3, r.reporter_rank || 0)) };
+}
+export function reportOrder(a: ReportRank, b: ReportRank) {
+    const x = reportRank(a), y = reportRank(b);
+    return Number(y.urgent) - Number(x.urgent) || y.rank - x.rank || a.created_at - b.created_at || (a.id ?? 0) - (b.id ?? 0);
+}
+// '20분', '3시간', '2일' (how long a report has waited).
+export function waitText(ms: number) {
+    const min = Math.max(1, Math.floor(ms / 60000));
+    return min < 60 ? `${min}분` : min < 1440 ? `${Math.floor(min / 60)}시간` : `${Math.floor(min / 1440)}일`;
+}
+export const REPORT_TEXT = {
+    order: '신고 처리 순서',
+    resolve: '처리 완료',
+    dismiss: '기각',
+    undo: '되돌리기',
+    pending: (n: number) => `대기 ${n}`,
+    decided: '처리',
+    waited: (ms: number) => `${waitText(ms)} 대기`,
+    counts: (n: number, dismissed: number) => `신고 30일 ${n} · 기각 ${dismissed}`,
+    urgentNote: '사기·먹튀, 회수·해킹 계정 신고는 등급과 관계없이 먼저 확인합니다.',
+    demoteNote: `기각된 신고가 30일에 ${REPORT_DEMOTE}건 이상이면 신고 우선 순위가 적용되지 않습니다.`,
+    chatOrder: '매니저 채팅 순서',
+};
+
+// The manager's chat list (WP60): unread chats first, by the member's paid rank (priority, 체험 = 0), then
+// the oldest unread message (unread_since); read chats newest first. The '신청 대기' view keeps newest first.
+export type ChatRank = { unread: number; updated_at: number; priority?: number | null; unread_since?: number | null };
+export function managerChatOrder(a: ChatRank, b: ChatRank) {
+    const ua = a.unread > 0, ub = b.unread > 0;
+    if (ua !== ub) return ua ? -1 : 1;
+    if (!ua) return b.updated_at - a.updated_at;
+    return (b.priority ?? 0) - (a.priority ?? 0) || (a.unread_since ?? a.updated_at) - (b.unread_since ?? b.updated_at) || b.updated_at - a.updated_at;
 }
 
 // 제목 강조 (WP48), list surfaces only: 0 일반 (회색), 1 플러스 and the 무료 체험 (검정), 2 프리미엄 (굵게),

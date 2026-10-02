@@ -273,4 +273,75 @@ equal((await sixElite('posts/' + ending)).data.post.body_style.m, [[0, 2, 'b']],
 refused(await sixElite('posts/' + ending, 'PUT', styled(lines, [[0, 2, 'b'], [5, 7, 'h']])), 400, '글자 꾸미기를 다시 확인해 주세요.', 'after the grade ended, sending 배경 강조 is refused');
 equal((await sixElite('posts/' + ending, 'PUT', styled(lines, [[0, 2, 'b']]))).status, 200, 'saving the read-filtered marks works');
 
+// ---- 6. 신고 처리 순서 (WP60) ----
+// The manager's waiting reports come 사기·먹튀 and 회수·해킹 계정 first (post, member and 댓글 reports alike),
+// then by the reporter's grade (the 체험 as 일반), then the oldest; 2 기각 in 30 days take both away. The
+// reported member's grade never counts, and no report path hides a post or suspends anyone.
+// Reports filed before this suite are marked handled, so the 200 waiting rows the manager reads are this suite's.
+const DAY = 86400000;
+sql(`UPDATE reports SET status='resolved',decided_at=${Date.now()} WHERE status='pending'`);
+sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).status, 200, 'the trial window opens for one sign-up');
+const rt = await register('rt');
+equal((await manager('manage/trial', 'PUT', { close: true })).status, 200, 'the window closes again');
+sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'trial-ip:%'");
+equal([rt.user.grade, rt.user.grade_trial], ['plus', true], 'the trial reporter holds 플러스 체험');
+const rn = await register('rn'), re = await register('re'), rd = await register('rd'), rc = await register('rc'), tn = await register('tn'), te = await register('te');
+await grant(re, 'elite');
+await grant(rd, 'elite');
+await grant(te, 'elite');
+const reported = [];
+for (let i = 0; i < 4; i++) reported.push(await post(other, '신고 순서 확인 글 ' + i));
+// A filed report is found again in the manager's list by its reporter and its (unique) text.
+async function report(c, data, name) {
+    const r = await c('reports', 'POST', data);
+    check(r.status === 200 || r.status === 201, `${name} (${r.status})`);
+    return { reporter: c.user.id, details: data.details };
+}
+const idOf = (list, f) => list.find(r => r.reporter_id === f.reporter && r.details === f.details)?.id;
+const F1 = await report(rn, { postId: reported[0], reason: '허위 매물', details: `일반 신고 ${run}` }, '일반 files 허위 매물');
+const F2 = await report(rt, { postId: reported[0], reason: '허위 매물', details: `체험 신고 ${run}` }, '체험 files 허위 매물');
+const F3 = await report(re, { postId: reported[0], reason: '허위 매물', details: `엘리트 신고 ${run}` }, '엘리트 files 허위 매물');
+const F4 = await report(rn, { postId: reported[1], reason: '사기·먹튀', details: `일반 긴급 신고 ${run}` }, '일반 files 사기·먹튀 on a post');
+const F9 = await report(rn, { userId: te.user.id, reason: '사기·먹튀', details: `회원 긴급 신고 ${run}` }, '일반 files 사기·먹튀 on a member');
+const comment = await other(`posts/${reported[3]}/comments`, 'POST', { body: '신고될 댓글' });
+equal(comment.status, 201, 'a 댓글 to report');
+const F8 = await report(rc, { commentId: comment.data.id, reason: '회수·해킹 계정', details: `댓글 긴급 신고 ${run}` }, '일반 files 회수·해킹 계정 on a 댓글');
+// rd (엘리트) gets two reports dismissed, then files 사기·먹튀.
+const FD1 = await report(rd, { postId: reported[1], reason: '허위 매물', details: `기각될 신고 1 ${run}` }, '엘리트 rd files a report');
+const FD2 = await report(rd, { postId: reported[2], reason: '허위 매물', details: `기각될 신고 2 ${run}` }, '엘리트 rd files another');
+const early = (await manager('manage')).data.reports, D1 = idOf(early, FD1), D2 = idOf(early, FD2);
+check(D1 && D2, "rd's two reports are listed");
+for (const id of [D1, D2]) equal((await manager('manage/report', 'POST', { id, status: 'dismissed' })).status, 200, 'manager dismisses a report of rd');
+const F5 = await report(rd, { postId: reported[3], reason: '사기·먹튀', details: `기각 2건 후 신고 ${run}` }, 'rd files 사기·먹튀 after 2 기각');
+// The reported member's grade: the same 일반 reporter reports a 일반, then a 엘리트.
+const F6 = await report(rc, { userId: tn.user.id, reason: '잠수', details: `일반 회원 신고 ${run}` }, 'a report against a 일반');
+const F7 = await report(rc, { userId: te.user.id, reason: '잠수', details: `엘리트 회원 신고 ${run}` }, 'a report against a 엘리트');
+const summary = (await manager('manage')).data;
+const [R1, R2, R3, R4, R5, R6, R7, R8, R9] = [F1, F2, F3, F4, F5, F6, F7, F8, F9].map(f => idOf(summary.reports, f));
+const waiting = summary.reports.filter(r => r.status === 'pending'), at = id => waiting.findIndex(r => r.id === id);
+check([R1, R2, R3, R4, R5, R6, R7, R8, R9].every(id => at(id) >= 0), 'every waiting report of this suite is listed');
+const firstDecided = summary.reports.findIndex(r => r.status !== 'pending');
+check(firstDecided === -1 || firstDecided === waiting.length, 'the waiting reports come before the decided ones');
+check(summary.pendingReports >= 9, 'pendingReports counts the waiting reports');
+check(at(R4) < at(R3), 'an urgent 일반 report (사기·먹튀) sorts before a non-urgent 엘리트 one');
+check(at(R9) < at(R3) && at(R8) < at(R3), '사기·먹튀 on a member and 회수·해킹 계정 on a 댓글 are urgent too');
+check(at(R4) < at(R9) && at(R9) < at(R8), 'inside the urgent group the oldest goes first');
+check(at(R3) < at(R1), 'within a group, 엘리트 sorts before 일반');
+check(at(R1) < at(R2), "a trial member's report sorts with 일반 (after an older 일반 report)");
+check(at(R3) < at(R5) && at(R2) < at(R5) && at(R5) < at(R6), "after 2 기각, rd's 사기·먹튀 sorts as a non-urgent rank-0 report");
+check(at(R6) < at(R7), 'a report against an 엘리트 sorts the same as one against a 일반');
+const row5 = waiting[at(R5)], row1 = waiting[at(R1)];
+equal([row5.reporter_reports_30d, row5.reporter_dismissed_30d, row5.reporter_rank], [3, 2, 3], "rd's row: 3 reports and 2 기각 in 30 days (rank 3 kept for display)");
+equal([row1.reporter_reports_30d, row1.reporter_dismissed_30d], [3, 0], "rn's row: 3 reports, no 기각");
+equal(waiting[at(R2)].reporter_rank, 0, 'the 체험 reporter has rank 0');
+equal(summary.reports.find(r => r.id === D1)?.status, 'dismissed', 'the dismissed reports are in the decided list');
+const filed = [R1, R2, R3, R4, R5, R6, R7, R8, R9];
+// Nothing hid a post or suspended a member.
+equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE id IN (${reported.join(',')}) AND hidden!=0`)[0].n, 0, 'no report path hides a post');
+equal(sql(`SELECT COUNT(*) AS n FROM users WHERE id IN ('${tn.user.id}','${te.user.id}','${other.user.id}') AND suspended_until IS NOT NULL`)[0].n, 0, 'no report path suspends a member');
+for (const id of filed) equal((await manager('manage/report', 'POST', { id, status: 'resolved' })).status, 200, 'manager handles report ' + id);
+equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE id IN (${reported.join(',')}) AND hidden!=0`)[0].n, 0, 'handling the reports hides nothing either');
+
 console.log(`verify-content: ${checks} checks passed`);

@@ -86,6 +86,13 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
+// The member's paid rank for the manager's handling order (WP60: 신고 and the manager's chat list), as
+// priorityRank reads it: the highest current grade the manager granted (source 'manager', so a 플러스 체험
+// counts as 일반), with 관리자 (rank 4) counted as 엘리트 (3); 0 for none and for a withdrawn member.
+// `alias` is the users table alias in the surrounding query. Binds nothing.
+export const paidRankSql = (alias: string) => `COALESCE((SELECT MIN(MAX(g.rank),3) FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND g.source='manager'
+    AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER))),0)`;
+
 // A trade counts once the other member confirmed it ('확인' or their 후기) and while the manager has
 // not removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
 export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
