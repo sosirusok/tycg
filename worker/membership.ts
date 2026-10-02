@@ -7,6 +7,7 @@ import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
+import { vapidPublicKey } from './push';
 import {
     AUTO_TEXT, GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
@@ -20,7 +21,8 @@ export async function siteConfig() {
     const w = await trialWindow(), open = trialOpen(w);
     // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains() };
+    // vapidPublicKey: the key browsers subscribe to 웹 푸시 with (WP64); null while push is off.
+    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), vapidPublicKey: vapidPublicKey() };
 }
 
 const DAY = 86400000;

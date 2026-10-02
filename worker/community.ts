@@ -6,6 +6,7 @@ import { searchesHandler } from './alerts';
 import { reportComment } from './comments';
 import { autoDeclineSql } from './automation';
 import { DROP_TEXT } from '../shared/membership';
+import { pushAfter } from './push';
 
 // Badge and grade columns for a listed member, without the grade's end date.
 export function publicMember(row: any, prefix = '') {
@@ -132,6 +133,8 @@ async function offersHandler(req: Request, p: string[]) {
         ]);
         if (!result[0].meta.changes) fail(409, '이미 제시했거나 글이 바뀌었습니다.');
         const declined = (result[result.length - 1].results[0] as { status: string } | undefined)?.status === 'declined';
+        // 웹 푸시 (WP64): the seller's devices, unless the 제시 was declined automatically.
+        if (!declined) pushAfter(post.author_id);
         return json({ id, chatId: chat, ...declined ? { declined: true } : {} }, 201);
     }
     if (method === 'PATCH' && p[1]) {
@@ -178,6 +181,8 @@ async function offersHandler(req: Request, p: string[]) {
             ]);
             if (!r[0].meta.changes) fail(409, '이미 처리된 제시입니다.');
         }
+        // 웹 푸시 (WP64): the seller's 수락 or 거절 reaches the member who sent the 제시.
+        if (action === 'accepted' || action === 'declined') pushAfter(offer.sender_id);
         return json({ ok: true });
     }
     fail(405, '지원하지 않는 요청입니다.');

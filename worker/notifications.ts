@@ -1,6 +1,7 @@
 import { db, fail, requireUser, json, body } from './http';
 import { kstDayStart } from '../shared/membership';
 import { alertCounts } from './alerts';
+import { latestPush } from './push';
 
 // 알림함 (WP50). Every 알림 is written by an INSERT … SELECT inside the batch of the event that causes it,
 // so it commits (or not) with that event and costs no extra D1 call.
@@ -67,7 +68,9 @@ const row = (r: Row) => ({
 // GET notifications?page=1 (20 per page, newest first), GET notifications/latest (the newest unread row),
 // POST notifications/read {id} and POST notifications/read-all.
 export async function notificationsHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
-    const method = req.method, u = await requireUser(req);
+    // notifications/latest is what the service worker reads when a 웹 푸시 arrives (WP64): not a visit, so
+    // it never moves '최근 접속', resumes 자동 끌올 or extends the session.
+    const method = req.method, u = await requireUser(req, p[1] !== 'latest');
     if (!p[1] && method === 'GET') {
         const page = Number(url.searchParams.get('page') || 1);
         if (!Number.isSafeInteger(page) || page < 1 || page > 50) fail(400, '페이지를 확인해 주세요.');
@@ -79,7 +82,8 @@ export async function notificationsHandler(req: Request, p: string[], url: URL):
     }
     if (p[1] === 'latest' && !p[2] && method === 'GET') {
         const r = await db().prepare(`${ROW_SQL} WHERE n.user_id=? AND n.read_at IS NULL ORDER BY n.created_at DESC,n.id DESC LIMIT 1`).bind(u.id).first<Row>();
-        return json({ alert: r ? row(r) : null });
+        // push: what the service worker shows, the newer of this row and the newest unread chat message.
+        return json({ alert: r ? row(r) : null, push: await latestPush(u, r) });
     }
     if (p[1] === 'read' && !p[2] && method === 'POST') {
         const b = await body(req);

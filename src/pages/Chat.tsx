@@ -10,7 +10,7 @@ import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, TEMPLATE_MAX, applica
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { useAdaptivePoll, useApp } from '../app/state';
+import { offerPush, useAdaptivePoll, useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
@@ -300,6 +300,8 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         const postId = aboutPost.current && /^\d+$/.test(aboutPost.current) ? Number(aboutPost.current) : undefined;
         try {
             await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId });
+            // 웹 푸시 (WP64): the moment the reply matters, the '알림 켜기' bar may show.
+            offerPush();
             if (postId !== undefined) forgetPost();
             setText(''); setPhotos([]); stick.current = true;
             await poll(); activity.current();

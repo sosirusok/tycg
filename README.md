@@ -36,6 +36,7 @@
 - 토큰으로 볼 수 있는 Cloudflare 계정이 여러 개라면 `CLOUDFLARE_ACCOUNT_ID` 비밀값도 추가하세요.
 - 원하는 주소 이름이 있으면 저장소 **Variables**에 `WORKERS_SUBDOMAIN`을 넣으세요. 개인 도메인은 Cloudflare의 Worker 설정에서 연결합니다.
 - 비밀값이 없으면 배포 작업은 아무것도 바꾸지 않고 안내만 남깁니다.
+- 웹 푸시(휴대폰 알림) 키는 배포가 처음 한 번 만들어 Worker 비밀값(`VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`)으로 저장하고, 이후 배포에서는 그대로 둡니다. 따로 등록할 것은 없습니다. 키를 바꾸면 회원들이 알림을 다시 켜야 하므로 지우거나 바꾸지 마세요.
 
 ## 운영 메모
 

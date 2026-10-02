@@ -1,6 +1,7 @@
 // Builds nothing: run `pnpm build` first. Applies local D1 migrations, starts the
 // built Worker on 127.0.0.1:8790 and runs every API verification suite against it.
 import { access, readFile, writeFile } from 'node:fs/promises';
+import { generateKeyPairSync } from 'node:crypto';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
@@ -79,6 +80,14 @@ const base = `http://127.0.0.1:${PORT}`;
 // TEST_SUITES=perks,roles runs only the suites whose file name contains one of the words.
 const only = (process.env.TEST_SUITES || '').split(',').map(v => v.trim()).filter(Boolean);
 const pick = list => only.length ? list.filter(f => only.some(w => f.includes(w))) : list;
+// 웹 푸시 (WP64): a fresh P-256 key pair for this run, as deploy.yml makes once for the site. Both servers get
+// the keys; only 8791 gets PUSH_TEST=on, which lets verify-push subscribe its mock push service on 127.0.0.1.
+const vapidKeys = (() => {
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const { kty, crv, x, y, d } = privateKey.export({ format: 'jwk' }), pub = publicKey.export({ format: 'jwk' });
+    const point = Buffer.concat([Buffer.from([4]), Buffer.from(pub.x, 'base64url'), Buffer.from(pub.y, 'base64url')]).toString('base64url');
+    return ['--var', 'VAPID_PRIVATE_KEY:' + JSON.stringify({ kty, crv, x, y, d }), '--var', 'VAPID_PUBLIC_KEY:' + point, '--var', 'VAPID_SUBJECT:https://zombiego-market.test'];
+})();
 try {
     await completed(child([wrangler, 'd1', 'migrations', 'apply', 'DB', '--local', '--config', 'wrangler.jsonc'], { stdio: 'inherit' }), 90000);
     // Rate limits and settings from earlier local runs must not leak into this run.
@@ -93,10 +102,11 @@ try {
     // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     preview = await startPreviewServer();
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT), '--inspector-port', '0',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin, ...vapidKeys], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-services.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs'])) {
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+    // verify-push runs here too (TEST_PHASE=main): without PUSH_TEST an http endpoint is refused.
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-services.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs', 'tests/verify-push.mjs'])) {
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password', ...suite.includes('verify-push') ? { TEST_PHASE: 'main' } : {} } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
     stop(server);
@@ -113,7 +123,7 @@ try {
     // READ_BUDGET=on turns on the read and call meter (worker/meter.ts) on this server only: responses
     // carry X-Rows-Read and friends, and the cron stores its counts in settings 'sys:last_cron_meter'.
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on', ...vapidKeys, '--var', 'PUSH_TEST:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(strictBase, fallback);
     // verify-deals (WP43) runs on this strict server, so completing posts and trade records meet the
     // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints), and verify-alerts (WP50: 알림함, its cron rows and read costs).
@@ -121,8 +131,9 @@ try {
     // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now),
     // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
     // verify-promo (WP53) checks the 광고 placements against the strict rules.
+    // verify-push (WP64) runs a mock push service: inline pushes, the queue of tick B, failures and the keys.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-push.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
         // call), so they get longer.
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : 180000);

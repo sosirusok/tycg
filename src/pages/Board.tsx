@@ -7,7 +7,7 @@ import {
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/router';
-import { useApp } from '../app/state';
+import { offerPush, useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
@@ -391,7 +391,7 @@ export function Board() {
     async function setAlert(v: Saved, on: boolean) {
         if (alerting) return;
         setAlerting(true);
-        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await refreshSaved(); }
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); if (on) offerPush(); await refreshSaved(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setAlerting(false); }
     }
@@ -410,7 +410,7 @@ export function Board() {
             if (existing) return setAlert(existing, on);
             if (alerting) return;
             setAlerting(true);
-            try { await api('searches', 'POST', { name: name.length > 32 ? name.slice(0, 31) + '…' : name, query: key, alert: true }); toast(ALERT_TEXT.on); await refreshSaved(); }
+            try { await api('searches', 'POST', { name: name.length > 32 ? name.slice(0, 31) + '…' : name, query: key, alert: true }); toast(ALERT_TEXT.on); offerPush(); await refreshSaved(); }
             catch (e) { toast.error(errorText(e)); }
             finally { setAlerting(false); }
         });

@@ -143,6 +143,15 @@ export default function Guide() {
             </ul>
         </section>
 
+        {/* 홈 화면 앱과 웹 푸시 (WP64): every grade; the bar '알림 켜기' shows after a chat message or an 알림. */}
+        <section className="section">
+            <h2 className="section-title">휴대폰 알림</h2>
+            <ul className="grade-notes">
+                <li>아이폰은 iOS 16.4 이상에서 홈 화면에 추가한 뒤 알림을 켤 수 있습니다.</li>
+                <li>{'사파리 공유 버튼 > 홈 화면에 추가'}</li>
+            </ul>
+        </section>
+
         <section className="section">
             <h2 className="section-title">주의사항</h2>
             <ul className="rules">

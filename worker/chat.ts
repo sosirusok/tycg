@@ -5,6 +5,7 @@ import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
 import { assertNoBlockedLinks, hasBlockedLinks } from './unfurl';
 import { ALERTS_COUNT_SQL } from './notifications';
+import { pushAfter } from './push';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -276,6 +277,8 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 db().prepare(`UPDATE posts SET touched_at=? WHERE id=${aboutPost('?')} AND author_id=? AND status!='closed'`).bind(now, p[1], u.id),
                 ...auto,
             ]);
+            // 웹 푸시 (WP64): the partner's devices, after the response.
+            pushAfter(partnerId);
             return json({ id: r[post ? 1 : 0].meta.last_row_id }, 201);
         }
     }

@@ -165,7 +165,8 @@ export const LAST_SEEN_STEP = 10 * 60000;
 // once a week so an active member stays signed in without extra writes.
 // The same session read gives '최근 접속' (users.last_seen_at); it is written only when it is empty
 // or 10 minutes old, and the WHERE repeats that test so parallel requests write it once.
-export async function currentUser(r: Request): Promise<User | null> {
+// visit false (the service worker's read when a 웹 푸시 arrives, WP64): none of these writes.
+export async function currentUser(r: Request, visit = true): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
@@ -174,8 +175,8 @@ export async function currentUser(r: Request): Promise<User | null> {
     if (!row) return null;
     const { session_expires_at, last_seen_at, trial_at, has_blocks, ...user } = row;
     const writes: D1PreparedStatement[] = [];
-    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
-    if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
+    if (visit && session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
+    if (visit && (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP)) {
         writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
         // A visit resumes 자동 끌올 paused for no visit (WP52): the member is due on the next tick.
         writes.push(db().prepare("UPDATE automation SET pause_reason='',paused_at=NULL,bump_next_at=?,updated_at=? WHERE user_id=? AND pause_reason='away'").bind(now, now, user.id));
@@ -245,8 +246,8 @@ export async function grantTrial(userId: string, now = Date.now(), catchUp = fal
     return r[0].meta.changes > 0;
 }
 
-export async function requireUser(r: Request) {
-    const u = await currentUser(r);
+export async function requireUser(r: Request, visit = true) {
+    const u = await currentUser(r, visit);
     if (!u) fail(401, '로그인이 필요합니다.');
     return u;
 }

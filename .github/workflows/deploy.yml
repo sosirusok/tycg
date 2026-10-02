@@ -10,6 +10,7 @@ name: Deploy to Cloudflare
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
 # USE_KV ("false" keeps photos in D1 while R2 is off), CRON_LIMIT (the account's Cron Trigger limit: 5 on
 # Workers Free, the default; 250 on Workers Paid).
+# Web push (VAPID) keys need no setup: the deploy makes them once as Worker secrets and never replaces them.
 # Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
 
 on:
@@ -336,11 +337,49 @@ jobs:
           fi
           echo "WORKERS_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
 
+      # Web push (WP64). Reads only the names of the Worker's secrets, never their values. make=keys only when
+      # the list lacks VAPID_PRIVATE_KEY (or the Worker does not exist yet, API code 10007); make=subject when
+      # only VAPID_SUBJECT is missing. Keys that exist are never made again or replaced, so the members'
+      # subscriptions survive every deploy. A list that cannot be read makes nothing and the deploy goes on.
+      - name: Check the web push keys (VAPID, read-only)
+        id: vapid
+        run: |
+          set -uo pipefail
+          make=none
+          if out="$(./node_modules/.bin/wrangler secret list --config wrangler.jsonc --format json 2>"$RUNNER_TEMP/secret-list.log")" \
+            && names="$(node -e '
+              let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                const a = s.indexOf("["), b = s.lastIndexOf("]");
+                if (a < 0 || b < a) process.exit(2);
+                const list = JSON.parse(s.slice(a, b + 1));
+                if (!Array.isArray(list)) process.exit(2);
+                process.stdout.write(list.map(x => x && x.name).filter(Boolean).join(","));
+              });' <<<"$out")"; then
+            if [[ ",$names," == *",VAPID_PRIVATE_KEY,"* ]]; then
+              echo "웹 푸시 키가 이미 있습니다. 그대로 둡니다."
+              [[ ",$names," == *",VAPID_SUBJECT,"* ]] || make=subject
+            else
+              make=keys
+            fi
+          else
+            # Only a Worker that does not exist yet (first deploy) has no keys to keep.
+            res="$(curl -sS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/secrets" || true)"
+            codes="$(jq -r '[.errors[]?.code] | map(tostring) | join(",")' <<<"$res" 2>/dev/null || true)"
+            if [[ ",$codes," == *",10007,"* ]]; then
+              make=keys
+            else
+              echo "::warning title=웹 푸시 키 확인 건너뜀::Worker 비밀값 목록을 읽지 못해 이번 배포에서는 웹 푸시 키를 만들지 않습니다(오류 코드: ${codes:-응답 없음}). 이미 있는 키는 그대로 남고, 다음 배포에서 다시 확인합니다."
+            fi
+          fi
+          echo "Web push keys: $make"
+          echo "make=$make" >> "$GITHUB_OUTPUT"
+
       - name: Prepare Worker secrets (only values that are set)
         env:
           MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
           MANAGER_PASSWORD_HASH: ${{ secrets.MANAGER_PASSWORD_HASH }}
           MANAGER_PASSWORD_SALT: ${{ secrets.MANAGER_PASSWORD_SALT }}
+          VAPID_MAKE: ${{ steps.vapid.outputs.make }}
         run: |
           set -euo pipefail
           umask 077
@@ -354,7 +393,28 @@ jobs:
           const pair = ["MANAGER_PASSWORD_HASH", "MANAGER_PASSWORD_SALT"].filter((n) => process.env[n]);
           if (pair.length === 1) throw new Error("MANAGER_PASSWORD_HASH와 MANAGER_PASSWORD_SALT는 함께 등록해야 합니다.");
           for (const n of pair) out[n] = process.env[n];
-          if (!Object.keys(out).length) { console.log("No manager secrets provided; existing Worker secrets stay as they are."); process.exit(0); }
+          // Web push keys, only when the check step found none: a P-256 key pair, the private key as a JWK
+          // and the public key as the base64url of its 65-byte point; the subject is the site's address.
+          // A failure here only skips push for this deploy.
+          try {
+            if (process.env.VAPID_MAKE === "keys") {
+              const { generateKeyPairSync } = require("crypto");
+              const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+              const { kty, crv, x, y, d } = privateKey.export({ format: "jwk" });
+              const pub = publicKey.export({ format: "jwk" });
+              out.VAPID_PRIVATE_KEY = JSON.stringify({ kty, crv, x, y, d });
+              out.VAPID_PUBLIC_KEY = Buffer.concat([Buffer.from([4]), Buffer.from(pub.x, "base64url"), Buffer.from(pub.y, "base64url")]).toString("base64url");
+            }
+            if (process.env.VAPID_MAKE === "keys" || process.env.VAPID_MAKE === "subject") {
+              if (!/^https:\/\/[^\s]+$/.test(process.env.WORKERS_URL || "")) throw new Error("WORKERS_URL is not an https address");
+              out.VAPID_SUBJECT = process.env.WORKERS_URL;
+              console.log(process.env.VAPID_MAKE === "keys" ? "Web push keys made; they go with this deploy." : "Web push subject added.");
+            }
+          } catch (e) {
+            for (const n of ["VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY", "VAPID_SUBJECT"]) delete out[n];
+            console.log(`::warning title=웹 푸시 키 생성 실패::웹 푸시 키를 만들지 못해 이번 배포는 알림 없이 진행합니다(${e.message}). 다음 배포에서 다시 만듭니다.`);
+          }
+          if (!Object.keys(out).length) { console.log("No secrets to add; existing Worker secrets stay as they are."); process.exit(0); }
           fs.writeFileSync(`${process.env.RUNNER_TEMP}/worker-secrets.json`, JSON.stringify(out));
           JS
           if [ -f "$RUNNER_TEMP/worker-secrets.json" ]; then
@@ -380,17 +440,30 @@ jobs:
         run: rm -f "$RUNNER_TEMP/worker-secrets.json"
 
       - name: Check the live site
+        env:
+          VAPID_MAKE: ${{ steps.vapid.outputs.make }}
         run: |
           for i in $(seq 1 12); do
             if curl -fsS "$WORKERS_URL/api/health" | grep -q '"ok":true'; then echo "Healthy: $WORKERS_URL"; ok=1; break; fi
             sleep 10
           done
+          push=""
           if [ -z "${ok:-}" ]; then
             echo "::warning::$WORKERS_URL/api/health 가 아직 응답하지 않습니다. 새 주소는 연결까지 몇 분 걸릴 수 있습니다."
-          elif ! curl -fsS "$WORKERS_URL/api/config" | jq -e '.manager.id == "manager"' > /dev/null; then
-            # /api/config creates the manager account from the secret on first use.
-            echo "::error::사이트는 열렸지만 매니저 계정을 만들지 못했습니다. MANAGER_PASSWORD 비밀값(8자 이상)을 확인한 뒤 다시 실행해 주세요."
-            exit 1
+          else
+            config="$(curl -fsS "$WORKERS_URL/api/config" || true)"
+            if ! jq -e '.manager.id == "manager"' > /dev/null 2>&1 <<<"$config"; then
+              # /api/config creates the manager account from the secret on first use.
+              echo "::error::사이트는 열렸지만 매니저 계정을 만들지 못했습니다. MANAGER_PASSWORD 비밀값(8자 이상)을 확인한 뒤 다시 실행해 주세요."
+              exit 1
+            fi
+            # The new version may take a few seconds to answer everywhere.
+            for i in 1 2 3 4 5 6; do
+              if jq -e '(.vapidPublicKey // "") | length > 0' > /dev/null 2>&1 <<<"$config"; then push=on; break; fi
+              sleep 5
+              config="$(curl -fsS "$WORKERS_URL/api/config" || true)"
+            done
+            [ "$push" = on ] || echo "::warning title=웹 푸시 꺼짐::사이트에 웹 푸시 키가 아직 없습니다. 다음 배포에서 자동으로 만듭니다."
           fi
           {
             echo "### 배포 완료"
@@ -400,4 +473,7 @@ jobs:
             if [ "$R2_ENABLED" = true ]; then echo "- 사진 저장: R2 ($R2_BUCKET)"
             elif [ -n "${KV_ID:-}" ]; then echo "- 사진 저장: KV (R2 미사용)"
             else echo "- 사진 저장: D1 (R2 미사용)"; fi
+            if [ "$push" = on ]; then
+              if [ "$VAPID_MAKE" = keys ]; then echo "- 웹 푸시: 켜짐 (키를 이번 배포에서 만듦)"; else echo "- 웹 푸시: 켜짐"; fi
+            else echo "- 웹 푸시: 꺼짐"; fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -9,6 +9,7 @@ import { Avatar, CIcon, EmptyState, NameLine, SkeletonRows } from './components/
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
 import { TrialPopup } from './app/TrialPopup';
+import { PushBar } from './app/PushBar';
 import { trialStatus } from '../shared/membership';
 import { Home } from './pages/Home';
 import { Board } from './pages/Board';
@@ -203,6 +204,7 @@ function Shell() {
         <AuthModal />
         <ApplyModal />
         <TrialPopup />
+        <PushBar />
     </>;
 }
 

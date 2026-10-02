@@ -10,6 +10,7 @@ import { Link, navigate } from '../lib/router';
 import { CIcon, SkeletonRows } from '../components/ui';
 import { WalletGauge, kstClock, useMinuteClock, type Usage, type Wallet } from '../components/Wallet';
 import { useAutoToggle } from '../components/AutoSheet';
+import { offerPush } from '../app/state';
 
 // GET me/automation (WP52). state: '' running, 'idle' 쉬는 중 (every post on page 1), 'wait' 쉬는 중 (another
 // reason), 'busy' delayed, 'reply' / 'away' paused,
@@ -247,7 +248,7 @@ export function AlertCard({ bare = false }: { bare?: boolean }) {
     async function toggle(v: SavedAlert, on: boolean) {
         if (busy) return;
         setBusy(true);
-        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await load(); }
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); if (on) offerPush(); await load(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }

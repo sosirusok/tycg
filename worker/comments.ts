@@ -4,6 +4,7 @@ import { SITE_RULES, kstDayStart } from '../shared/membership';
 import { visiblePost } from './posts';
 import { unused } from './files';
 import { notifyOne } from './notifications';
+import { pushAfter } from './push';
 import { assertNoBlockedLinks } from './unfurl';
 
 // 댓글·답글 (WP55), the same for every grade (Naver cafe parity): 3,000 characters and 1 photo each, one
@@ -130,6 +131,10 @@ async function addComment(req: Request, postId: string) {
         db().prepare('SELECT comment_count FROM posts WHERE id=?').bind(post.id),
     ]);
     if (!r[0].meta.changes) fail(404, COMMENT_TEXT.notFound);
+    // 웹 푸시 (WP64): whoever got a new 알림 row above (no row: blocked, today's 100, or one still unread for
+    // the same post or 댓글, so a busy post pushes once until it is read).
+    if (toAuthor && r[1].meta.changes) pushAfter(post.author_id);
+    if (parentId !== null && r[toAuthor ? 2 : 1].meta.changes) pushAfter(parent!.author_id);
     return json({ id: r[0].meta.last_row_id, count: Number((r[r.length - 1].results[0] as { comment_count: number } | undefined)?.comment_count) || 0 }, 201);
 }
 
