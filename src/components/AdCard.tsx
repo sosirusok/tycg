@@ -6,7 +6,7 @@ import { AD_TEXT } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon } from './ui';
+import { Icon } from './ui';
 import { listPhoto, postTime, subjectLabel } from './PostCard';
 
 // 광고 (WP53). Every ad is one of the member's own open posts; links carry ?from=ad, so a first view
@@ -25,7 +25,7 @@ export function AdCard({ post }: { post: Post }) {
         catch (e) { toast.error(errorText(e)); }
     });
     return <div className="ad-row" onClick={e => { if (!(e.target as HTMLElement).closest('a,button')) void navigate(href); }}>
-        <Link to={href} className="ad-thumb" tabIndex={-1} aria-hidden="true">{thumbSrc ? <img src={thumbSrc} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
+        <Link to={href} className="ad-thumb" tabIndex={-1} aria-hidden="true">{thumbSrc ? <img src={thumbSrc} alt="" loading="lazy" /> : <Icon name={KIND_ICONS[post.kind]} size={24} />}</Link>
         <div className="ad-text">
             <span className="ad-meta">{subjectLabel(post)} · {postTime(post)}</span>
             <Link to={href} className="ad-title">{post.title}</Link>

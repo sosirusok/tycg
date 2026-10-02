@@ -5,7 +5,7 @@ import { AD_TEXT, PROVIDER_TEXT, gradeInfo, kstDate } from '../../shared/members
 import { navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { MODAL_DAY_KEY } from '../app/TrialPopup';
-import { CIcon } from './ui';
+import { Icon } from './ui';
 import { adHref } from './AdCard';
 import { listPhoto, subjectLabel } from './PostCard';
 import { ProviderMini, openProviderChat, type ProviderItem } from './ProviderCard';
@@ -122,7 +122,7 @@ export function HomeAdCard({ items }: { items: CardItem[] | null }) {
     return <aside className={'home-ad' + (covered ? ' is-covered' : '')} aria-label={AD_TEXT.home}>
         <button type="button" className="home-ad-body" onClick={open}>
             <span className="home-ad-media">
-                {thumbSrc ? <img src={thumbSrc} alt="" /> : <CIcon name={KIND_ICONS[post.kind]} size={40} />}
+                {thumbSrc ? <img src={thumbSrc} alt="" /> : <Icon name={KIND_ICONS[post.kind]} size={32} />}
                 <span className="home-ad-tag">{AD_TEXT.label}</span>
             </span>
             <span className="home-ad-text">

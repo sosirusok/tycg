@@ -9,7 +9,7 @@ import { clanTiersDesc, groupLadders } from '../../shared/ladder';
 import { Link, navigate } from '../lib/router';
 import { api, errorText, imageUrl } from '../lib/api';
 import { useApp } from '../app/state';
-import { CIcon, DataItems, NameLine } from './ui';
+import { DataItems, Icon, NameLine } from './ui';
 import { titleTier } from '../../shared/membership';
 import { FeatureTags, LadderTags, hasLadder } from './LadderTags';
 
@@ -184,7 +184,7 @@ export function MiniCard({ post, href = '/posts/' + post.id }: { post: Post; hre
     const ladder = hasCardLadder(post);
     const { thumb, thumbSrc, count } = listPhoto(post);
     const head = <>
-        <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
+        <div className="post-card-meta"><Icon name={KIND_ICONS[post.kind]} size={16} className="post-card-kind-icon" /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
         <h3 className={'mini-card-title ' + titleClass(post)}>{post.title}</h3>
         {(ladder || summary.length > 0) && <div className={'post-card-specs' + (ladder ? ' has-ladder' : '')}>{ladder && <CardLadder post={post} max={2} />}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
     </>;

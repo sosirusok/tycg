@@ -9,7 +9,7 @@ import {
 import { api, errorText } from '../lib/api';
 import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/router';
 import { offerPush, useApp } from '../app/state';
-import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
+import { EmptyState, Icon, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
 import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
@@ -545,6 +545,7 @@ export function Board() {
     const exchangeSides = categories.map(c => c.id);
 
     return <div className="container page board">
+        <div className="panel board-top">
         <div className="board-head">
             <h1 className="page-title">{title}</h1>
             <div className="board-head-tools">
@@ -565,14 +566,15 @@ export function Board() {
                 <span>구함</span>
             </div> : <div className="chip-scroll">{[...hasAllCategory(kind) ? [ALL_CATEGORY] : [], ...categories].map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
         </div>}
-        {proxyLocked && <div className="board-notice"><CIcon name={KIND_ICONS.proxy_offer} size={28} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
+        {proxyLocked && <div className="board-notice"><Icon name={KIND_ICONS.proxy_offer} size={20} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
+        </div>
 
         <div className={'board-layout' + (filters ? '' : ' no-filters')}>
             {filters && <aside className="filter-panel" aria-label="필터">
                 <div className="filter-head"><strong>필터</strong><button type="button" className="btn btn-text small" onClick={clearAll}><RotateCcw size={14} />초기화</button></div>
                 <Filters ctx={ctx} params={query} update={update} />
             </aside>}
-            <section aria-label="거래 목록">
+            <section className="panel list-panel" aria-label="거래 목록">
                 <div className="list-top">
                     <form className="search-input" role="search" onSubmit={submit}>
                         <Search size={20} />

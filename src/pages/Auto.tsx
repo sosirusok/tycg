@@ -8,7 +8,7 @@ import { TEMPLATE_VARS } from '../../shared/market';
 import type { ChatAuto } from './Chat';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
-import { CIcon, SkeletonRows } from '../components/ui';
+import { Icon, SkeletonRows } from '../components/ui';
 import { WalletGauge, kstClock, useMinuteClock, type Usage, type Wallet } from '../components/Wallet';
 import { useAutoToggle } from '../components/AutoSheet';
 import { offerPush } from '../app/state';
@@ -141,7 +141,7 @@ function BumpCard({ s, setS, load }: { s: AutoState; setS: (s: AutoState) => voi
         </div>}
         <h3 className="auto-list-title">글 {s.listed}{s.slots !== null ? `/${s.slots}` : ''}</h3>
         {open.length ? <ul className="auto-list">{open.map(p => <li key={p.id} className={p.auto ? 'is-on' : ''}>
-            <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" loading="lazy" /> : <CIcon name={isTradeKind(p.kind) ? KIND_ICONS[p.kind] : 'money-bag'} size={24} />}</Link>
+            <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" loading="lazy" /> : <Icon name={isTradeKind(p.kind) ? KIND_ICONS[p.kind] : 'file-text'} size={20} />}</Link>
             <span className="auto-main">
                 <Link to={'/posts/' + p.id} className="auto-title">{p.title}</Link>
                 {p.auto && p.stale && <span className="auto-sub">7일 동안 변경 없음</span>}
@@ -205,7 +205,7 @@ function DropCard({ s, setS }: { s: AutoState; setS: (s: AutoState) => void }) {
         {rows.length ? <ul className="auto-list drop-list">{rows.map(p => {
             const status = dropStatus(p.drop);
             return <li key={p.id} className={p.drop!.on ? 'is-on' : ''}>
-                <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" loading="lazy" /> : <CIcon name="money-bag" size={24} />}</Link>
+                <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" loading="lazy" /> : <Icon name="file-text" size={20} />}</Link>
                 <span className="auto-main">
                     <Link to={'/posts/' + p.id} className="auto-title">{p.title}</Link>
                     <span className="auto-sub">즉거가 {priceText(p.price)}{p.current_offer ? ` · 현젯 ${priceText(p.current_offer)}` : ''}</span>

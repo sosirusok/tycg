@@ -208,6 +208,15 @@ async function main() {
         for (const s of missing) console.error(`copy-lint: required wording missing: '${s}'`);
         return 1;
     }
+    // WP71: one line-icon set, no emoji images. public/icons keeps only the app icons (manifest, push), and no
+    // source line loads any other file from it.
+    const iconRefs = [...new Set([...code.matchAll(/\/icons\/(?!app-(?:192|512|badge)\.png)[\w.-]+/g)].map(m => m[0]))];
+    const iconFiles = (await readdir(path.join(root, 'public/icons'))).filter(f => !/^app-(?:192|512|badge)\.png$/.test(f));
+    if (iconRefs.length || iconFiles.length) {
+        for (const r of iconRefs) console.error(`copy-lint: emoji icon still loaded: ${r}`);
+        for (const f of iconFiles) console.error(`copy-lint: unused file in public/icons: ${f}`);
+        return 1;
+    }
     if (hits.length) {
         for (const h of hits) console.error(`${h.file}:${h.line}: '${h.word}'  ${h.text.length > 160 ? h.text.slice(0, 160) + '…' : h.text}`);
         console.error(`copy-lint: ${hits.length} forbidden phrase(s) found in ${targets.length} files.`);

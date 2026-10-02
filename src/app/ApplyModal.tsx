@@ -5,7 +5,7 @@ import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTe
 import { gradeExtras, gradeHook, gradeLine, isPaidGrade, monthly } from '../../shared/benefits';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
-import { CIcon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
+import { GradeMark, Icon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
 import { EarnBlock } from '../components/ProviderCard';
 import { useApp } from './state';
 
@@ -105,7 +105,7 @@ export function ApplyModal() {
                     const closed = !owned && locked(b.id);
                     return <label key={b.id} className={'apply-option' + (owned ? ' is-owned' : closed ? ' is-locked' : '')}>
                         <input type="radio" name="apply-badge" disabled={owned || closed} checked={choice?.kind === 'badge' && choice.target === b.id} onChange={() => choose({ kind: 'badge', target: b.id })} />
-                        <CIcon name={b.icon} size={40} />
+                        <span className="apply-option-icon"><Icon name={b.icon} size={24} /></span>
                         <span className="apply-option-body">
                             <span className="apply-option-title">{b.name}
                                 {owned ? <span className="apply-state on"><VerifiedMark size={14} />보유</span> : pending ? <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span> : null}</span>
@@ -132,7 +132,7 @@ export function ApplyModal() {
                     // PERKS; the metal accent of the grade (엘리트 gold with '모든 혜택').
                     const metal = paid === 'elite' ? ' metal-gold' : paid === 'premium' ? ' metal-silver' : paid === 'plus' ? ' metal-bronze' : '';
                     return <div key={g.id} className={'grade-row' + metal + (current ? ' is-current' : '')}>
-                        <CIcon name={g.icon} size={32} />
+                        <GradeMark grade={g.id} size={28} />
                         <div className="grade-row-name">
                             <span className="grade-row-title"><strong>{g.name}</strong>{paid === 'elite' && <span className="grade-card-all">모든 혜택</span>}{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
                             {paid && <span className="grade-row-hook">{gradeHook(paid)}</span>}

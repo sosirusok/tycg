@@ -37,14 +37,14 @@ export default function Manage({ tab: raw }: { tab?: string }) {
     const pendingReports = summary?.pendingReports ?? summary?.reports.filter(r => r.status === 'pending').length ?? 0;
     return <div className="container page">
         <h1 className="page-title">매니저 메뉴</h1>
-        <div className="mt-16"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
+        <div className="panel panel-tabs"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
             { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
             { id: 'members', label: '회원' },
             { id: 'resets', label: <>비밀번호 재설정{summary?.pendingResets ? <b>{summary.pendingResets}</b> : null}</> },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
         ]} /></div>
-        <div className="mt-24">
+        <div className="panel panel-body">
             {tab === 'applications' ? <Applications onChange={loadSummary} />
                 : tab === 'members' ? <Members />
                 : tab === 'resets' ? <Resets onChange={loadSummary} />

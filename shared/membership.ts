@@ -24,7 +24,7 @@ export const BADGES: BadgeInfo[] = [
         id: 'identity',
         name: '본인 인증',
         short: '본인',
-        icon: 'identification-card',
+        icon: 'shield-check',
         summary: '전번, 계좌 확인 후 지급',
         requirements: ['전화번호', '본인 명의 계좌'],
         template: '[본인 인증 신청]\n전화번호: \n은행: \n계좌번호: \n예금주: ',
@@ -33,7 +33,7 @@ export const BADGES: BadgeInfo[] = [
         id: 'proxy',
         name: '대리 인증',
         short: '대리',
-        icon: 'trophy',
+        icon: 'shield-check',
         summary: '대리(진행) 글쓰기',
         requirements: ['본인 인증', '대리 거래내역', '기타 인증'],
         template: '[대리 인증 신청]\n본인 인증: 있음 / 같이 신청\n대리 거래내역: 캡처 첨부\n기타 인증: ',
@@ -42,7 +42,7 @@ export const BADGES: BadgeInfo[] = [
         id: 'credit',
         name: '신용인',
         short: '신용인',
-        icon: 'handshake',
+        icon: 'shield-check',
         summary: '거래내역, 거래 금액 보고 지급',
         requirements: ['거래내역', '누적 거래 금액', '활동 카페/닉네임'],
         template: '[신용인 신청]\n거래내역: 캡처 첨부\n누적 거래 금액: \n활동 카페/닉네임: ',
@@ -51,7 +51,7 @@ export const BADGES: BadgeInfo[] = [
         id: 'broker',
         name: '중개 인증',
         short: '중개',
-        icon: 'key',
+        icon: 'shield-check',
         summary: '중개를 맡아 주는 회원',
         requirements: ['플러스 이상 등급 (무료 체험 제외)', '본인 인증', '중개·거래 경력 (캡처)'],
         template: '[중개 인증 신청]\n본인 인증: 있음 / 같이 신청\n중개·거래 경력: 캡처 첨부\n활동 카페/닉네임: ',
@@ -60,7 +60,7 @@ export const BADGES: BadgeInfo[] = [
         id: 'appraiser',
         name: '가측 인증',
         short: '가측',
-        icon: 'clipboard',
+        icon: 'shield-check',
         summary: '계정 가격을 측정해 주는 회원',
         requirements: ['플러스 이상 등급 (무료 체험 제외)', '가측 경력 또는 시세 근거 (캡처)'],
         template: '[가측 인증 신청]\n가측 경력: 캡처 첨부\n활동 카페/닉네임: ',
@@ -71,11 +71,11 @@ export type GradePlan = { id: PlanId; label: string; price: number; months?: num
 export type GradeInfo = { id: GradeId; name: string; rank: number; icon: string; plans: GradePlan[]; note: string };
 
 export const GRADES: GradeInfo[] = [
-    { id: 'normal', name: '일반', rank: 0, icon: 'seedling', plans: [], note: '기본 등급' },
-    { id: 'plus', name: '플러스', rank: 1, icon: 'star', plans: [{ id: 'permanent', label: '영구', price: 30000 }], note: '영구 구매만 가능' },
-    { id: 'premium', name: '프리미엄', rank: 2, icon: 'gem-stone', plans: [{ id: 'permanent', label: '영구', price: 50000 }, { id: '6m', label: '6개월', price: 30000, months: 6 }], note: '영구 또는 6개월' },
-    { id: 'elite', name: '엘리트', rank: 3, icon: 'crown', plans: [{ id: 'permanent', label: '영구', price: 150000 }, { id: '6m', label: '6개월', price: 60000, months: 6 }], note: '영구 또는 6개월' },
-    { id: 'admin', name: '관리자', rank: 4, icon: 'shield', plans: [], note: '매니저 지정' },
+    { id: 'normal', name: '일반', rank: 0, icon: 'normal', plans: [], note: '기본 등급' },
+    { id: 'plus', name: '플러스', rank: 1, icon: 'plus', plans: [{ id: 'permanent', label: '영구', price: 30000 }], note: '영구 구매만 가능' },
+    { id: 'premium', name: '프리미엄', rank: 2, icon: 'premium', plans: [{ id: 'permanent', label: '영구', price: 50000 }, { id: '6m', label: '6개월', price: 30000, months: 6 }], note: '영구 또는 6개월' },
+    { id: 'elite', name: '엘리트', rank: 3, icon: 'elite', plans: [{ id: 'permanent', label: '영구', price: 150000 }, { id: '6m', label: '6개월', price: 60000, months: 6 }], note: '영구 또는 6개월' },
+    { id: 'admin', name: '관리자', rank: 4, icon: 'admin', plans: [], note: '매니저 지정' },
 ];
 
 export const PURCHASABLE_GRADES: GradeId[] = ['plus', 'premium', 'elite'];
@@ -648,7 +648,7 @@ export const TRIAL_ROWS: TrialRow[] = [
     // 자동 끌올 (WP52): on from the first post, one post every autoEveryMinutes (copy.md order: second).
     { icon: 'alarm-clock', title: `자동 끌올 글 ${PERKS.plus.autoBumpPosts}개`, text: `${gapText(PERKS.plus.autoEveryMinutes)}마다 1번 · 첫 글부터 바로 켜짐` },
     // 제목 강조 검정 (WP48), the 플러스 글자 꾸미기 with 글자색 (WP49) and 링크 미리보기 (WP48).
-    { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
+    { icon: 'palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
 ];
 
 // 알림함 rows for the trial (WP50), written by the daily cleanup: one in the last 24 hours ('10월 9일

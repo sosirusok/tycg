@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ChevronRight, Search, X } from 'lucide-react';
+import { ChevronRight, Gift, Search, X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
 import { AD_TEXT, TRIAL_KEEPS, gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon } from '../components/ui';
+import { GradeMark, Icon } from '../components/ui';
 import { MiniCard } from '../components/PostCard';
 import { adHref } from '../components/AdCard';
 import { HomeAdCard, type CardItem } from '../components/HomeAdCard';
@@ -112,20 +112,26 @@ export function Home() {
     };
 
     return <div className="home">
-        <section className="container hero">
-            <h1>어떤 거래를 찾으세요?</h1>
-            <form className="hero-search" onSubmit={search} role="search">
-                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)" aria-label="거래 검색" /></label>
-            </form>
-            <nav className="quick-row" aria-label="거래 종류">
-                {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={40} /><span>{KIND_NAMES[kind]}</span></Link>)}
-            </nav>
+        {/* The brand band (WP71): the site name, the one line and the search box, white on #0066FF. */}
+        <section className="hero">
+            <div className="container hero-inner">
+                <p className="hero-site">좀비고 거래소</p>
+                <h1>어떤 거래를 찾으세요?</h1>
+                <form className="hero-search" onSubmit={search} role="search">
+                    <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)" aria-label="거래 검색" /></label>
+                </form>
+            </div>
         </section>
 
         <div className="container">
+            {/* The five boards as one segmented bar over the band's lower edge. */}
+            <nav className="quick-row" aria-label="거래 종류">
+                {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><Icon name={KIND_ICONS[kind]} size={24} /><span>{KIND_NAMES[kind]}</span></Link>)}
+            </nav>
             {me && trial?.ended ? <TrialEndBand />
                 // Guests while the sign-up event runs: the band in the promo's place opens 회원가입.
                 : ready && !me && config.trial?.open ? <button type="button" className="promo" onClick={() => openAuth('register')}>
+                    <span className="promo-icon"><Gift size={24} strokeWidth={1.75} aria-hidden="true" /></span>
                     <span className="promo-text">
                         <span className="promo-eyebrow">신규 가입 이벤트</span>
                         <strong>가입하면 플러스 7일 무료</strong>
@@ -134,6 +140,7 @@ export function Home() {
                 </button>
                 : promo && !promoHidden && <div className="promo-wrap">
                     <Link to="/guide#grade" className="promo">
+                        <span className="promo-icon"><GradeMark grade={gradeInfo(me?.grade).rank >= 1 ? 'premium' : 'plus'} size={24} /></span>
                         <span className="promo-text">
                             <span className="promo-eyebrow">등급 혜택</span>
                             <strong>{gradeInfo(me?.grade).rank >= 1 ? `프리미엄부터 ${AD_TEXT.box}` : '플러스부터 자동 끌올'}</strong>
