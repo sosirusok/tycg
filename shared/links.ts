@@ -147,3 +147,13 @@ export function ownPostId(url: string, selfHost: string) {
         return m ? Number(m[1]) : null;
     } catch { return null; }
 }
+
+// 중개/가측 소개 (WP66): one short line with no address or contact in it: a link of any kind (a scheme, www.,
+// a look-alike host findLinks leaves as text, or a bare domain such as 'open.kakao.com/o/…' or 'naver.me'), or
+// a phone number ('010-1234-5678', '01012345678', '+82 10 …').
+const ANY_SCHEME = /[a-z][a-z0-9+.-]*:\/\//i;
+const BARE_DOMAIN = /[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?![a-z0-9-])/i;
+const PHONE_NUMBER = /(?:\+?82[-.\s]?)?0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}|\+?82[-.\s]?1\d[-.\s]?\d{3,4}[-.\s]?\d{4}/;
+export function hasContact(text: string) {
+    return ANY_SCHEME.test(text) || /www\./i.test(text) || BARE_DOMAIN.test(text) || PHONE_NUMBER.test(text) || findLinks(text).length > 0;
+}

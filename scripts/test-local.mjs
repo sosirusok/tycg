@@ -95,7 +95,7 @@ try {
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT), '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-services.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs'])) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -121,11 +121,14 @@ try {
     // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now),
     // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
     // verify-promo (WP53) checks the 광고 placements against the strict rules.
+    // verify-providers (WP66) needs the read meter and X-Test-Now (TEST_HOOKS=on) and removes its 200 seeded providers.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-providers.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
-        // call), so they get longer.
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : 180000);
+        // call), so they get longer; verify-perks uploads 121 photos and fires the cron twice, which takes over
+        // 3 minutes when other checkouts run their gates on the same machine.
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }),
+            suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : suite.includes('verify-perks') ? 360000 : 180000);
     }
     const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;
     stop(fallback);

@@ -8,12 +8,13 @@ import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
 import { MiniCard } from '../components/PostCard';
 import { adHref } from '../components/AdCard';
-import { HomeAdCard } from '../components/HomeAdCard';
+import { HomeAdCard, type CardItem } from '../components/HomeAdCard';
 
 
 type Notice = { id: number; title: string; created_at: number };
 
-type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; notices: Notice[] };
+// card: the bottom card's items (WP66: ad posts and 엘리트·관리자 providers); cardAds the posts alone.
+type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; card?: CardItem[]; notices: Notice[] };
 
 // One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
 // the board list for that category.
@@ -153,6 +154,6 @@ export function Home() {
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>
         </div>
-        <HomeAdCard ads={home ? home.cardAds || [] : null} />
+        <HomeAdCard items={home ? home.card || (home.cardAds || []).map(post => ({ post })) : null} />
     </div>;
 }

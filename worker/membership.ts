@@ -1,5 +1,5 @@
 import { blockedDomains } from './unfurl';
-import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, setting, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
+import { db, fail, requireUser, requireActive, requireManager, json, body, limit, initManager, isManager, isSuspended, memberColumns, withMember, random, storedHash, textField, trialWindow, trialOpen, clearTrialCache, MANAGER_ID, WITHDRAWN } from './http';
 import { storageMode } from './storage';
 import { notifyOne } from './notifications';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
@@ -8,19 +8,26 @@ import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from 
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
 import {
-    AUTO_TEXT, GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
-    type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
+    AUTO_TEXT, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
+    type ApplicationKind, type BadgeId, type Earn, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
 import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
+
+// The 수익 홍보 texts (WP66) are the only 'sys:' settings sent to the browser; each falls back to its default.
+const EARN_KEYS: Record<keyof Earn, string> = { broker: 'sys:earn_broker', appraise: 'sys:earn_appraise', story: 'sys:earn_story' };
 
 export async function siteConfig() {
     await initManager();
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
     // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
     const w = await trialWindow(), open = trialOpen(w);
+    const keys = ['payment_notice', ...Object.values(EARN_KEYS)];
+    const rows = (await db().prepare(`SELECT key,value FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`).bind(...keys).all<{ key: string; value: string }>()).results;
+    const value = (key: string) => rows.find(r => r.key === key)?.value || '';
+    const earn = Object.fromEntries((Object.keys(EARN_KEYS) as (keyof Earn)[]).map(k => [k, value(EARN_KEYS[k]) || EARN_DEFAULTS[k]])) as Earn;
     // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains() };
+    return { latestSeason: await latestSeason(), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn };
 }
 
 const DAY = 86400000;
@@ -173,15 +180,17 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
     // An approved grade is granted in the same batch, so the application changes only while the
     // grant's precondition holds too; otherwise nothing is written and the manager tries again.
     const grant = action === 'approve' && app.kind !== 'badge' ? await grantGradeStatements(app.user_id, app.target, app.plan, u.id, app.id, now, DECIDED, args) : null;
+    // 중개·가측 인증 (WP66): checked now and again inside the batch, so the application is approved only with the 인증.
+    const badge = action === 'approve' && app.kind === 'badge' ? await providerGrantGuard(app.user_id, app.target, now) : { sql: '1', args: [] as unknown[] };
     const statements: D1PreparedStatement[] = [
-        db().prepare(`UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending' AND ${grant ? grant.precondition : '1'}`)
-            .bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id, ...grant ? grant.preArgs : []),
+        db().prepare(`UPDATE applications SET status=?,note=?,decided_by=?,decided_at=?,updated_at=?,decision_id=? WHERE id=? AND status='pending' AND ${grant ? grant.precondition : '1'} AND ${badge.sql}`)
+            .bind(action === 'approve' ? 'approved' : 'rejected', note, u.id, now, now, decision, app.id, ...grant ? grant.preArgs : [], ...badge.args),
     ];
     let message = '';
     if (action === 'approve') {
         if (app.kind === 'badge') {
             assertBadgeGranter(u);
-            statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED}`).bind(app.user_id, app.target, u.id, now, ...args));
+            statements.push(db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${DECIDED} AND ${badge.sql}`).bind(app.user_id, app.target, u.id, now, ...args, ...badge.args));
             message = `${badgeInfo(app.target)?.name} 지급 완료`;
         } else {
             statements.push(grant!.statement, grant!.wallet, ...grant!.auto, ...grant!.ads);
@@ -195,9 +204,27 @@ async function decide(u: User, app: any, action: 'approve' | 'reject', note: str
     statements.push(notifyOne('application', app.user_id, String(app.id), null, u.id, `신청 결과 · ${applicationTitle(app)} ${action === 'approve' ? '지급 완료' : '반려'}`, now, DECIDED, args));
     const r = await db().batch(statements);
     if (!r[0].meta.changes) {
-        if (grant && (await db().prepare("SELECT status FROM applications WHERE id=?").bind(app.id).first<{ status: string }>())?.status === 'pending') fail(409, GRADE_CHANGED);
+        if ((grant || badge.sql !== '1') && (await db().prepare("SELECT status FROM applications WHERE id=?").bind(app.id).first<{ status: string }>())?.status === 'pending') fail(409, GRADE_CHANGED);
         fail(409, '이미 처리된 신청입니다.');
     }
+}
+
+// 중개·가측 인증 (WP66): the member holds a 플러스 or higher grade from the manager (never the 무료 체험), is not
+// suspended or withdrawn, and for 중개 인증 already holds 본인 인증. Refused with the reason (409) when not; else the
+// same rule as SQL for the grant's own statements. Other 인증 have no condition ('1').
+async function providerGrantGuard(userId: string, badge: string, now: number) {
+    if (!isProviderType(badge)) return { sql: '1', args: [] as unknown[] };
+    const m = await db().prepare(`SELECT u.role,u.deleted_at,u.suspended_until,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(userId).first<any>();
+    if (!m) fail(404, '회원을 찾을 수 없습니다.');
+    const member = withMember(m);
+    if (!canProvide({ ...member, deleted: !!m.deleted_at }, now)) fail(409, PROVIDER_TEXT.grantNotEligible);
+    if (badge === 'broker' && !member.badges.includes('identity')) fail(409, PROVIDER_TEXT.needIdentity);
+    return {
+        sql: `EXISTS(SELECT 1 FROM users pu WHERE pu.id=? AND pu.deleted_at IS NULL AND (pu.suspended_until IS NULL OR pu.suspended_until<=?))
+            AND EXISTS(SELECT 1 FROM user_grades pg WHERE pg.user_id=? AND pg.source='manager' AND pg.rank>=1 AND (pg.expires_at IS NULL OR pg.expires_at>?))`
+            + (badge === 'broker' ? " AND EXISTS(SELECT 1 FROM user_badges pb WHERE pb.user_id=? AND pb.badge='identity')" : ''),
+        args: [userId, now, userId, now, ...badge === 'broker' ? [userId] : []] as unknown[],
+    };
 }
 
 export async function membershipHandler(req: Request, p: string[]): Promise<Response | null> {
@@ -219,6 +246,8 @@ export async function membershipHandler(req: Request, p: string[]): Promise<Resp
         if (kind === 'badge') {
             if (!isBadge(b.target)) fail(400, '신청할 인증을 선택해 주세요.');
             if (u.badges.includes(b.target as BadgeId)) fail(409, '이미 받은 인증입니다.');
+            // 중개·가측 인증 (WP66): 플러스 and up from the manager only, never during the 무료 체험.
+            if (isProviderType(b.target) && !canProvide(u)) fail(403, PROVIDER_TEXT.notEligible);
         } else {
             if (!isGrade(b.target) || !PURCHASABLE_GRADES.includes(b.target)) fail(400, '신청할 등급을 선택해 주세요.');
             if (!planInfo(b.target, b.plan)) fail(400, '기간을 선택해 주세요.');
@@ -372,8 +401,13 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             const b = await body(req);
             if (!isBadge(b.badge)) fail(400, '인증 종류를 확인해 주세요.');
             if (b.active && target.deleted_at) fail(400, WITHDRAWN);
-            if (b.active) await db().prepare('INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES(?,?,?,?)').bind(p[2], b.badge, u.id, Date.now()).run();
-            else await db().prepare('DELETE FROM user_badges WHERE user_id=? AND badge=?').bind(p[2], b.badge).run();
+            if (b.active) {
+                const now = Date.now(), guard = await providerGrantGuard(p[2], b.badge, now);
+                const r = await db().prepare(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) SELECT ?,?,?,? WHERE ${guard.sql}`).bind(p[2], b.badge, u.id, now, ...guard.args).run();
+                if (!r.meta.changes && !await db().prepare('SELECT 1 FROM user_badges WHERE user_id=? AND badge=?').bind(p[2], b.badge).first()) fail(409, GRADE_CHANGED);
+                return json({ ok: true });
+            }
+            await db().prepare('DELETE FROM user_badges WHERE user_id=? AND badge=?').bind(p[2], b.badge).run();
             return json({ ok: true });
         }
         if (p[3] === 'grades' && !p[4] && method === 'POST') {
@@ -426,6 +460,19 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (!Number.isInteger(n) || n < 32 || n > 200) fail(400, '현재 시즌은 32 이상의 숫자로 입력해 주세요.');
             if (n < await latestSeason()) fail(400, '이미 등록된 시즌보다 낮출 수 없습니다.');
             statements.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind('latest_season', String(n), now));
+        }
+        // 수익 홍보 (WP66): each text up to 60 characters; an empty one goes back to its default. A promise
+        // ('보장') is refused: the amounts are examples the 운영진 heard, never a guarantee.
+        if (b.earn && typeof b.earn === 'object') {
+            for (const k of Object.keys(EARN_KEYS) as (keyof Earn)[]) {
+                const v = b.earn[k];
+                if (v === undefined) continue;
+                if (typeof v !== 'string' || v.trim().length > EARN_MAX) fail(400, `수익 문구: ${EARN_MAX}자 이내로 입력해 주세요.`);
+                if (v.includes('보장')) fail(400, '수익 문구에는 보장 표현을 쓸 수 없습니다.');
+                statements.push(v.trim()
+                    ? db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(EARN_KEYS[k], v.trim(), now)
+                    : db().prepare('DELETE FROM settings WHERE key=?').bind(EARN_KEYS[k]));
+            }
         }
         if (statements.length) await db().batch(statements);
         return json(await siteConfig());

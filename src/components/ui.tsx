@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
 import { FileText, Lock, MessageCircle, Search, X } from 'lucide-react';
-import { BADGES, gradeInfo, type BadgeId, type GradeId } from '../../shared/membership';
+import { BADGES, gradeInfo, ringTier, type BadgeId, type GradeId } from '../../shared/membership';
 
 // Fluent Emoji color icons (public/icons, MIT).
 export function CIcon({ name, size = 24, alt = '' }: { name: string; size?: number; alt?: string }) {
@@ -10,9 +10,11 @@ export function CIcon({ name, size = 24, alt = '' }: { name: string; size?: numb
 
 // The member's 프로필 사진 (WP59) when src is given (the 64px inline copy in lists and rows, the 256px photo
 // on the profile head), else the initial letter; a photo that fails to load falls back to the letter.
-export function Avatar({ name, size = '', src }: { name: string; size?: '' | 'sm' | 'lg'; src?: string | null }) {
+// The ring is the member's public grade (WP66 프로필 테두리): 일반 gray, 플러스 bronze, 프리미엄 silver, 엘리트 and
+// 관리자 gold with a slow shimmer, the manager black; a 무료 체험 shows 일반.
+export function Avatar({ name, size = '', src, grade, trial, role }: { name: string; size?: '' | 'sm' | 'lg'; src?: string | null; grade?: string | null; trial?: boolean | null; role?: string | null }) {
     const [broken, setBroken] = useState<string | null>(null);
-    const cls = 'avatar' + (size ? ' avatar-' + size : '');
+    const cls = 'avatar ring-' + ringTier(grade, trial, role) + (size ? ' avatar-' + size : '');
     if (src && broken !== src) return <span className={cls + ' avatar-photo'} aria-hidden="true"><img src={src} alt="" decoding="async" onError={() => setBroken(src)} /></span>;
     return <span className={cls} aria-hidden="true">{name.slice(0, 1)}</span>;
 }

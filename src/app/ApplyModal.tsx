@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gapText, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, canProvide, gapText, gradeInfo, isProviderType, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { CIcon, DataItems, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
+import { EarnBlock } from '../components/ProviderCard';
 import { useApp } from './state';
 
 type Choice = { kind: ApplicationKind; target: string; plan?: PlanId };
@@ -16,14 +17,13 @@ export const CHAT_DRAFT_EVENT = 'zg:chat-draft';
 const won = (n: number) => n.toLocaleString('ko-KR') + '원';
 
 // What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces), as
-// WP40 lists them (at most 3 data items per row; WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
-// 중개·가측 (WP65): '중개·가측 월 5회 무료', '중개·가측 무제한 무료' (엘리트 leads with it).
+// WP40 lists them (WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
+// 중개/가측 (WP66): '중개·가측 인증 신청 가능', '중개/가측 탭 큰 프로필 + 소개', '중개/가측 골드 카드 최상단' with '광고 팝업'.
 export function gradeBenefits(id: string): string[] {
     const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
-    const services = (g: 'plus' | 'premium' | 'elite') => Number.isFinite(PERKS[g].serviceCoupons) ? `중개·가측 월 ${PERKS[g].serviceCoupons}회 무료` : '중개·가측 무제한 무료';
-    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`, services('plus')];
-    if (id === 'premium') return [wallet('premium'), services('premium')];
-    if (id === 'elite') return [services('elite'), wallet('elite'), `같은 글 ${gapText(PERKS.elite.bumpGapMinutes)}마다`];
+    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`, '중개·가측 인증 신청 가능'];
+    if (id === 'premium') return [wallet('premium'), '중개/가측 탭 큰 프로필 + 소개'];
+    if (id === 'elite') return ['중개/가측 골드 카드 최상단', '광고 팝업', wallet('elite')];
     return [];
 }
 
@@ -63,7 +63,9 @@ export function ApplyModal() {
 
     // A choice for a verification the member already has (e.g. after logging in) is dropped.
     const raw = choices[tab];
-    const choice = raw && !(raw.kind === 'badge' && ownsBadge(raw.target)) && !(raw.kind === 'grade' && gradeClosed(raw.target)) ? raw : null;
+    // 중개·가측 인증 stays locked below 플러스 and on the 무료 체험 (WP66), even when a button preset it.
+    const locked = (target: string) => isProviderType(target) && !!me && !canProvide(me);
+    const choice = raw && !(raw.kind === 'badge' && (ownsBadge(raw.target) || locked(raw.target))) && !(raw.kind === 'grade' && gradeClosed(raw.target)) ? raw : null;
     const choose = (c: Choice) => setChoices(v => ({ ...v, [c.kind]: c }));
     const pendingFor = (kind: string, target: string) => mine.find(a => a.kind === kind && a.target === target && a.status === 'pending');
 
@@ -109,20 +111,25 @@ export function ApplyModal() {
             <div className="apply-options" role="radiogroup" aria-label="인증 종류">
                 {BADGES.map(b => {
                     const owned = ownsBadge(b.id), pending = pendingFor('badge', b.id);
-                    return <label key={b.id} className={'apply-option' + (owned ? ' is-owned' : '')}>
-                        <input type="radio" name="apply-badge" disabled={owned} checked={choice?.kind === 'badge' && choice.target === b.id} onChange={() => choose({ kind: 'badge', target: b.id })} />
+                    // 중개·가측 인증 (WP66): 플러스 and up only, never the 무료 체험 (guests see the rule and sign in first).
+                    const closed = !owned && locked(b.id);
+                    return <label key={b.id} className={'apply-option' + (owned ? ' is-owned' : closed ? ' is-locked' : '')}>
+                        <input type="radio" name="apply-badge" disabled={owned || closed} checked={choice?.kind === 'badge' && choice.target === b.id} onChange={() => choose({ kind: 'badge', target: b.id })} />
                         <CIcon name={b.icon} size={40} />
                         <span className="apply-option-body">
                             <span className="apply-option-title">{b.name}
                                 {owned ? <span className="apply-state on"><VerifiedMark size={14} />보유</span> : pending ? <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span> : null}</span>
                             <span className="apply-option-text">{b.summary}</span>
                             <span className="apply-need">제출: {b.requirements.join(', ')}</span>
+                            {closed && <span className="apply-lock">플러스 이상 등급부터 신청 가능 (무료 체험 제외) <button type="button" className="apply-link" onClick={e => { e.preventDefault(); setTab('grade'); }}>등급 보기</button></span>}
                         </span>
-                        {!owned && <span className="radio-dot" aria-hidden="true" />}
+                        {!owned && !closed && <span className="radio-dot" aria-hidden="true" />}
                     </label>;
                 })}
             </div>
         </div> : <div className="apply-pane">
+            {/* 수익 홍보 (WP66) leads the 등급 part. */}
+            <EarnBlock earn={config.earn} className="earn-apply" />
             <p className="apply-intro">입금 확인 후 매니저가 지급합니다. <Link to="/guide#grade" className="apply-link" onClick={e => {
                 closeApply();
                 // Already on the guide: the address does not change, so scroll to the table here.
@@ -136,8 +143,8 @@ export function ApplyModal() {
                         <div className="grade-row-name">
                             <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
                             {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
-                            {/* The 체험 has no free 중개·가측 (WP65), though the 플러스 row lists them. */}
-                            {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">무료 중개·가측은 유료 플러스부터</span>}
+                            {/* 중개·가측 인증 needs a paid 플러스 (WP66), though the 플러스 row lists it. */}
+                            {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">중개·가측 인증은 유료 플러스부터</span>}
                             {/* 광고 (WP53) needs 본인 인증 too; a member who has it is not reminded. */}
                             {PERKS[g.id].adSlots > 0 && g.plans.length > 0 && !ownsBadge('identity') && <span className="muted small">{AD_TEXT.hint}</span>}
                         </div>

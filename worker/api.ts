@@ -8,13 +8,13 @@ import { filesHandler, unused } from './files';
 import { chatHandler } from './chat';
 import { communityHandler } from './community';
 import { membershipHandler, trialState, trialMeHandler } from './membership';
-import { kstDate, type TrialState } from '../shared/membership';
+import { kstDate, publicRank, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
 import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
-import { servicesHandler } from './services';
+import { providersHandler } from './providers';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 import { notificationsHandler } from './notifications';
 import { automationHandler } from './automation';
@@ -92,8 +92,6 @@ async function withdraw(req: Request) {
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
         db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${WITHDRAW_ENDS_OFFERS}`).bind(now, u.id, u.id),
         db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
-        // Open 중개·가측 신청 end too (WP65), so the manager's list keeps no request of a member who left.
-        db().prepare("UPDATE service_requests SET status='cancelled',decided_at=? WHERE user_id=? AND status='open'").bind(now, u.id),
         // Trade records still waiting for an answer that involve the member end (WP43).
         db().prepare('DELETE FROM trades WHERE (seller_id=? OR buyer_id=?) AND confirmed_at IS NULL AND author_id IS NOT NULL AND removed_at IS NULL').bind(u.id, u.id),
     ]);
@@ -161,6 +159,15 @@ async function avatarHandler(req: Request) {
         .bind(b.uploadId, b.thumb, u.id, b.uploadId, u.id).run();
     if (!r.meta.changes) fail(400, AVATAR_AGAIN);
     return json({ ok: true, avatar_id: b.uploadId, avatar_thumb: b.thumb });
+}
+
+// POST me/celebrated: stores the member's public grade rank (manager grants only, a 무료 체험 reads as 일반) as
+// the one celebrated, so the 등급 축하 창 shows once per rise; a lower rank (an ended grade) is stored too, so
+// the next rise shows it again.
+async function celebrated(req: Request) {
+    const u = await requireUser(req), rank = publicRank(u);
+    await db().prepare('UPDATE users SET celebrated_rank=? WHERE id=?').bind(rank, u.id).run();
+    return json({ rank });
 }
 
 async function authHandler(req: Request, p: string[]) {
@@ -373,6 +380,8 @@ async function route(req: Request): Promise<Response> {
                 if (p[1] === 'comments' && !p[2] && method === 'GET') return await myComments(req, url);
                 // 프로필 사진 (WP59).
                 if (p[1] === 'avatar' && !p[2]) return await avatarHandler(req);
+                // 등급 축하 창 (WP66): the member saw (or skipped) the window for the current public grade.
+                if (p[1] === 'celebrated' && !p[2] && method === 'POST') return await celebrated(req);
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;
@@ -382,8 +391,8 @@ async function route(req: Request): Promise<Response> {
             // PATCH and DELETE comments/:id (WP55).
             case 'comments': { const r = await commentsHandler(req, p); if (r) return r; break; }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
-            // 중개·가측 신청 (WP65).
-            case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }
+            // 중개/가측 tab (WP66).
+            case 'providers': { const r = await providersHandler(req, p, url); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

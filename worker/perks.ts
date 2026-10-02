@@ -1,6 +1,5 @@
 import { db, requireUser, json } from './http';
-import { perksOf, rulesOf, kstDayStart, kstMonth, serviceCouponsOf } from '../shared/membership';
-import { couponsOf } from './services';
+import { perksOf, rulesOf, kstDayStart } from '../shared/membership';
 import { FEATURED_MINE, walletJson } from './posts';
 import { photoBytesSql } from './files';
 import { storageMode, userLimit } from './storage';
@@ -16,17 +15,14 @@ export async function usageHandler(req: Request) {
         db().prepare(`SELECT u.bump_tokens,u.bump_at,
             (SELECT COUNT(*) FROM post_events WHERE user_id=u.id AND kind='post' AND created_at>=?) AS posts,
             (SELECT COUNT(*) FROM post_events WHERE user_id=u.id AND kind='fresh' AND created_at>=?) AS fresh,
-            (SELECT COUNT(*) FROM posts WHERE author_id=u.id AND status!='closed') AS open,
-            (SELECT COUNT(*) FROM service_requests WHERE user_id=u.id AND month=? AND coupon=1 AND status IN ('open','done')) AS coupons_used,${photoBytesSql(mode)} AS photo_bytes FROM users u WHERE u.id=?`).bind(dayStart, dayStart, kstMonth(now), u.id),
+            (SELECT COUNT(*) FROM posts WHERE author_id=u.id AND status!='closed') AS open,${photoBytesSql(mode)} AS photo_bytes FROM users u WHERE u.id=?`).bind(dayStart, dayStart, u.id),
         db().prepare(`SELECT id,title,kind FROM posts WHERE ${FEATURED_MINE} ORDER BY featured_at DESC`).bind(u.id),
     ]);
-    const c = counts.results[0] as { bump_tokens: number; bump_at: number; posts: number; fresh: number; open: number; coupons_used: number; photo_bytes: number };
+    const c = counts.results[0] as { bump_tokens: number; bump_at: number; posts: number; fresh: number; open: number; photo_bytes: number };
     // The editor's '사진 용량 12.3MB/100MB' (KV and D1 only; the same as GET uploads/usage).
     const photos = { storage: mode, used: Number(c.photo_bytes) || 0, limit: u.role === 'manager' ? null : userLimit(mode) };
     return json({
-        // serviceCoupons is the member's own (0 during the 플러스 체험 and for the manager), as in coupons.
-        grade: u.grade, perks: finite({ ...perks, serviceCoupons: serviceCouponsOf(u) }), rules: finite(rulesOf(u)),
-        coupons: couponsOf(u, Number(c.coupons_used) || 0, now),
+        grade: u.grade, perks: finite(perks), rules: finite(rulesOf(u)),
         ...walletJson(c, perks, now),
         openPosts: c.open, postsToday: c.posts, freshToday: c.fresh, featured: featured.results, photos,
     });

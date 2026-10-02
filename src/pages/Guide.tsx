@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, PROVIDER_TEXT, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, introShown, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
+import { Link } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
+import { EarnBlock } from '../components/ProviderCard';
 
 type Notice = { id: number; title: string; body: string; created_at: number };
 
@@ -22,7 +24,9 @@ const STEPS = [
 // price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
 // A cell may hold two lines (영구 and 6개월 prices), each its own line.
 const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
-const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
+// The grade chips and avatar rings in the grade metals (WP66): 플러스 동색, 프리미엄 은색, 엘리트 금색.
+const NAME_STYLE: Record<string, string> = { normal: '-', plus: '동색 테두리', premium: '은색 바탕', elite: '금색 바탕' };
+const RING_STYLE: Record<string, string> = { normal: '회색', plus: '동색', premium: '은색', elite: '금색 (반짝임)' };
 const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
 const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
@@ -40,12 +44,12 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
     // 글자 꾸미기 (WP49): the tools of each grade, shown on the post detail only.
     ['글자 꾸미기', g => STYLE_LADDER[styleRank(g.id)]],
-    // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
-    // 운영진 가측가 on the post for every grade (paid requests too).
-    // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
-    ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
-    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
-    ['운영진 가측가 표시', () => 'O'],
+    // 중개/가측 (WP66): who may apply for 중개·가측 인증 (플러스 and up, never the 무료 체험), how the tab shows each
+    // grade (엘리트 gold cards on top, 프리미엄 big profiles, 플러스 small ones), the home popup, and the ring.
+    ['중개·가측 인증 신청', g => gradeInfo(g.id).rank < 1 ? '-' : g.id === 'plus' ? 'O (체험 제외)' : 'O'],
+    ['중개/가측 탭 노출', g => { const r = gradeInfo(g.id).rank; return r >= 3 ? `골드 카드 · 최상단 + 소개 ${introShown(r)}자` : r === 2 ? `큰 프로필 + 소개 ${introShown(r)}자` : r === 1 ? '작은 프로필 · 하단' : '-'; }],
+    ['중개·가측 광고 팝업', g => gradeInfo(g.id).rank >= 3 ? 'O' : '-'],
+    ['프로필 테두리', g => RING_STYLE[g.id] || '-'],
     // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
     ['조건 알림', g => filterAlertText(PERKS[g.id])],
     // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
@@ -105,6 +109,7 @@ export default function Guide() {
                 <li>거래 횟수와 거금은 상대가 확인한 거래만 셉니다. 같은 회원과의 거래는 30일에 1번만 셉니다.</li>
                 <li>거금은 글에 올린 가격·MAX·제시 안에서만 셉니다.</li>
                 <li>확인된 거래는 프로필 거래 기록에 남고, 완료된 글에는 거래가가 표시됩니다.</li>
+                <li><Link to="/providers?type=broker" className="guide-link">{PROVIDER_TEXT.guide}</Link></li>
             </ul>
         </section>
 
@@ -124,6 +129,7 @@ export default function Guide() {
                     </tr>)}</tbody>
                 </table>
             </div>
+            <EarnBlock earn={config.earn} className="mt-16" />
             <div className="grade-free">
                 <h3>일반 (무료)</h3>
                 <ul>{FREE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
@@ -138,8 +144,7 @@ export default function Guide() {
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
-                <li>중개·가측: 내 판매·교환 계정 글의 더보기에서 가측 신청, 채팅의 더보기에서 중개 신청. 무료 횟수가 없으면 유료이며 수수료는 매니저가 채팅으로 안내합니다. 플러스 체험 중에는 무료 횟수가 없습니다.</li>
-                <li>운영진 가측가는 글을 수정하면 표시되지 않습니다.</li>
+                <li>중개/가측 탭의 같은 등급 안 순서는 접속 중인 회원 먼저, 그다음 3시간마다 바뀌는 무작위 순서입니다.</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>
@@ -152,7 +157,7 @@ export default function Guide() {
                 <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
-                <li>중개는 운영진 또는 신용인에게만 맡깁니다.</li>
+                <li>중개는 중개 인증 회원에게 맡기세요. 거래 대금은 사이트를 거치지 않습니다.</li>
                 <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>

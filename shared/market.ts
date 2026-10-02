@@ -34,6 +34,8 @@ export type User = {
     badges: BadgeId[];
     // The session user's own 이용 정지 end (WP22); other members' profiles carry only `suspended`.
     suspended_until?: number | null;
+    // The session user's last celebrated public grade rank (WP66 등급 축하 창).
+    celebrated_rank?: number;
 };
 
 export type TradeKind = 'buy' | 'sell' | 'exchange' | 'proxy_request' | 'proxy_offer';
@@ -70,8 +72,6 @@ export type Post = {
     view_count?: number;
     // 댓글·답글 (WP55): live 댓글 and 답글 on the post.
     comment_count?: number;
-    // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
-    appraised?: { price: number; at: number } | null;
     // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of
     // the trade and the manager also get a pending one, with deal_state ('확인 대기' / '확인 완료').
     deal_price?: number;

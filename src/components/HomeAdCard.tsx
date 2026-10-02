@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { KIND_ICONS, KIND_NAMES, listingPrice, type Post } from '../../shared/market';
-import { AD_TEXT, gradeInfo, kstDate } from '../../shared/membership';
+import { AD_TEXT, PROVIDER_TEXT, gradeInfo, kstDate } from '../../shared/membership';
 import { navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { MODAL_DAY_KEY } from '../app/TrialPopup';
 import { CIcon } from './ui';
 import { adHref } from './AdCard';
 import { listPhoto, subjectLabel } from './PostCard';
+import { ProviderMini, openProviderChat, type ProviderItem } from './ProviderCard';
 
-// The home bottom ad card (WP53): one 엘리트 ad from cardAds, which GET /api/home already sent (no extra
-// request) and which never holds a post of the '엘리트 매물' row. It shows only while that row is off
+// One item of the card (GET /api/home card): an 엘리트 ad post or a listed 엘리트·관리자 provider of the
+// '중개/가측' tab (WP66), each eligible member weighted the same by the server.
+export type CardItem = { post: Post } | { provider: ProviderItem };
+const keyOf = (x: CardItem) => 'post' in x ? String(x.post.id) : 'u:' + x.provider.id;
+
+// The home bottom ad card (WP53): one 엘리트 ad from card (WP66: ad posts and 엘리트·관리자 providers), which GET
+// /api/home already sent (no extra request) and which never holds a post of the '엘리트 매물' row. It shows only while that row is off
 // screen, so the two ad areas never share a screen and the card never covers the row. Not a modal: no
 // overlay, no focus trap, X closes it. The rules live in this browser only (localStorage, every access in
 // try/catch; blocked storage means no card):
@@ -41,8 +47,8 @@ function rowInView() {
     return r.bottom > 0 && r.top < window.innerHeight;
 }
 
-// The post to show today, or null (and the first-visit day stamped on the very first visit).
-function choose(ads: Post[], me: { id: string; role: string; created_at: number } | null, now: number): Post | null {
+// The item to show today, or null (and the first-visit day stamped on the very first visit).
+function choose(items: CardItem[], me: { id: string; role: string; created_at: number } | null, now: number): CardItem | null {
     const state = load();
     if (!state) return null;
     const today = kstDate(now);
@@ -51,16 +57,18 @@ function choose(ads: Post[], me: { id: string; role: string; created_at: number 
     if (me?.role === 'manager' || (me && kstDate(me.created_at) === today)) return null;
     if (modalDay() === today || (state.restUntil && now < state.restUntil)) return null;
     const seen = state.seen || {};
-    return ads.find(p => p.author_id !== me?.id && p.role !== 'manager' && gradeInfo(p.author_grade).rank >= 3 && !((seen[p.id] || 0) > now - SAME_POST_MS)) || null;
+    return items.find(x => !((seen[keyOf(x)] || 0) > now - SAME_POST_MS) && ('post' in x
+        ? x.post.author_id !== me?.id && x.post.role !== 'manager' && gradeInfo(x.post.author_grade).rank >= 3
+        : x.provider.id !== me?.id && gradeInfo(x.provider.grade).rank >= 3)) || null;
 }
 
-export function HomeAdCard({ ads }: { ads: Post[] | null }) {
-    const { me, ready } = useApp();
-    const [pick, setPick] = useState<Post | null>(null), [shown, setShown] = useState(false), [covered, setCovered] = useState(false);
+export function HomeAdCard({ items }: { items: CardItem[] | null }) {
+    const { me, ready, requireLogin } = useApp();
+    const [pick, setPick] = useState<CardItem | null>(null), [shown, setShown] = useState(false), [covered, setCovered] = useState(false);
     useEffect(() => {
-        if (!ready || !ads) return;
-        setPick(choose(ads, me, Date.now()));
-    }, [ready, !!ads, me?.id]);
+        if (!ready || !items) return;
+        setPick(choose(items, me, Date.now()));
+    }, [ready, !!items, me?.id]);
     // 5 seconds after the page opens or the first scroll, whichever comes first, while no dialog is open
     // and the '엘리트 매물' row is off screen.
     useEffect(() => {
@@ -74,7 +82,7 @@ export function HomeAdCard({ ads }: { ads: Post[] | null }) {
             // A modal opened meanwhile (the trial popup): no card today.
             if (!state || modalDay() === today) { setPick(null); return; }
             const seen = Object.fromEntries(Object.entries(state.seen || {}).filter(([, t]) => t > now - SAME_POST_MS));
-            save({ ...state, day: today, seen: { ...seen, [pick.id]: now } });
+            save({ ...state, day: today, seen: { ...seen, [keyOf(pick)]: now } });
             setShown(true);
         };
         timer = window.setTimeout(show, DELAY_MS);
@@ -100,19 +108,27 @@ export function HomeAdCard({ ads }: { ads: Post[] | null }) {
     const open = () => {
         const state = load();
         if (state) save({ ...state, closes: 0 });
-        void navigate(adHref(pick.id));
+        if ('post' in pick) void navigate(adHref(pick.post.id));
+        else openProviderChat(pick.provider, pick.provider.type || 'broker', requireLogin);
     };
-    const { thumbSrc } = listPhoto(pick);
+    // A provider: the gold mini card that opens the chat with the 문의 template (WP66 item 12).
+    if ('provider' in pick) return <aside className={'home-ad home-ad-provider' + (covered ? ' is-covered' : '')} aria-label={PROVIDER_TEXT.tab}>
+        <button type="button" className="home-ad-body" onClick={open}>
+            <ProviderMini p={pick.provider} ad={AD_TEXT.label} />
+        </button>
+        <button type="button" className="home-ad-x" aria-label="닫기" onClick={close}><X size={18} /></button>
+    </aside>;
+    const post = pick.post, { thumbSrc } = listPhoto(post);
     return <aside className={'home-ad' + (covered ? ' is-covered' : '')} aria-label={AD_TEXT.home}>
         <button type="button" className="home-ad-body" onClick={open}>
             <span className="home-ad-media">
-                {thumbSrc ? <img src={thumbSrc} alt="" /> : <CIcon name={KIND_ICONS[pick.kind]} size={40} />}
+                {thumbSrc ? <img src={thumbSrc} alt="" /> : <CIcon name={KIND_ICONS[post.kind]} size={40} />}
                 <span className="home-ad-tag">{AD_TEXT.label}</span>
             </span>
             <span className="home-ad-text">
-                <span className="home-ad-meta">{AD_TEXT.home} · {KIND_NAMES[pick.kind]} · {subjectLabel(pick)}</span>
-                <span className="home-ad-title">{pick.title}</span>
-                <span className="home-ad-price"><b>{listingPrice(pick)}</b><span>{pick.nickname}</span></span>
+                <span className="home-ad-meta">{AD_TEXT.home} · {KIND_NAMES[post.kind]} · {subjectLabel(post)}</span>
+                <span className="home-ad-title">{post.title}</span>
+                <span className="home-ad-price"><b>{listingPrice(post)}</b><span>{post.nickname}</span></span>
             </span>
         </button>
         <button type="button" className="home-ad-x" aria-label="닫기" onClick={close}><X size={18} /></button>

@@ -13,9 +13,7 @@ type Sanction = { id: number; days: number | null; reason: string; created_at: n
 // A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
 type ReviewRow = Review & { nickname: string };
 // One of the member's trades (WP23, WP43) with 거래가 and backing; confirmed once the other member answered.
-type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number;
-    // 운영진 중개 (WP65): the manager brokered this trade; the trade count is unchanged.
-    brokered?: number };
+type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number };
 type TradeCounts = { confirmed: number; pending: number; denied: number };
 type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string; ad_off?: number; avatar_thumb?: string | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
@@ -89,7 +87,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     return <div className="member-panel">
         <div className="mp-head">
-            <div className="mp-who"><Avatar name={u.nickname} src={u.avatar_thumb} />
+            <div className="mp-who"><Avatar name={u.nickname} src={u.avatar_thumb} grade={u.grade} trial={u.grade_trial} role={u.role} />
                 <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
                     <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span></span></div>
         </div>
@@ -157,7 +155,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>거래</h4>
             {data.tradeCounts && <p className="small muted">확인 거래 {data.tradeCounts.confirmed} · 확인 대기 {data.tradeCounts.pending} · 거래 아님 {data.tradeCounts.denied}</p>}
             {trades.map(t => <div key={t.id} className="mp-row mp-review">
-                <span className="grow">{t.title || '삭제된 글'} {!!t.brokered && <span className="tag tag-line">운영진 중개</span>} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.price !== null ? ` · 거래가 ${priceText(t.price)}` : ''}{` · 기준 ${t.backing !== null ? priceText(t.backing) + (t.backing_offer ? ' (제시)' : '') : '없음'}`}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
+                <span className="grow">{t.title || '삭제된 글'} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.price !== null ? ` · 거래가 ${priceText(t.price)}` : ''}{` · 기준 ${t.backing !== null ? priceText(t.backing) + (t.backing_offer ? ' (제시)' : '') : '없음'}`}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemovingTrade(t)}>삭제</button>
             </div>)}
         </div>}

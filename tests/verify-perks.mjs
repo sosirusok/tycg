@@ -425,7 +425,7 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
 equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, filterAlerts: 0, filterAlertEvents: 'new',
     autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false, replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false }, '일반 perks');
 equal(usage.freshToday, 3, 'usage counts today\'s free new posts (3 of the 4)');
 equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
@@ -436,21 +436,9 @@ const managerUsage = (await manager('me/usage')).data;
 equal([managerUsage.perks.bumpMax, managerUsage.bumpTokens, managerUsage.nextRefillAt, managerUsage.rules.openPosts, managerUsage.rules.photosPerPost], [null, null, null, null, 100], 'the manager has no wallet and no open-post ceiling (null)');
 equal((await guest('me/usage')).status, 401, 'usage needs a login');
 
-// 7b. 무료 중개·가측 (WP65): per KST month, 0 / 1 / 5 / 무제한 (null), 0 during the 플러스 체험; the
-// elite permanent price is 150,000원 (the grade application line reads GRADES on the server).
-const couponLimits = async c => { const d = (await c('me/usage')).data; return [d.perks.serviceCoupons, d.coupons.limit]; };
-equal(await couponLimits(daily), [0, 0], '일반: serviceCoupons 0');
-equal(await couponLimits(plus), [1, 1], '플러스: serviceCoupons 1');
-equal(await couponLimits(premium), [5, 5], '프리미엄: serviceCoupons 5');
-equal(await couponLimits(elite), [null, null], '엘리트: serviceCoupons 무제한 (null)');
-sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
-equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).status, 200, 'the trial window opens for one sign-up');
-const trialist = await register('trial');
-equal((await manager('manage/trial', 'PUT', { close: true })).status, 200, 'the window closes again');
-sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");
-sql("DELETE FROM rate_limits WHERE key LIKE 'trial-ip:%'");
-equal([trialist.user.grade, trialist.user.grade_trial], ['plus', true], 'the new member is on the 플러스 체험');
-equal(await couponLimits(trialist), [0, 0], '플러스 체험: serviceCoupons 0');
+// 7b. The elite permanent price is 150,000원 (the grade application line reads GRADES on the server). The
+// WP65 무료 중개·가측 coupons are gone (WP66): usage carries no coupons.
+check(!('serviceCoupons' in usage.perks) && !('coupons' in usage), 'usage has no 중개·가측 coupons (WP66)');
 const elitePrice = await plain('applications', 'POST', { kind: 'grade', target: 'elite', plan: 'permanent' });
 equal(elitePrice.status, 201, 'a member applies for 엘리트 영구');
 const applyLine = (await plain(`chats/${elitePrice.data.chatId}/messages`)).data.messages.find(m => m.type === 'application')?.body;

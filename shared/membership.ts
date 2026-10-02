@@ -1,7 +1,7 @@
 // Verification badges and member grades. Both are granted by the manager after a
 // chat-based application; there is no automatic payment or verification.
 
-export type BadgeId = 'proxy' | 'identity' | 'credit';
+export type BadgeId = 'proxy' | 'identity' | 'credit' | 'broker' | 'appraiser';
 export type GradeId = 'normal' | 'plus' | 'premium' | 'elite' | 'admin';
 export type PlanId = 'permanent' | '6m';
 
@@ -16,7 +16,9 @@ export type BadgeInfo = {
     template: string;
 };
 
-// Display order is 본인 인증, 대리 인증, 신용인; sortBadges in the Worker follows it.
+// Display order is 본인 인증, 대리 인증, 신용인, 중개 인증, 가측 인증; sortBadges in the Worker follows it.
+// 중개 인증 and 가측 인증 (WP66) are for 플러스 and up only (canProvide; never the 무료 체험), and 중개 인증 also
+// needs 본인 인증: members who hold one are listed on the '중개/가측' tab.
 export const BADGES: BadgeInfo[] = [
     {
         id: 'identity',
@@ -44,6 +46,24 @@ export const BADGES: BadgeInfo[] = [
         summary: '거래내역, 거래 금액 보고 지급',
         requirements: ['거래내역', '누적 거래 금액', '활동 카페/닉네임'],
         template: '[신용인 신청]\n거래내역: 캡처 첨부\n누적 거래 금액: \n활동 카페/닉네임: ',
+    },
+    {
+        id: 'broker',
+        name: '중개 인증',
+        short: '중개',
+        icon: 'key',
+        summary: '중개를 맡아 주는 회원',
+        requirements: ['플러스 이상 등급 (무료 체험 제외)', '본인 인증', '중개·거래 경력 (캡처)'],
+        template: '[중개 인증 신청]\n본인 인증: 있음 / 같이 신청\n중개·거래 경력: 캡처 첨부\n활동 카페/닉네임: ',
+    },
+    {
+        id: 'appraiser',
+        name: '가측 인증',
+        short: '가측',
+        icon: 'clipboard',
+        summary: '계정 가격을 측정해 주는 회원',
+        requirements: ['플러스 이상 등급 (무료 체험 제외)', '가측 경력 또는 시세 근거 (캡처)'],
+        template: '[가측 인증 신청]\n가측 경력: 캡처 첨부\n활동 카페/닉네임: ',
     },
 ];
 
@@ -130,8 +150,6 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // gap 6h/3h/1h/20분). The automation fields are the tier-table values for the packages that ship them
 // (자동 끌올: autoBumpPosts posts, one every autoEveryMinutes, paused after pauseDays without a visit;
 // 광고 (WP53): adSlots of the member's open posts can be ads, and pauseDays is also the visit rule for ads).
-// serviceCoupons (WP65): 무료 중개·가측 per KST calendar month, shared between the two services
-// (Infinity = 무제한). A 플러스 무료 체험 gets none (serviceCouponsOf).
 // 조건 알림 (WP54): filterAlerts saved searches with any filter can send 알림 (0: none), and
 // filterAlertEvents says what they tell: 'new' 새 글 only, 'all' 새 글 and 가격 내림.
 // 자동 가격 내리기 (WP56): autoPricePosts 판매 posts (Infinity: all), the periods a member can pick
@@ -142,23 +160,23 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
-    serviceCoupons: number; filterAlerts: number; filterAlertEvents: 'new' | 'all';
+    filterAlerts: number; filterAlertEvents: 'new' | 'all';
     autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
     replyTemplates: number; templateVars: boolean; firstReply: boolean; awayReply: boolean;
 };
 
 const PRICE_PERIODS = [12, 24, 48, 72];
-const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all',
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, filterAlerts: 20, filterAlertEvents: 'all',
     autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true,
     replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, filterAlerts: 0, filterAlertEvents: 'new',
         autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false,
         replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false },
-    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new',
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, filterAlerts: 3, filterAlertEvents: 'new',
         autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false,
         replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false },
-    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all',
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, filterAlerts: 10, filterAlertEvents: 'all',
         autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false,
         replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false },
     elite: ELITE_PERKS,
@@ -172,33 +190,100 @@ export function perksOf(u: { role?: string | null; grade?: string | null }): Per
     return PERKS[u.grade as GradeId] || PERKS.normal;
 }
 
-// 중개·가측 (WP65): manual services the manager performs from the manager chat. 중개 = the manager
-// checks the account and the handover between two members; 가측 = the manager appraises an account.
-// The site never takes, holds or moves money.
-export type ServiceKind = 'broker' | 'appraise';
-export const SERVICE_NAMES: Record<ServiceKind, string> = { broker: '중개', appraise: '가측' };
-// The member's monthly 무료 중개·가측: none for the manager (who performs them) and none during a
-// 플러스 무료 체험 (free manual work per throwaway account); Infinity = 무제한.
-export function serviceCouponsOf(u: { role?: string | null; grade?: string | null; grade_trial?: boolean | null }): number {
-    if (u.role === 'manager' || u.grade_trial) return 0;
-    return (PERKS[u.grade as GradeId] || PERKS.normal).serviceCoupons;
-}
-// GET services/me and me/usage: limit and left are null for 무제한; resetsAt is the next 1st 00:00 KST.
-export type Coupons = { limit: number | null; used: number; left: number | null; resetsAt: number };
-// The KST calendar month 'YYYY-MM' (the coupon count's key, so it resets on the 1st with no cron),
-// and the start of the next one.
-export const kstMonth = (t: number) => new Date(t + KST).toISOString().slice(0, 7);
-export function nextKstMonthStart(t: number) {
-    const d = new Date(t + KST);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - KST;
-}
-// Handling order (1순위 first) for 중개·가측 requests: 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the
-// 플러스 체험 4. The report ordering (WP60) is meant to reuse this helper when it ships.
+// Handling order by grade (1순위 first): 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the 플러스 체험 4. The
+// report ordering (WP60) is meant to reuse this helper.
 export function gradePriority(grade: string | null | undefined, trial?: boolean | null) {
-    if (grade === 'elite' || grade === 'admin') return 1;
+    if (gradeInfo(grade).rank >= 3) return 1;
     if (grade === 'premium') return 2;
     if (grade === 'plus' && !trial) return 3;
     return 4;
+}
+
+// 중개/가측 (WP66). Members holding 중개 인증 or 가측 인증 are listed on the '중개/가측' tab while canProvide holds,
+// '받는 중' is on and they visited in the last PROVIDER_SEEN_DAYS days (and no block stands between them and
+// the viewer). Blocks by grade: 엘리트 and 관리자 gold cards with up to 25자 of 소개, 프리미엄 64px profiles with
+// 12자, 플러스 48px profiles with none (the stored 소개 is kept whole). Inside a block, members 접속 중 (seen in
+// the last 10 minutes) come first, then everyone else, each group in a rotation seeded by the KST date and
+// 3-hour block, so nobody can buy or game a place inside a grade. The site never takes or moves money.
+export type ProviderType = 'broker' | 'appraiser';
+export const PROVIDER_TYPES: ProviderType[] = ['broker', 'appraiser'];
+export const isProviderType = (v: unknown): v is ProviderType => v === 'broker' || v === 'appraiser';
+export const PROVIDER_INTRO_MAX = 25;
+// The 소개 shown for a grade rank: 엘리트·관리자 25자, 프리미엄 12자, 플러스 none.
+export const introShown = (rank: number) => rank >= 3 ? PROVIDER_INTRO_MAX : rank === 2 ? 12 : 0;
+export const PROVIDER_ONLINE_MS = 10 * 60000;
+export const PROVIDER_SEEN_DAYS = 14;
+export const PROVIDER_ROTATE_MS = 3 * 3600000;
+// 프리미엄 shows its first 60 in the rotation; 플러스 pages 120 at a time ('더 보기').
+export const PREMIUM_SHOWN = 60, PLUS_PAGE = 120;
+// Whether a member may hold 중개·가측 인증 and be listed: a 플러스 or higher grade from the manager (never a
+// 무료 체험), not suspended, not withdrawn. The manager performs no 중개·가측 of their own.
+export function canProvide(u: { role?: string | null; grade?: string | null; grade_trial?: boolean | null; suspended_until?: number | null; deleted?: boolean | null }, now = Date.now()) {
+    if (u.role === 'manager' || u.deleted) return false;
+    if (typeof u.suspended_until === 'number' && u.suspended_until > now) return false;
+    return gradeInfo(u.grade).rank >= 1 && !u.grade_trial;
+}
+export const PROVIDER_TEXT = {
+    tab: '중개/가측',
+    names: { broker: '중개', appraiser: '가측' } as Record<ProviderType, string>,
+    safety: '거래 대금은 사이트를 거치지 않습니다. 인증 표시와 후기를 보고 진행하세요.',
+    empty: { broker: '아직 등록된 중개인이 없습니다.', appraiser: '아직 등록된 가측인이 없습니다.' } as Record<ProviderType, string>,
+    apply: { broker: '중개 인증 신청', appraiser: '가측 인증 신청' } as Record<ProviderType, string>,
+    notEligible: '중개·가측 인증은 플러스 이상 등급부터 신청할 수 있습니다. (무료 체험 제외)',
+    grantNotEligible: '중개·가측 인증은 플러스 이상 등급 회원에게만 지급할 수 있습니다. (무료 체험 제외)',
+    needIdentity: '중개 인증은 본인 인증이 있는 회원에게만 지급할 수 있습니다.',
+    introBad: '소개에는 링크와 연락처를 넣을 수 없습니다.',
+    introLong: `소개는 ${PROVIDER_INTRO_MAX}자까지입니다.`,
+    noBadge: '중개·가측 인증이 있는 회원만 수정할 수 있습니다.',
+    mine: '내 카드',
+    hidden: '플러스 이상 등급일 때 목록에 보입니다.',
+    off: '받는 중이 꺼져 있어 목록에 보이지 않습니다.',
+    receiving: '받는 중',
+    online: '접속 중',
+    more: '더 보기',
+    reviews: (n: number) => `후기 ${n}`,
+    // The composer is filled (never sent) when a card opens the chat (user voice).
+    draft: { broker: '[중개 문의]\n거래 글/계정: \n', appraiser: '[가측 문의]\n계정 정보: ' } as Record<ProviderType, string>,
+    find: '중개인 찾기',
+    appraise: '가측 받기',
+    guide: '중개는 중개 인증 회원에게 맡기세요',
+};
+// 수익 홍보 (WP66): the owner's examples ('사례', never a promise). The two amounts and the 사례 come from
+// settings ('sys:earn_broker', 'sys:earn_appraise', 'sys:earn_story', edited in manage 설정) with these defaults.
+export type Earn = { broker: string; appraise: string; story: string };
+export const EARN_DEFAULTS: Earn = { broker: '5만원 이상', appraise: '5만원 이상', story: '가측만으로 매달 10만원씩 버는 회원도 있습니다' };
+export const EARN_MAX = 60;
+export const EARN_TEXT = {
+    title: '중개·가측으로 수익 올리기',
+    from: '플러스부터 중개·가측 인증 신청 가능',
+    reach: '등급이 높을수록 더 크게, 더 위에 노출 (엘리트는 골드 카드 + 광고 팝업)',
+    example: (e: Earn) => `수익 예시: 중개 월 ${e.broker} · 가측 월 ${e.appraise}`,
+    note: '운영진이 직접 들은 사례이며, 수익은 활동량에 따라 다릅니다.',
+};
+
+// 프로필 테두리 (WP66): the avatar ring of the member's public grade. A 무료 체험 shows 일반 (as its hidden chip),
+// 관리자 the same gold as 엘리트 (관리자 = 엘리트), the manager black.
+export type RingTier = 'basic' | 'bronze' | 'silver' | 'gold' | 'manager';
+export function ringTier(grade?: string | null, trial?: boolean | null, role?: string | null): RingTier {
+    if (role === 'manager') return 'manager';
+    const rank = trial ? 0 : gradeInfo(grade).rank;
+    return rank >= 3 ? 'gold' : rank === 2 ? 'silver' : rank === 1 ? 'bronze' : 'basic';
+}
+// The public grade rank (a 무료 체험 reads as 일반; the manager has none). The 등급 축하 창 shows once each time
+// it rises above users.celebrated_rank.
+export const publicRank = (u: { grade?: string | null; grade_trial?: boolean | null; role?: string | null }) => u.role === 'manager' || u.grade_trial ? 0 : gradeInfo(u.grade).rank;
+// 등급 축하 창 (WP66): the strongest benefits the grade unlocks, from PERKS (4 to 6 lines).
+export function celebrationLines(grade: string): string[] {
+    const k = PERKS[gradeInfo(grade).id], rank = gradeInfo(grade).rank;
+    const lines = [`끌올 ${k.bumpMax}개 보관 · ${gapText(k.bumpRefillMinutes)}마다 충전`];
+    if (k.autoBumpPosts) lines.push(Number.isFinite(k.autoBumpPosts) ? `자동 끌올 글 ${k.autoBumpPosts}개` : '전체 글 자동 끌올');
+    lines.push(rank >= 3 ? '중개/가측 탭 최상단 골드 카드' : rank === 2 ? '중개/가측 탭 큰 프로필 + 소개' : '중개·가측 인증 신청 가능');
+    if (k.adSlots) lines.push(rank >= 3 ? `광고 ${k.adSlots}개 · 홈 엘리트 매물` : `게시판 상단 광고 ${k.adSlots}개`);
+    if (k.filterAlerts) lines.push(`조건 알림 ${k.filterAlerts}개`);
+    if (k.awayReply) lines.push('자리 비움 자동 응답');
+    else if (k.firstReply) lines.push('첫 문의 자동 안내');
+    else if (k.replyTemplates) lines.push(`내 빠른 답장 ${k.replyTemplates}개`);
+    return lines.slice(0, 6);
 }
 
 // 제목 강조 (WP48), list surfaces only: 0 일반 (회색), 1 플러스 and the 무료 체험 (검정), 2 프리미엄 (굵게),

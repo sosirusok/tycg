@@ -12,14 +12,13 @@ import { lastSeenText } from '../lib/lastSeen';
 import { sharePost } from '../lib/share';
 import { setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
-import { AppraisedLine, PriceLine } from '../components/PostCard';
+import { PriceLine } from '../components/PostCard';
 import { RichBody } from '../components/RichBody';
-import { ServiceSheet } from '../components/ServiceSheet';
 import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT, DROP_TEXT, PROVIDER_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
 
@@ -145,8 +144,6 @@ export function Detail({ id }: { id: string }) {
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
-    // 가측 신청 (WP65) from the owner's 더보기 menu.
-    const [appraise, setAppraise] = useState(false);
     // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
     const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { ...p.auto, bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
@@ -199,8 +196,9 @@ export function Detail({ id }: { id: string }) {
     // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
     const lostProxy = mine && post.kind === 'proxy_offer' && !manager && !me?.badges.includes('proxy');
     const openNow = post.status === 'open' && !post.hidden;
-    // 가측 신청 (WP65): an own open 판매·교환 account post; the manager performs it and needs none.
-    const canAppraise = mine && openNow && !manager && !suspended && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
+    // '가측 받기' (WP66): the owner of a 판매·교환 account post finds a 가측 인증 member on the '중개/가측' tab.
+    const canAppraise = mine && !manager && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
+    const findAppraiser = () => void navigate('/providers?type=appraiser');
 
     // 끌올: the wallet ('3/4') or '15:40부터 가능'. A waiting button sets the '끌올 가능' 알림 ('15:40 알림
     // 예정', WP52).
@@ -286,7 +284,7 @@ export function Detail({ id }: { id: string }) {
                 </div>}
                 <h1 className="detail-title">{post.title}</h1>
                 {/* Phones: the full price line with every struck earlier 즉거가 sits under the title. */}
-                <div className="price-top"><PriceLine post={post} large /><AppraisedLine post={post} /></div>
+                <div className="price-top"><PriceLine post={post} large /></div>
                 <div className="detail-meta">
                     {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                     {post.hidden === 1 && <span className="status status-closed">숨김</span>}
@@ -319,7 +317,6 @@ export function Detail({ id }: { id: string }) {
 
             <aside className="side-card" aria-label="가격과 문의">
                 <PriceLine post={post} large />
-                <AppraisedLine post={post} />
                 {mine ? <div className="owner-tools">
                     <StatusSeg post={post} className="btn-block" onComplete={() => setTradeSheet(true)} />
                     {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>}
@@ -328,9 +325,9 @@ export function Detail({ id }: { id: string }) {
                         {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
                         {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     </>}
-                    {/* Wide screens have no 더보기 menu, so 가측 신청 is a quiet text button here. */}
+                    {/* Wide screens have no 더보기 menu, so '가측 받기' is a quiet text button here. */}
                     <div className="owner-more">
-                        {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={() => setAppraise(true)}>가측 신청</button>}
+                        {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={findAppraiser}>{PROVIDER_TEXT.appraise}</button>}
                         <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
                     </div>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
@@ -363,7 +360,7 @@ export function Detail({ id }: { id: string }) {
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
                         {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
                         {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
-                        {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={() => setAppraise(true)}>가측 신청</DropdownMenu.Item>}
+                        {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={findAppraiser}>{PROVIDER_TEXT.appraise}</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -380,7 +377,6 @@ export function Detail({ id }: { id: string }) {
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => { setPost(prev => ({ ...p, auto: prev?.auto, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count, fav_count: prev?.fav_count })); if (p.auto?.drop?.on || post.auto?.drop?.on) void load(); }} />}
         <ReportModal open={report} onClose={() => setReport(false)} target={{ postId: post.id }} />
         <ReportModal open={commentReport !== null} onClose={() => setCommentReport(null)} target={{ commentId: commentReport }} title="댓글 신고" />
-        {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
@@ -402,7 +398,7 @@ function AuthorBox({ post, own, className, onFollow, followBusy }: { post: Detai
     // '구독' sits beside the profile link (not inside it); it hides when the author takes no follows.
     const followable = !own && (post.author_follow_allowed !== false || !!post.author_followed);
     return <div className={'author-box ' + className}><Link to={'/profile/' + post.author_id} className="author-link">
-        <Avatar name={post.nickname} src={post.author_avatar_thumb} />
+        <Avatar name={post.nickname} src={post.author_avatar_thumb} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
             {seen && <span className="author-stats author-seen">{seen}</span>}
             <span className="author-stats author-trust">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>
