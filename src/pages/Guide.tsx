@@ -6,7 +6,7 @@ import { BENEFIT_ROWS, PAID_GRADES, TABLE_GRADES, gradeExtras, gradeHook, monthl
 import { api } from '../lib/api';
 import { Link } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon } from '../components/ui';
+import { GradeMark, Icon } from '../components/ui';
 import { EarnBlock } from '../components/ProviderCard';
 
 type Notice = { id: number; title: string; body: string; created_at: number };
@@ -57,7 +57,7 @@ function GradeCards({ onApply }: { onApply: (g: PaidGrade) => void }) {
     return <div className="grade-cards">{PAID_GRADES.map(g => {
         const info = gradeInfo(g), vs = vsNormal(g);
         return <article key={g} className={'grade-card grade-card-' + metalOf(g)}>
-            <div className="grade-card-head"><CIcon name={info.icon} size={28} /><h3>{info.name}</h3>{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</div>
+            <div className="grade-card-head"><GradeMark grade={info.id} size={24} /><h3>{info.name}</h3>{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</div>
             <ul className="grade-card-price">{info.plans.map(p => <li key={p.id}><b>{p.label} {wonText(p.price)}</b>{p.months ? <span> · 월 환산 {monthly(p.price, p.months)}</span> : null}</li>)}</ul>
             <p className="grade-card-hook">{gradeHook(g)}</p>
             {vs.length > 0 && <><p className="grade-card-vs-title">일반 대비</p>
@@ -106,7 +106,7 @@ export default function Guide() {
 
         <section className="section">
             <div className="section-head"><h2 className="section-title">인증</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'identity' })}>인증 신청하기</button></div>
-            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><CIcon name={b.icon} size={36} /><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">제출: {b.requirements.join(', ')}</p></div>)}</div>
+            <div className="guide-cards">{BADGES.map(b => <div key={b.id} className="card card-pad"><span className="guide-badge-icon"><Icon name={b.icon} size={24} /></span><h3 className="mt-12">{b.name}</h3><p className="mt-8">{b.summary}</p><p className="muted small mt-8">제출: {b.requirements.join(', ')}</p></div>)}</div>
         </section>
 
         <section className="section" id="grade">

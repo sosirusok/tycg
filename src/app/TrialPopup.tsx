@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Dialog } from 'radix-ui';
-import { X } from 'lucide-react';
+import { Gift, X } from 'lucide-react';
 import { TRIAL_ROWS, kstDate, kstDateTime } from '../../shared/membership';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { CIcon } from '../components/ui';
+import { Icon } from '../components/ui';
 import { useApp } from './state';
 
 // The site shows at most one modal a day: the day this popup shows, no ad card shows.
@@ -45,13 +45,13 @@ export function TrialPopup() {
                 <div className="trial-hero">
                     <span className="trial-eyebrow">신규 가입 이벤트</span>
                     <Dialog.Title asChild><h2>가입 선물 <b>플러스 7일</b> <b>무료 체험</b></h2></Dialog.Title>
-                    <img className="trial-art" src="/icons/wrapped-gift.svg" width={150} height={150} alt="" decoding="async" />
+                    <Gift className="trial-art" size={150} strokeWidth={1.25} aria-hidden="true" />
                     <Dialog.Close className="trial-x" aria-label="닫기"><X size={24} /></Dialog.Close>
                 </div>
                 <div className="trial-body">
                     {endsAt && <div className="trial-until"><span>체험 기간</span><strong>{kstDateTime(endsAt)}까지</strong></div>}
                     <ul className="trial-perks">
-                        {TRIAL_ROWS.map(row => <li key={row.icon}><CIcon name={row.icon} size={32} /><div><strong>{row.title}</strong><span>{row.text}</span></div></li>)}
+                        {TRIAL_ROWS.map(row => <li key={row.icon}><span className="trial-perk-icon"><Icon name={row.icon} size={20} /></span><div><strong>{row.title}</strong><span>{row.text}</span></div></li>)}
                     </ul>
                     <p className="trial-fine">체험이 끝나면 일반 등급으로 돌아갑니다. 결제는 없습니다.</p>
                 </div>

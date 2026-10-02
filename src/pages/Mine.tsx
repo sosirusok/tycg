@@ -7,7 +7,7 @@ import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, BULK_MAX, BULK_TEXT, MATC
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
+import { EmptyState, Icon, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
@@ -99,7 +99,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
     const counts = <>조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</>;
     if (selecting) return <li className={'seller-row is-selecting' + (closed ? ' is-closed' : '')}>
         <label className="check seller-check"><input type="checkbox" checked={selected} onChange={e => onSelect(e.target.checked)} aria-label={`${post.title} 선택`} /></label>
-        <span className="seller-thumb" aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</span>
+        <span className="seller-thumb" aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <Icon name={KIND_ICONS[post.kind]} size={24} />}</span>
         <div className="seller-main">
             <Link to={href} className="seller-title">{post.title}</Link>
             <div className="seller-meta">
@@ -112,7 +112,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
         </div>
     </li>;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
-        <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
+        <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <Icon name={KIND_ICONS[post.kind]} size={24} />}</Link>
         <div className="seller-main">
             <Link to={href} className="seller-title">{post.title}</Link>
             <div className="seller-meta">
@@ -320,8 +320,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
 
     return <div className="container page">
         <h1 className="page-title">내 거래</h1>
-        <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={tabs} /></div>
-        <div className="mt-24">
+        <div className="panel panel-tabs"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={tabs} /></div>
+        {/* 자동화 is its own cards on the gray; the other tabs sit in one white card. */}
+        <div className={tab === 'auto' ? 'panel-stack' : 'panel panel-body'}>
             {items === null ? <SkeletonRows count={3} />
                 : tab === 'auto' ? <Auto />
                 : tab === 'posts' ? <>

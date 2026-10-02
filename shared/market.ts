@@ -194,17 +194,18 @@ export function wonToMan(p: number | null | undefined) {
 }
 
 export const CATEGORIES = [
-    { id: 'account', name: '계정', icon: 'man-zombie' },
+    { id: 'account', name: '계정', icon: 'user' },
     { id: 'clan', name: '클랜', icon: 'castle' },
-    { id: 'goods_coupon', name: '굿즈 및 쿠폰', icon: 'admission-tickets' },
+    { id: 'goods_coupon', name: '굿즈 및 쿠폰', icon: 'ticket' },
     { id: 'other', name: '기타', icon: 'package' },
     { id: 'ladder', name: '래더', icon: 'trophy' },
-    { id: 'story', name: '스토리 및 재화', icon: 'bookmark' },
+    { id: 'story', name: '스토리 및 재화', icon: 'book-open' },
     { id: 'event', name: '이벤트', icon: 'party-popper' },
 ] as const;
 
 export const KIND_NAMES: Record<TradeKind, string> = { buy: '구매', sell: '판매', exchange: '교환', proxy_request: '대리(구함)', proxy_offer: '대리(진행)' };
-export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'money-bag', exchange: 'handshake', proxy_request: 'key', proxy_offer: 'trophy' };
+// Line icon names (src/components/ui.tsx ICONS).
+export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'tag', exchange: 'arrow-left-right', proxy_request: 'user-search', proxy_offer: 'gamepad-2' };
 // Two states (WP43): 진행중 ('open') and 완료 ('closed', final). Each kind names them its own way;
 // screens that mix kinds use 거래중/거래완료. A legacy 'reserved' reads as open.
 export const STATUS_NAMES: Record<string, string> = { open: '거래중', closed: '거래완료' };

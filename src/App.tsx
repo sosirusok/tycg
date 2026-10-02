@@ -5,7 +5,7 @@ import { Bell, House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound
 import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
 import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
 import { AppProvider, setPageTitle, useApp } from './app/state';
-import { Avatar, CIcon, EmptyState, NameLine, SkeletonRows } from './components/ui';
+import { Avatar, EmptyState, LogoMark, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
 import { TrialPopup } from './app/TrialPopup';
@@ -135,7 +135,7 @@ function Shell() {
         <Toaster position="top-center" toastOptions={{ className: 'toast' }} />
         <header className={'header' + (showApply ? ' show-apply' : '')}>
             <div className="container header-inner">
-                <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><CIcon name="man-zombie" size={28} /><span className="logo-text">좀비고 거래소</span></Link>
+                <Link to="/" className="logo" aria-label="좀비고 거래소 홈"><LogoMark size={28} /><span className="logo-text">좀비고 거래소</span></Link>
                 <nav className="nav" aria-label="주 메뉴">
                     {TRADE_KINDS.map(kind => <Link key={kind} to={lastBoard(kind) || '/trade?kind=' + kind} aria-current={page === 'trade' && params.get('kind') === kind ? 'page' : undefined}>{KIND_NAMES[kind]}</Link>)}
                     <Link to="/guide" className="nav-guide" aria-current={page === 'guide' ? 'page' : undefined}>공지</Link>

@@ -9,7 +9,11 @@ name: Deploy to Cloudflare
 #   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
 # USE_KV ("false" keeps photos in D1 while R2 is off), CRON_LIMIT (the account's Cron Trigger limit: 5 on
-# Workers Free, the default; 250 on Workers Paid).
+# Workers Free, the default; 250 on Workers Paid), PAGES_PROJECT (the Cloudflare Pages project of the public
+# address, default zhstrade: https://zhstrade.pages.dev), USE_PAGES ("false" skips the Pages address; the next
+# deploy then lets the workers.dev address serve the site again instead of moving visitors to it).
+# The public address needs the token permission Account > Cloudflare Pages > Edit (not in the "Edit Cloudflare
+# Workers" template). Without it the deploy stays green with a Korean warning and workers.dev keeps serving.
 # Web push (VAPID) keys need no setup: the deploy makes them once as Worker secrets and never replaces them.
 # Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
 
@@ -59,7 +63,9 @@ jobs:
     needs: gate
     if: needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The public address steps at the end (WP67) usually take 2 to 4 minutes; every call in them has its own
+    # time limit, so even the worst case (about 30 minutes) ends inside this job limit.
+    timeout-minutes: 50
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CF_API: https://api.cloudflare.com/client/v4
@@ -477,3 +483,218 @@ jobs:
               if [ "$VAPID_MAKE" = keys ]; then echo "- 웹 푸시: 켜짐 (키를 이번 배포에서 만듦)"; else echo "- 웹 푸시: 켜짐"; fi
             else echo "- 웹 푸시: 꺼짐"; fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The public address (WP67): a Cloudflare Pages project (repository variable PAGES_PROJECT, default zhstrade,
+      # so https://zhstrade.pages.dev) serves the built screens itself, and its _worker.js hands only the Worker
+      # routes (run_worker_first, /api/*) to this Worker through the service binding APP: the same Worker, D1,
+      # KV, crons and API. The project is found or created once; it is never deleted or replaced. Nothing here
+      # can fail the deploy: a problem is a Korean warning, and the old address keeps serving the site, because
+      # the Deploy step above uploaded the screens without _redirects. USE_PAGES=false skips this.
+      - name: New address (Cloudflare Pages)
+        id: pages
+        if: vars.USE_PAGES != 'false'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'zhstrade' }}
+        run: |
+          set -uo pipefail
+          wr="$PWD/node_modules/.bin/wrangler"
+          dir="$RUNNER_TEMP/pages"
+          log="$RUNNER_TEMP/pages.log"
+          body="$RUNNER_TEMP/pages-body"
+          : > "$log"
+          from=1
+          # Any problem: a Korean warning (with the API error codes the current part logged), the reason in the
+          # summary, and a green step.
+          skip() {
+            codes="$(tail -n +"$from" "$log" | grep -oE '\[code: [0-9]+\]' | grep -oE '[0-9]+' | sort -u | paste -sd, - || true)"
+            msg="$1${codes:+ (오류 코드: $codes)}"
+            echo "::warning title=새 주소 미적용::$msg 사이트는 이전 주소에서 그대로 열립니다: $WORKERS_URL"
+            echo "--- log (last 30 lines)"; tail -n 30 "$log" || true
+            {
+              echo ""
+              echo "### 새 주소 미적용"
+              echo ""
+              echo "- 사유: $msg"
+              echo "- 사이트는 이전 주소에서 그대로 열립니다: $WORKERS_URL"
+              echo "- 다음 배포(또는 Actions에서 다시 실행)에서 다시 시도합니다."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          [[ "$PAGES_PROJECT" =~ ^[a-z0-9]([a-z0-9-]{0,56}[a-z0-9])?$ ]] \
+            || skip "저장소 변수 PAGES_PROJECT는 영문 소문자, 숫자, -로 58자까지입니다."
+
+          # (a) The folder: the screens without _redirects, _headers or 404.html, plus _worker.js, _routes.json
+          # and wrangler.json (binding APP to this Worker, the same compatibility_date).
+          node scripts/pages-out.mjs --assets dist/client --out "$dir" --config wrangler.jsonc --project "$PAGES_PROJECT" >> "$log" 2>&1 \
+            || skip "새 주소에 올릴 파일을 만들지 못했습니다."
+          tail -n 1 "$log"
+
+          # (b) Find the project or create it once. Prints 'found <pages.dev domain>' or 'none'; fails when the
+          # list cannot be read (then nothing is created).
+          find_project() {
+            timeout 45 "$wr" pages project list --json 2>> "$log" | node -e '
+              let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                const a = s.search(/^\[/m), b = s.lastIndexOf("]");
+                if (a < 0 || b < a) process.exit(2);
+                let list; try { list = JSON.parse(s.slice(a, b + 1)); } catch { process.exit(2); }
+                if (!Array.isArray(list)) process.exit(2);
+                const hit = list.find(p => p && p["Project Name"] === process.env.PAGES_PROJECT);
+                if (!hit) { process.stdout.write("none"); return; }
+                const domain = String(hit["Project Domains"] || "").split(",").map(d => d.trim()).find(d => /\.pages\.dev$/.test(d));
+                process.stdout.write("found " + (domain || ""));
+              });'
+          }
+          found=""
+          from=$(($(wc -l < "$log") + 1))
+          for attempt in 1 2 3; do
+            if found="$(find_project)"; then break; fi
+            found=""
+            sleep 5
+          done
+          [ -n "$found" ] || skip "Pages 프로젝트 목록을 읽지 못했습니다. API 토큰에 Account · Cloudflare Pages · Edit 권한이 있는지 확인해 주세요."
+          created=""
+          if [ "$found" = none ]; then
+            from=$(($(wc -l < "$log") + 1))
+            echo "Creating the Pages project $PAGES_PROJECT (production branch main)"
+            timeout 60 "$wr" pages project create "$PAGES_PROJECT" --production-branch main >> "$log" 2>&1 || true
+            created=1
+            for attempt in 1 2 3; do
+              sleep 3
+              found="$(find_project)" || found=""
+              [[ "$found" == found* ]] && break
+            done
+            [[ "$found" == found* ]] \
+              || skip "Pages 프로젝트를 만들지 못했습니다: $PAGES_PROJECT. API 토큰에 Account · Cloudflare Pages · Edit 권한을 추가하고 다시 실행해 주세요."
+          fi
+          domain="${found#found}"
+          domain="${domain# }"
+
+          # (d) The production address (zhstrade.pages.dev, or with a suffix when Cloudflare had to add one), read
+          # before the deploy together with the production branch, so (c) is a production deploy.
+          info='{}'
+          for attempt in 1 2 3; do
+            res="$(curl -sS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PAGES_PROJECT" 2>> "$log" || true)"
+            if [ "$(jq -r '.success' <<< "$res" 2> /dev/null)" = true ]; then info="$res"; break; fi
+            sleep 5
+          done
+          sub="$(jq -r '.result.subdomain // empty' <<< "$info" || true)"
+          [ -n "$sub" ] || sub="$domain"
+          branch="$(jq -r '.result.production_branch // empty' <<< "$info" || true)"
+          [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || branch=main
+          [[ "$sub" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.pages\.dev$ ]] || skip "새 주소(pages.dev)를 확인하지 못했습니다."
+          PAGES_URL="https://$sub"
+          echo "url=$PAGES_URL" >> "$GITHUB_OUTPUT"
+
+          # (c) Deploy from inside the folder, so its wrangler.json (the service binding) applies.
+          from=$(($(wc -l < "$log") + 1))
+          echo "Deploying to the Pages project $PAGES_PROJECT ($PAGES_URL, branch $branch)"
+          (cd "$dir" && timeout 300 "$wr" pages deploy --project-name "$PAGES_PROJECT" --branch "$branch" --commit-dirty=true \
+            --commit-hash "$GITHUB_SHA" --commit-message "github ${GITHUB_SHA::7}") >> "$log" 2>&1 \
+            || skip "새 주소 배포(wrangler pages deploy)가 실패했습니다."
+          grep -E "Deployment complete" "$log" | tail -n 1 || true
+
+          # (e) From the runner: the first screen, the API through the binding (with the visitor's address, which
+          # the rate limits need) and a deep path (single-page fallback), retried up to 3 minutes.
+          get() { : > "$body"; curl -sS -o "$body" -w '%{http_code}' --max-time 15 "$1" 2> /dev/null || true; }
+          why=""
+          pages_ok() {
+            local code
+            code="$(get "$PAGES_URL/")"
+            if [ "$code" != 200 ] || ! grep -q 'id="root"' "$body"; then why="첫 화면 응답 ${code:-000}"; return 1; fi
+            code="$(get "$PAGES_URL/api/health")"
+            if [ "$code" != 200 ] || ! jq -e '.ok == true and .ip == true' "$body" > /dev/null 2>&1; then
+              why="/api/health 응답 ${code:-000} $(jq -c '{ok, ip}' "$body" 2> /dev/null || true)"
+              return 1
+            fi
+            code="$(get "$PAGES_URL/deploy-check/deep/path")"
+            if [ "$code" != 200 ] || ! grep -q 'id="root"' "$body"; then why="하위 경로 응답 ${code:-000}"; return 1; fi
+          }
+          # Asking a brand-new address before it exists can leave a cached 'no such host' answer.
+          hint=""
+          if [ -n "$created" ]; then hint=" 새 프로젝트는 연결까지 몇 분 더 걸릴 수 있습니다."; sleep 20; fi
+          deadline=$((SECONDS + 180))
+          until pages_ok; do
+            [ "$SECONDS" -lt "$deadline" ] || skip "새 주소가 3분 안에 정상 응답하지 않았습니다: $PAGES_URL ($why).$hint"
+            sleep 10
+          done
+          echo "Healthy: $PAGES_URL"
+          echo "healthy=true" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "### 새 주소"
+            echo ""
+            echo "- 주소: $PAGES_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # (f) The old workers.dev address moves to the new one (301 for every screen path), only after the new
+      # address passed the checks above in this run. The Worker routes (/api/*) run before any redirect, so the
+      # API, pages already open and pushes on the old address keep working. Checked right away, and undone at
+      # once (the same deploy without _redirects, as the Deploy step left it) if anything is off.
+      - name: Old address moves to the new one
+        id: redirect
+        if: steps.pages.outputs.healthy == 'true'
+        continue-on-error: true
+        timeout-minutes: 13
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.url }}
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/redirect.log"
+          body="$RUNNER_TEMP/redirect-body"
+          : > "$log"
+          skip() {
+            echo "::warning title=새 주소 미적용::$1"
+            echo "--- log (last 30 lines)"; tail -n 30 "$log" || true
+            echo "- 이전 주소 자동 이동: 미적용. $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          cfg="$(node -e '
+            const fs = require("fs"), p = require("path"), f = ".wrangler/deploy/config.json";
+            if (!fs.existsSync(f)) process.exit(1);
+            const c = JSON.parse(fs.readFileSync(f, "utf8"));
+            process.stdout.write(p.relative(".", p.resolve(p.dirname(f), c.configPath)));' 2>> "$log")" \
+            || skip "빌드한 Worker 설정을 찾지 못해 이전 주소를 그대로 둡니다."
+          deploy() { timeout 240 pnpm exec wrangler deploy --config "$cfg" --message "$1" >> "$log" 2>&1; }
+          # Back to the Deploy step's upload (no _redirects): the old address serves the site again.
+          undo() {
+            rm -f dist/client/_redirects
+            if deploy "github ${GITHUB_SHA::7} without redirect"; then
+              skip "$1 되돌렸으므로 이전 주소도 사이트를 그대로 보여 줍니다."
+            fi
+            skip "$1 되돌리기 배포도 실패했습니다. Actions에서 이 워크플로를 다시 실행해 주세요. 다시 실행하면 이전 주소가 먼저 사이트를 그대로 보여 주도록 배포됩니다."
+          }
+          node scripts/pages-out.mjs --redirect dist/client --to "$PAGES_URL" >> "$log" 2>&1 \
+            || skip "이전 주소의 자동 이동 파일을 만들지 못했습니다."
+          tail -n 1 "$log"
+          deploy "github ${GITHUB_SHA::7} redirect to $PAGES_URL" || undo "자동 이동 배포가 실패했습니다."
+          get() { : > "$body"; curl -sS -o "$body" -w '%{http_code}' --max-time 15 "$1" 2> /dev/null || true; }
+          why=""
+          moved() {
+            local code loc
+            code="$(get "$WORKERS_URL/api/health")"
+            if [ "$code" != 200 ] || ! jq -e '.ok == true' "$body" > /dev/null 2>&1; then why="이전 주소 /api/health 응답 ${code:-000}"; return 1; fi
+            read -r code loc < <(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' --max-time 15 "$WORKERS_URL/board" 2> /dev/null || echo 000)
+            if [ "${code:-000}" != 301 ] || [[ "${loc:-}" != "$PAGES_URL/"* ]]; then why="이전 주소 /board 응답 ${code:-000}${loc:+ $loc}"; return 1; fi
+            code="$(get "$PAGES_URL/api/health")"
+            if [ "$code" != 200 ] || ! jq -e '.ok == true and .ip == true' "$body" > /dev/null 2>&1; then why="새 주소 /api/health 응답 ${code:-000}"; return 1; fi
+          }
+          deadline=$((SECONDS + 90))
+          until moved; do
+            [ "$SECONDS" -lt "$deadline" ] || undo "자동 이동을 확인하지 못했습니다($why)."
+            sleep 10
+          done
+          echo "The old address now moves to $PAGES_URL"
+          {
+            echo "- 이전 주소는 새 주소로 자동 이동: $WORKERS_URL"
+            echo "- 로그인은 주소마다 따로라서, 회원은 새 주소에서 한 번 더 로그인합니다."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only when a step above was stopped by its time limit or an unexpected error (they handle every expected
+      # problem themselves). Running the workflow again starts over: the Deploy step serves the old address first.
+      - name: New address stopped early
+        if: ${{ !cancelled() && (steps.pages.outcome == 'failure' || steps.redirect.outcome == 'failure') }}
+        run: |
+          echo "::warning title=새 주소 미적용::새 주소 단계가 시간 초과나 오류로 중간에 멈췄습니다. 위 단계의 로그를 확인해 주세요. Actions에서 이 워크플로를 다시 실행하면 이전 주소가 먼저 사이트를 그대로 보여 주고, 새 주소를 처음부터 다시 확인합니다."
+          echo "- 새 주소 단계가 중간에 멈췄습니다. 다시 실행하면 처음부터 다시 시도합니다." >> "$GITHUB_STEP_SUMMARY"

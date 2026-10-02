@@ -6,7 +6,7 @@ import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { chatDraftKey } from '../app/ApplyModal';
-import { CIcon, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
+import { EmptyState, Icon, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { AlertCard } from './Auto';
 
 // 알림함 (WP50): GET notifications (20 a page, newest first). Tapping a row marks it read and opens its
@@ -17,20 +17,21 @@ type Alert = { id: number; type: string; ref: string; text: string; created_at: 
 type Follow = { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Page = { alerts: Alert[]; hasMore: boolean; page: number };
 
+// Line icon names (ui.tsx ICONS) per 알림 type.
 const ICONS: Record<string, string> = {
-    fav_price: 'money-with-wings', fav_closed: 'handshake', application: 'clipboard', grade_end: 'alarm-clock', hidden: 'warning', same_listing: 'police-car-light',
+    fav_price: 'trending-down', fav_closed: 'handshake', application: 'clipboard-list', grade_end: 'alarm-clock', hidden: 'eye-off', same_listing: 'copy',
     // 자동 끌올 (WP52).
-    auto_paused: 'warning', auto_stale: 'memo', bump_ready: 'megaphone',
+    auto_paused: 'circle-pause', auto_stale: 'clock', bump_ready: 'circle-arrow-up',
     // 엘리트 주간 요약 (WP63).
-    weekly: 'crown',
+    weekly: 'chart-column',
     // 새 글 알림 (WP54).
-    keyword: 'bell', board: 'spiral-notepad', follow: 'bookmark', condition: 'gem-stone',
+    keyword: 'bell', board: 'layout-list', follow: 'user-check', condition: 'sliders-horizontal',
     // 댓글·답글 (WP55).
-    comment: 'memo', reply: 'memo',
+    comment: 'message-square', reply: 'message-square-reply',
     // 자동 가격 내리기 (WP56).
-    drop_stopped: 'warning', drop_done: 'money-with-wings',
+    drop_stopped: 'circle-alert', drop_done: 'trending-down',
     // 자동 매칭 (WP58).
-    match: 'shopping-cart',
+    match: 'target',
 };
 
 // 자동 매칭 (WP58): the posts of the other side that match the member's own post (the 알림's ref), from its
@@ -65,7 +66,7 @@ function MatchSheet({ alert, onClose }: { alert: Alert | null; onClose: () => vo
         footer={d?.own.query ? <Link to={'/trade?' + d.own.query} className="btn btn-line btn-block">{MATCH_TEXT.board}</Link> : undefined}>
         {!d ? <SkeletonRows count={3} height={56} />
             : d.posts.length ? <ul className="auto-list match-list">{d.posts.map(p => <li key={p.id}>
-                <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.images[0] ? <img src={p.thumb || imageUrl(p.images[0])} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[p.kind]} size={24} />}</Link>
+                <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.images[0] ? <img src={p.thumb || imageUrl(p.images[0])} alt="" loading="lazy" /> : <Icon name={KIND_ICONS[p.kind]} size={20} />}</Link>
                 <span className="auto-main">
                     <Link to={'/posts/' + p.id} className="auto-title">{p.title}</Link>
                     <span className="auto-sub">{listingPrice(p)} · {p.nickname}</span>
@@ -184,12 +185,12 @@ export default function Alerts() {
         <FollowsModal open={follows} onClose={() => setFollows(false)} />
         <Modal open={searches} onClose={() => setSearches(false)} title={ALERT_TEXT.searches}>{searches && <AlertCard bare />}</Modal>
         <MatchSheet alert={match} onClose={() => setMatch(null)} />
-        <div className="mt-16">
+        <div className="panel panel-body alerts-panel">
             {list === null ? <SkeletonRows count={4} height={72} />
                 : list.length ? <>
                     <ul className="alert-list">{list.map(a => <li key={a.id}>
                         <button type="button" className={'alert-row' + (a.read ? '' : ' is-unread')} onClick={() => open(a)}>
-                            <span className="alert-icon"><CIcon name={ICONS[a.type] || 'bell'} size={22} /></span>
+                            <span className="alert-icon"><Icon name={ICONS[a.type] || 'bell'} size={20} /></span>
                             <span className="alert-body">
                                 <span className="alert-text">{a.text}{!a.read && a.count ? ALERT_TEXT.count(a.count) : ''}</span>
                                 <span className="alert-time">{relativeTime(a.created_at)}{!a.read && <span className="sr-only"> · 읽지 않음</span>}</span>

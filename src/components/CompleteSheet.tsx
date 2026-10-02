@@ -3,7 +3,7 @@ import { Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { KIND_ICONS, closedLabel, isTradeKind, listingPrice, manToWon, priceText, wonToMan, type Post } from '../../shared/market';
 import { api, errorText, imageUrl } from '../lib/api';
-import { Avatar, CIcon, Modal, NameLine } from './ui';
+import { Avatar, Icon, Modal, NameLine } from './ui';
 
 type Partner = { id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; conversation_id: string; accepted_amount: number | null; chat_at: number; restricted?: boolean };
 // The post as the sheet needs it: the detail page, 내 글 and the chat's pinned bar all have these.
@@ -79,12 +79,12 @@ export function CompleteSheet({ post, preselect, suspended: restricted = false, 
 
     const list = partners || [];
     const shown = more ? list : list.slice(0, SHOWN);
-    const icon = isTradeKind(post.kind) ? KIND_ICONS[post.kind] : 'money-bag';
+    const icon = isTradeKind(post.kind) ? KIND_ICONS[post.kind] : 'file-text';
     return <Modal open onClose={() => { if (!busy) close.current(); }} title={completing ? label : '거래 기록 요청'}
         footer={<button type="button" className="btn btn-primary btn-lg btn-block" disabled={busy || partners === null || badAmount || (!completing && pick === OUTSIDE)} onClick={() => void save()}>{completing ? label : '거래 기록 요청'}</button>}>
         <div className="complete-sheet">
             <div className="post-strip">
-                <span className="post-strip-thumb">{post.thumb ? <img src={imageUrl(post.thumb)} alt="" /> : <CIcon name={icon} size={28} />}</span>
+                <span className="post-strip-thumb">{post.thumb ? <img src={imageUrl(post.thumb)} alt="" /> : <Icon name={icon} size={24} />}</span>
                 <span className="post-strip-text"><strong>{post.title}</strong><span>{listingPrice({ kind: post.kind as Post['kind'], price: post.price, price_mode: post.price_mode || (post.price === null ? 'offer' : 'fixed') })}</span></span>
             </div>
             {!suspended && <section className="complete-section">

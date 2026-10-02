@@ -8,7 +8,7 @@ import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { offerPush, setPageTitle, useApp } from '../app/state';
 import { isPaidGrade, nextBenefit } from '../../shared/benefits';
-import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
+import { Avatar, EmptyState, GradeMark, Icon, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
 import { WalletGauge, autoItem, useMinuteClock, type Usage } from '../components/Wallet';
@@ -177,7 +177,7 @@ export default function ProfilePage({ id }: { id?: string }) {
     const metal = user.role === 'manager' ? 'basic' : ringTier(user.grade, user.grade_trial);
     const vip = metal === 'gold' || metal === 'silver' || metal === 'bronze';
     return <div className="container page profile">
-        <section className={'profile-head' + (vip ? ' vip vip-' + metal : '')}>
+        <section className={'panel profile-head' + (vip ? ' vip vip-' + metal : '')}>
             {vip && <span className="vip-band" aria-hidden="true" />}
             {mine ? <button type="button" className="avatar-edit" aria-label="프로필 사진 변경" disabled={avatarBusy} onClick={() => avatarInput.current?.click()}>
                 <Avatar name={user.nickname} size="lg" src={photo} grade={user.grade} trial={user.grade_trial} role={user.role} />
@@ -185,7 +185,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             </button> : <Avatar name={user.nickname} size="lg" src={photo} grade={user.grade} trial={user.grade_trial} role={user.role} />}
             {mine && <input ref={avatarInput} type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={e => void pickAvatar(e.target.files?.[0])} />}
             <div className="grow">
-                {vip && <p className="vip-label"><CIcon name={gradeInfo(user.grade).icon} size={18} />{gradeInfo(user.grade).name} 회원</p>}
+                {vip && <p className="vip-label"><GradeMark grade={user.grade} size={16} />{gradeInfo(user.grade).name} 회원</p>}
                 <NameLine nickname={user.nickname} grade={user.grade} trial={user.grade_trial} role={user.role} badges={user.badges} size="lg" />
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
@@ -214,7 +214,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {/* 본인 인증, 대리 인증, 신용인 (the BADGES order). The owner applies from the row. */}
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
-                    return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <>
+                    return <li key={b.id} className={on ? 'on' : ''}><Icon name={b.icon} size={20} className="verify-icon" /><span className="grow">{b.name}</span>{on ? <>
                         {mine && isProviderType(b.id) && <button type="button" className="verify-apply" onClick={() => void editCard(b.id as ProviderType)}>{PROVIDER_TEXT.mine}</button>}
                         <span className="verified"><VerifiedMark size={16} />인증 완료</span></> : <>
                         <span className="tag tag-line">미인증</span>
@@ -226,7 +226,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 <div className="card-title-row"><h2 className="card-title">등급</h2>
                     {mine && user.role !== 'manager' && grade.rank < 3 && <button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: grade.rank < 1 || trialing ? 'plus' : grade.rank < 2 ? 'premium' : 'elite', plan: 'permanent' })}>등급 신청</button>}</div>
                 {user.role === 'manager' ? <p className="grade-big"><span className="grade grade-manager">매니저</span></p> : <>
-                    <p className="grade-big"><CIcon name={grade.icon} size={36} /><strong>{grade.name}</strong></p>
+                    <p className="grade-big"><GradeMark grade={grade.id} size={32} /><strong>{grade.name}</strong></p>
                     {/* The end date of a 6-month grade reaches only the member and the manager. */}
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>

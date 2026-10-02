@@ -6,13 +6,13 @@ import {
     KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, closedLabel, fillTemplate, isTradeKind, quickReplies, statusName, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
     type Post, type Review, type User,
 } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, PROVIDER_TEXT, TEMPLATE_MAX, applicationTitle, gradeInfo, managerChatOrder, perksOf, type Application } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, CHAT_AUTO_TEXT, PROVIDER_TEXT, TEMPLATE_MAX, applicationTitle, managerChatOrder, perksOf, type Application } from '../../shared/membership';
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { offerPush, useAdaptivePoll, useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
-import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
+import { Avatar, EmptyState, GradeMark, Icon, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
@@ -627,7 +627,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         catch (err) { toast.error(errorText(err)); }
         finally { setSavingTemplate(false); input.current?.focus(); }
     }
-    const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
+    const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'file-text';
     const nowMs = Date.now();
     const listingOpen = !!listing && listing.status !== 'closed';
     // The trade record this chat holds for the post, when one is confirmed, removed or still waiting.
@@ -666,7 +666,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
             </header>
             {partner?.suspended && <p className="room-notice">이용 제한 회원입니다.</p>}
             {listing && <div className="room-listing">
-                <Link to={'/posts/' + listing.id} className="room-listing-thumb" tabIndex={-1} aria-hidden="true">{listing.thumb ? <img src={imageUrl(listing.thumb)} alt="" /> : <CIcon name={listingIcon} size={24} />}</Link>
+                <Link to={'/posts/' + listing.id} className="room-listing-thumb" tabIndex={-1} aria-hidden="true">{listing.thumb ? <img src={imageUrl(listing.thumb)} alt="" /> : <Icon name={listingIcon} size={20} />}</Link>
                 <span className="room-listing-main">
                     <Link to={'/posts/' + listing.id} className="room-listing-title">{listing.title}</Link>
                     <span className="room-listing-meta">{listingLine(listing)}</span>
@@ -760,7 +760,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
 }
 
 function ListingCard({ postId, title }: { postId: number; title: string }) {
-    return <Link to={'/posts/' + postId} className="event-card listing-card"><CIcon name="money-bag" size={28} /><span className="grow"><span className="muted small">문의한 글</span><strong>{title}</strong></span></Link>;
+    return <Link to={'/posts/' + postId} className="event-card listing-card"><span className="event-icon"><Icon name="file-text" size={20} /></span><span className="grow"><span className="muted small">문의한 글</span><strong>{title}</strong></span></Link>;
 }
 
 function OfferCard({ offer, me, onAction, onMark }: { offer?: Offer; me: User; onAction: (o: Offer, a: string) => void; onMark: (o: Offer) => void }) {
@@ -868,7 +868,7 @@ function AppCard({ app, fallback, me, partner, mine, at, busy, onAction, next }:
     if (!app) return <div className="sys-msg">{fallback}</div>;
     const manager = me.role === 'manager';
     return <div className="event-card app-card">
-        <div className="row"><CIcon name={app.kind === 'badge' ? BADGES.find(b => b.id === app.target)?.icon || 'identification-card' : gradeInfo(app.target).icon} size={28} /><span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} trial={partner.grade_trial} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
+        <div className="row">{app.kind === 'badge' ? <span className="event-icon"><Icon name="shield-check" size={20} /></span> : <GradeMark grade={app.target} size={28} />}<span className="grow"><span className="muted small app-card-who">{mine ? '내 신청' : <>신청자 {partner ? <NameLine nickname={partner.nickname} grade={partner.grade} trial={partner.grade_trial} role={partner.role} badges={partner.badges} /> : app.nickname || '회원'}</>}<span className="nowrap">{'\u00a0'}· {timeLabel(at)}</span></span><strong>{applicationTitle(app)}</strong></span><span className={'event-status st-' + app.status}>{APPLICATION_STATUS_NAMES[app.status]}</span></div>
         {app.status === 'pending' && !manager && <p className="small muted">필요 자료를 이 채팅으로 보내 주세요.</p>}
         {app.status === 'pending' && (manager ? (rejecting ? <div className="grid-gap-8 mt-8">
             <div className="chip-row" role="group" aria-label="반려 사유 선택">{REJECT_NOTES.map(n => <button type="button" key={n} className="chip chip-sm" aria-pressed={note === n} onClick={() => setNote(n)}>{n}</button>)}</div>
