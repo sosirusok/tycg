@@ -28,11 +28,15 @@ function sql(command) {
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data, raw) => {
-        const response = await fetch(base + '/api/' + path, {
+        const send = () => fetch(base + '/api/' + path, {
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(raw ? { 'Content-Type': raw.type } : data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: raw ? raw.bytes : data === undefined ? undefined : typeof data === 'string' ? data : JSON.stringify(data),
         });
+        // The local server closes idle keep-alive connections while the wrangler SQL checks run, and the
+        // connection of an upload it refuses early (the over-quota uploads below); a request that lands on
+        // such a closed connection ('other side closed') never reached the Worker, so it is sent once more.
+        const response = await send().catch(e => { if (e?.cause?.code === 'UND_ERR_SOCKET' || /other side closed/.test(String(e?.cause?.message))) return send(); throw e; });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         if (!(response.headers.get('content-type') || '').includes('json')) { await response.arrayBuffer(); return { status: response.status }; }

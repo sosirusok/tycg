@@ -120,11 +120,14 @@ export function weeklyStatements(now: number) {
     if (ws <= weeklyMemo) return [];
     const from = ws - WEEK_DAYS * DAY, fromHour = Math.floor(from / HOUR), toHour = Math.floor(ws / HOUR), ref = String(ws);
     const due = `CAST(COALESCE((SELECT value FROM settings WHERE key='sys:weekly_last'),'0') AS INTEGER)<?`;
-    // Members due: 엘리트 and up (or the manager), not withdrawn, without this week's row.
-    const waiting = `FROM (SELECT g.user_id AS id FROM user_grades g WHERE g.rank>=3 AND (g.expires_at IS NULL OR g.expires_at>?) UNION SELECT '${MANAGER_ID}') m
-        JOIN users u ON u.id=m.id WHERE u.deleted_at IS NULL AND ${due}
+    // Members due: 엘리트 and up (or the manager), not withdrawn, without this week's row. The week check is the
+    // outer side of a CROSS JOIN (SQLite keeps that order), so before the week start, or in a new isolate once
+    // the week is done, user_grades is never scanned: the slice reads a settings row, not every grade row.
+    const waiting = `FROM (SELECT g.user_id AS id FROM (SELECT 1 WHERE ${due}) d CROSS JOIN user_grades g WHERE g.rank>=3 AND (g.expires_at IS NULL OR g.expires_at>?)
+        UNION SELECT '${MANAGER_ID}' WHERE ${due}) m
+        JOIN users u ON u.id=m.id WHERE u.deleted_at IS NULL
         AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.user_id=u.id AND n.created_at>=? AND n.type='weekly' AND n.ref=?)`;
-    const waitingArgs = [now, ws, ws, ref];
+    const waitingArgs = [ws, now, ws, ws, ref];
     const text = `'지난주 조회 '||(SELECT COALESCE(SUM(v.n),0) FROM posts p JOIN post_views v ON v.post_id=p.id WHERE p.author_id=w.id AND v.hour>=? AND v.hour<?)
         ||' · 채팅 '||(SELECT COUNT(DISTINCT ms.conversation_id) FROM posts p JOIN messages ms ON ms.type='listing' AND ms.reference_id=CAST(p.id AS TEXT) WHERE p.author_id=w.id AND ms.created_at>=? AND ms.created_at<?)
         ||' · 끌올 '||(SELECT COUNT(*) FROM post_events e WHERE e.user_id=w.id AND e.kind='bump' AND e.created_at>=? AND e.created_at<?)`;

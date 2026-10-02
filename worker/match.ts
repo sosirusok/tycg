@@ -53,6 +53,9 @@ const slotsOf = (perks: Perks) => Number.isFinite(perks.matchPosts) ? perks.matc
 // The posts tick B matches: of every member with '자동 매칭' on (automation_match), the open, visible 판매 and
 // 구매 posts the grade allows now. 프리미엄 (3): the posts the member picked (post_auto.match=1; a post
 // switched off is -1), else the 3 most recently bumped. 엘리트, 관리자 and the manager: every one.
+// The CROSS JOIN keeps the members with '자동 매칭' on (the partial index automation_match) as the outer loop:
+// with a plain JOIN SQLite scanned every open post (posts_author_status) and looked each author up, about
+// 6,000 rows a window on the local test data instead of the few posts of those members.
 function ownPostsSql(now: number) {
     const rank = `COALESCE((SELECT MAX(g.rank) FROM user_grades g WHERE g.user_id=a.user_id AND (g.expires_at IS NULL OR g.expires_at>${now})),0)`;
     const slots = `CASE WHEN mu.role='manager' THEN ${slotsOf(MANAGER_PERKS)} ELSE CASE ${rank} ${[0, 1, 2, 3, 4].map(r => `WHEN ${r} THEN ${slotsOf(perksOfRank(r))}`).join(' ')} ELSE 0 END END`;
@@ -61,7 +64,7 @@ function ownPostsSql(now: number) {
                 MAX(CASE WHEN COALESCE(pa.match,0)!=0 THEN 1 ELSE 0 END) OVER (PARTITION BY o.author_id) AS chosen,
                 ROW_NUMBER() OVER (PARTITION BY o.author_id ORDER BY COALESCE(pa.match,0)=1 DESC,o.bumped_at DESC,o.id DESC) AS rn
             FROM (SELECT a.user_id,${slots} AS slots FROM automation a INDEXED BY automation_match JOIN users mu ON mu.id=a.user_id AND mu.deleted_at IS NULL WHERE a.match_on=1) m
-            JOIN posts o INDEXED BY posts_author_status ON o.author_id=m.user_id AND o.status='open'
+            CROSS JOIN posts o INDEXED BY posts_author_status ON o.author_id=m.user_id AND o.status='open'
             LEFT JOIN post_auto pa ON pa.post_id=o.id
             WHERE m.slots!=0 AND o.hidden=0 AND o.kind IN ('sell','buy')) q
         WHERE q.slots<0 OR (q.rn<=q.slots AND (q.chosen=0 OR q.picked=1))`;

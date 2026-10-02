@@ -42,6 +42,9 @@ async function member(name) {
     assert.equal(r.status, 200, 'register ' + name);
     return { call: c, user: r.data.user };
 }
+// The suites before this one sign up members from the same address within 10 minutes; their sign-ups must not
+// use up this suite's per-address sign-in limit (19 sign-ups here), as the other suites reset it too.
+sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 const manager = client();
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' })).status, 200, 'manager logs in');
 const grant = async (m, grade) => equal((await manager(`manage/users/${m.user.id}/grades`, 'POST', { grade, plan: 'permanent' })).status, 201, `manager grants ${grade}`);

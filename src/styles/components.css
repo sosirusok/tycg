@@ -251,8 +251,8 @@
 .header-notice-inner { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .header-notice p { flex: 1; min-width: 0; color: var(--ink-2); font-size: var(--fs-14); }
 .header-notice .icon-btn { flex: none; width: 32px; height: 32px; }
-/* 알림 켜기 (WP64): one line over the page, right below the header (on phones in a chat room, below the
-   room's own 56px head), clear of the toasts above it, under menus and dialogs. */
+/* 알림 켜기 (WP64): one line over the page, right below the header, clear of the toasts above it, under
+   menus and dialogs. */
 .push-bar { position: fixed; z-index: 50; top: calc(var(--header-h) + 12px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(560px, calc(100vw - 32px)); padding: 8px 8px 8px 14px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); box-shadow: var(--shadow-pop); animation: fade .2s ease-out; }
 .push-bar .cicon { flex: none; }
 .push-bar p { flex: 1; min-width: 0; color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
@@ -262,6 +262,10 @@
   .push-bar { top: calc(var(--header-h) + 8px); width: calc(100vw - 16px); gap: 8px; padding-left: 10px; }
   .push-bar p { font-size: var(--fs-13); }
 }
+/* In a chat room the bar is a line of the room's column (below the pinned post bar, above the messages), so
+   it takes its own space and never covers the pinned bar or the composer; the floating one is hidden there. */
+body.in-room .push-bar:not(.push-bar-room) { display: none; }
+.push-bar.push-bar-room { position: static; z-index: auto; flex: none; width: auto; margin: 8px 12px; transform: none; box-shadow: none; }
 .menu-sub { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--fs-13); }
 .grade-trial { color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
 .trial-admin, .usage-admin { display: grid; gap: 6px; max-width: 560px; margin-bottom: 28px; }

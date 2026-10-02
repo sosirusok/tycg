@@ -17,6 +17,7 @@ import { MemberPanel } from '../components/MemberPanel';
 import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { RichBody } from '../components/RichBody';
+import { PushBar } from '../app/PushBar';
 
 // priority and unread_since come only in the manager's list (WP60: unread chats by the member's paid rank,
 // then the oldest unread message; read chats newest first).
@@ -677,6 +678,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
                         : !ownListing && !acceptedHere && <Link to={'/posts/' + listing.id} className="btn btn-line btn-sm">글 보기</Link>}
                 </span>
             </div>}
+            <PushBar inRoom />
             <div className="room-scroll" ref={scroller} onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
                 <div ref={content}>
                 {/* Scrolls with the messages, above the ones loaded. */}

@@ -805,16 +805,22 @@ async function listPosts(req: Request, url: URL) {
     // A member's list (profile, 내 글) says which posts are shown 대표 글 (WP63); the profile in 최신순 lists
     // them first, the newest pin first.
     const pinRows = !!author && !scope;
-    if (pinRows && !q && (!sort || sort === 'latest') && s.get('counts') !== '1') order = 'pinned DESC,CASE WHEN pinned THEN p.profile_pin_at END DESC,p.bumped_at DESC';
+    const pinFirst = pinRows && !q && (!sort || sort === 'latest') && s.get('counts') !== '1';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
     // 내 글 (counts=1) also reads each row's 자동 끌올 state (WP52), one primary-key lookup per row.
     const ownCounts = !!u && author === u.id && !scope && s.get('counts') === '1';
     // A search with posts_fts ids reads by id here too (byId, WP70).
     const select = byId((ownCounts ? ownSelect : postSelect).replace(' FROM posts p ', `${pinRows ? `,${pinnedSql()} AS pinned` : ''} FROM posts p `));
+    // 대표 글 first: the author's posts with a pin time (posts_profile_pin, a handful) and the newest unpinned
+    // ones up to the end of the page (posts_author_bumped, stops early), sorted together. Sorting the whole
+    // list by 'pinned' read every post of the author (400 posts: about 1,600 rows for one profile page).
     const listSql = popular
         ? `SELECT * FROM (${select}${clause} ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${POPULAR_CANDIDATES}) c ORDER BY (SELECT COUNT(*) FROM favorites f WHERE f.post_id=c.id) DESC,c.view_count DESC,c.bumped_at DESC,c.id DESC LIMIT ? OFFSET ?`
-        : `${select}${clause} ORDER BY ${order},p.id DESC LIMIT ? OFFSET ?`;
+        : pinFirst
+            ? `SELECT * FROM (SELECT * FROM (${select}${clause} AND p.profile_pin_at IS NOT NULL) UNION ALL SELECT * FROM (${select}${clause} AND p.profile_pin_at IS NULL ORDER BY p.bumped_at DESC,p.id DESC LIMIT ?)) c
+                ORDER BY c.pinned DESC,CASE WHEN c.pinned THEN c.profile_pin_at END DESC,c.bumped_at DESC,c.id DESC LIMIT ? OFFSET ?`
+            : `${select}${clause} ORDER BY ${order},p.id DESC LIMIT ? OFFSET ?`;
     // Board '광고 매물' box (WP53): page 1 of a tab in 최신순, in the 진행중 view (the board's default; with
     // 거래완료 included there is no box), with the page's own filters, when the tab holds more than 16
     // 진행중 posts (the list's own count). The list below keeps its order, counts and paging; the box leaves
@@ -831,7 +837,7 @@ async function listPosts(req: Request, url: URL) {
     const r = (await db().batch([
         ...backfill,
         db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1${from.trimEnd()}${q && !fts ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
-        db().prepare(listSql).bind(...values, ...(scope === 'recent' ? [u!.id] : []), popular && page > POPULAR_PAGES ? 0 : size, (page - 1) * size),
+        db().prepare(listSql).bind(...values, ...pinFirst ? [...values, page * size] : [], ...(scope === 'recent' ? [u!.id] : []), popular && page > POPULAR_PAGES ? 0 : size, (page - 1) * size),
         ...withCounts ? [db().prepare(`SELECT p.kind,COUNT(*) AS count${from.trimEnd()}${fts ? '' : ' JOIN users u ON u.id=p.author_id'}${clause} GROUP BY p.kind`).bind(...values)] : [],
         ...adBase ? [db().prepare(`${adSelect()} WHERE ${ad.sql} AND ${adBase.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...ad.args, ...adBase.values)] : [],
     ])).slice(backfill.length);
