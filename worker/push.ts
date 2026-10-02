@@ -91,7 +91,7 @@ async function authorization(v: Vapid, origin: string, now: number) {
 
 // ---- Sending -------------------------------------------------------------------------------------------
 
-type Sub = { id: number; user_id: string; endpoint: string; fail_count: number };
+export type Sub = { id: number; user_id: string; endpoint: string; fail_count: number };
 type Sent = { s: Sub; r: 'ok' | 'gone' | 'failed' };
 
 // One empty POST. Redirects are not followed, so a push goes only to the address the browser gave.
@@ -129,13 +129,25 @@ async function sendAll(v: Vapid, subs: Sub[], now: number, before: D1PreparedSta
 
 // ---- Right after a request -----------------------------------------------------------------------------
 
-const outbox = new AsyncLocalStorage<{ users: string[] }>();
+type Box = { users: string[]; known: Map<string, Sub[]> };
+const outbox = new AsyncLocalStorage<Box>();
 
 // Names a member who gets a push once this request has answered (handleApi runs the request inside
-// withPushes). Outside one, or while push is off, it does nothing.
-export function pushAfter(userId: string | null | undefined) {
+// withPushes). subs: the member's devices when the request's own batch already read them
+// (pushSubsStatement), so the push needs no read of its own. Outside withPushes, or while push is off,
+// it does nothing.
+export function pushAfter(userId: string | null | undefined, subs?: Sub[]) {
     const box = outbox.getStore();
-    if (box && userId && !box.users.includes(userId)) box.users.push(userId);
+    if (!box || !userId) return;
+    if (!box.users.includes(userId)) box.users.push(userId);
+    if (subs) box.known.set(userId, subs);
+}
+
+// The member's newest devices, as pushAfter takes them, for a request's own batch (채팅 전송, WP69), read
+// only when `guard` holds; null while push is off or outside withPushes.
+export function pushSubsStatement(userId: string, guard = '1', args: unknown[] = []) {
+    if (!vapid() || !outbox.getStore()) return null;
+    return db().prepare(`SELECT id,user_id,endpoint,fail_count FROM push_subscriptions WHERE user_id=? AND ${guard} ORDER BY created_at DESC,id DESC LIMIT ${PUSH_INLINE}`).bind(userId, ...args);
 }
 
 // Runs the request; when it succeeded and named members, their newest devices get a push after the
@@ -143,21 +155,28 @@ export function pushAfter(userId: string | null | undefined) {
 // work counts on a meter of its own, so the request's X-D1-Calls are the request's alone.
 export async function withPushes(ctx: ExecutionContext | undefined, run: () => Promise<Response>) {
     if (!ctx || !vapid()) return run();
-    const box = { users: [] as string[] };
+    const box: Box = { users: [], known: new Map() };
     const res = await outbox.run(box, run);
     if (box.users.length && res.status < 400) {
-        const work = () => pushNow(box.users);
+        const work = () => pushNow(box);
         ctx.waitUntil((currentMeter() ? metered(work) : work()).catch(e => console.error('Push failed', e instanceof Error ? e.message : 'unknown')));
     }
     return res;
 }
 
-async function pushNow(users: string[]) {
+async function pushNow(box: Box) {
     const v = vapid();
     if (!v) return;
-    const subs = (await db().prepare(`SELECT id,user_id,endpoint,fail_count FROM (SELECT s.id,s.user_id,s.endpoint,s.fail_count,s.created_at,
+    const unknown = box.users.filter(u => !box.known.has(u));
+    const read = unknown.length ? (await db().prepare(`SELECT id,user_id,endpoint,fail_count FROM (SELECT s.id,s.user_id,s.endpoint,s.fail_count,s.created_at,
             ROW_NUMBER() OVER (PARTITION BY s.user_id ORDER BY s.created_at DESC,s.id DESC) AS rn FROM push_subscriptions s WHERE s.user_id IN (SELECT value FROM json_each(?)))
-        ORDER BY rn,created_at DESC LIMIT ${PUSH_INLINE}`).bind(JSON.stringify(users)).all<Sub>()).results;
+        ORDER BY rn,created_at DESC LIMIT ${PUSH_INLINE}`).bind(JSON.stringify(unknown)).all<Sub>()).results : [];
+    // Each member's newest device first, then their next ones, at most 3 in all.
+    const lists = box.users.map(u => box.known.get(u) ?? read.filter(s => s.user_id === u));
+    const subs: Sub[] = [];
+    for (let rank = 0; subs.length < PUSH_INLINE && lists.some(l => l.length > rank); rank++) {
+        for (const l of lists) if (l[rank] && subs.length < PUSH_INLINE) subs.push(l[rank]);
+    }
     if (subs.length) await sendAll(v, subs, Date.now());
 }
 

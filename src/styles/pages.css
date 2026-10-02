@@ -426,7 +426,18 @@
 .bubble-row.mine .bubble { border-radius: var(--r-16) var(--r-16) var(--r-4) var(--r-16); background: var(--brand); border-color: var(--brand); color: var(--white); }
 .bubble-meta { display: grid; justify-items: end; flex: none; color: var(--ink-3); font-size: var(--fs-12); }
 .bubble-row:not(.mine) .bubble-meta { justify-items: start; }
-.bubble-meta .read { color: var(--brand); font-weight: 600; }
+/* 읽음 표시 (WP69): '1' over the time of an own message the partner has not read (KakaoTalk style), and a
+   clock over the time while a message is on its way. */
+.bubble-meta .unread-mark { color: var(--brand); font-size: 11px; font-weight: 700; line-height: 14px; }
+.bubble-meta .pending-mark { margin-bottom: 2px; color: var(--ink-3); }
+.bubble-fail { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 4px; color: var(--danger); font-size: var(--fs-12); font-weight: 600; }
+.bubble-fail button { padding: 2px 4px; color: var(--ink-2); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.bubble-fail button:hover { color: var(--ink); }
+/* A photo still uploading: its local preview under a light veil with a small spinner. */
+.bubble-photos span { position: relative; display: block; aspect-ratio: 1; border-radius: var(--r-8); overflow: hidden; background: var(--line); }
+.bubble-photos.n1 span { aspect-ratio: 4 / 3; }
+.is-uploading::after { content: ''; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; border: 2px solid var(--white); border-right-color: transparent; border-radius: 50%; background: rgba(28,36,47,.48); box-shadow: 0 0 0 4px rgba(28,36,47,.48); animation: spin .8s linear infinite; }
+.is-uploading img { opacity: .6; }
 /* '더치트 조회' under a partner's message that holds a phone or account number. */
 .lookup-link { display: block; width: fit-content; margin: -2px 0 8px 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .lookup-link:hover { color: var(--ink); }

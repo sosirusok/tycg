@@ -12,7 +12,10 @@ function sessionEnded(path: string) {
     if (path !== 'auth/login') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
 }
 
-export async function api<T = any>(path: string, method = 'GET', data?: unknown): Promise<T> {
+// signal: a request the caller may cancel (the chat room's long poll, WP69); a cancelled one rejects with
+// the AbortError itself, never an ApiError.
+export async function api<T = any>(path: string, method = 'GET', data?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
+    const signal = options?.signal;
     let response: Response;
     try {
         response = await fetch('/api/' + path, {
@@ -20,12 +23,15 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
             credentials: 'same-origin',
             headers: data === undefined ? undefined : { 'Content-Type': 'application/json' },
             body: data === undefined ? undefined : JSON.stringify(data),
+            signal,
         });
-    } catch {
+    } catch (e) {
+        if (signal?.aborted) throw e;
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
     let body: any, parsed = true;
     try { body = await response.json(); } catch { parsed = false; }
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     // Right before the throw, so the caller's own error toast comes first (AppProvider skips a duplicate).
     if (response.status === 401) sessionEnded(path);
     if (!parsed) throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');

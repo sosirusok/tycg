@@ -132,8 +132,9 @@ try {
     // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
     // verify-promo (WP53) checks the 광고 placements against the strict rules.
     // verify-push (WP64) runs a mock push service: inline pushes, the queue of tick B, failures and the keys.
+    // verify-chat-live (WP69) reads the meter: a send in ≤ 2 D1 calls, and the long poll's calls and timing.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-push.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-push.mjs', 'tests/verify-chat-live.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
         // call), so they get longer.
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : 180000);

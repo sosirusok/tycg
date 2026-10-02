@@ -33,6 +33,12 @@ export async function blockedDomains(): Promise<string[]> {
     blockedCache = { list, at: now };
     return list;
 }
+// For a handler that reads the list inside its own batch (채팅 전송, WP69): the statement while the cache
+// is stale (null when it is fresh), and its value into the cache.
+export function blockedDomainsStatement() {
+    return blockedCache && Date.now() - blockedCache.at < 60000 ? null : db().prepare("SELECT value FROM settings WHERE key='sys:blocked_link_domains'");
+}
+export function primeBlockedDomains(value: string | null) { blockedCache = { list: parseBlockedDomains(value), at: Date.now() }; }
 
 export const selfHostOf = (req: Request) => new URL(req.url).host;
 

@@ -170,9 +170,29 @@ export async function currentUser(r: Request, visit = true): Promise<User | null
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
-        .bind(token, now).first<any>();
-    if (!row) return null;
+    const row = await sessionStatement(token, now).first<any>();
+    return row ? userFromSession(row, token, now, visit) : null;
+}
+
+// The session read: the token's digest, now.
+function sessionStatement(token: string, now: number) {
+    return db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+        .bind(token, now);
+}
+
+// One D1 call for the session and the caller's own reads (채팅 전송, WP69): `extra` builds statements
+// from the session token's digest and now (they find the member through the sessions row themselves),
+// and the visit writes go to `defer` for the caller's own batch instead of a call of their own.
+export async function currentUserWith(r: Request, extra: (token: string, now: number) => D1PreparedStatement[], defer: D1PreparedStatement[]) {
+    const t = tokenOf(r);
+    if (!t) return { user: null, results: [] as D1Result[] };
+    const token = await digest(t), now = Date.now();
+    const [session, ...results] = await db().batch([sessionStatement(token, now), ...extra(token, now)]);
+    const row = session.results[0] as any;
+    return { user: row ? await userFromSession(row, token, now, true, defer) : null, results };
+}
+
+async function userFromSession(row: any, token: string, now: number, visit: boolean, defer?: D1PreparedStatement[]): Promise<User> {
     const { session_expires_at, last_seen_at, trial_at, has_blocks, ...user } = row;
     const writes: D1PreparedStatement[] = [];
     if (visit && session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
@@ -181,7 +201,8 @@ export async function currentUser(r: Request, visit = true): Promise<User | null
         // A visit resumes 자동 끌올 paused for no visit (WP52): the member is due on the next tick.
         writes.push(db().prepare("UPDATE automation SET pause_reason='',paused_at=NULL,bump_next_at=?,updated_at=? WHERE user_id=? AND pause_reason='away'").bind(now, now, user.id));
     }
-    if (writes.length) await db().batch(writes);
+    if (defer) defer.push(...writes);
+    else if (writes.length) await db().batch(writes);
     // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
     // Worker still served has no trial yet. Only members with no grade row at all, once per isolate.
     // A failed catch-up never fails the request; the member is tried again in the next isolate.

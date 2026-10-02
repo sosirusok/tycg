@@ -1,11 +1,15 @@
-import { fillTemplate, type User } from '../shared/market';
+import { fillTemplate, suspendUntilText, type User } from '../shared/market';
 import { CHAT_AUTO_TEXT, awayWindow, perksOf } from '../shared/membership';
-import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
-import { parse, visiblePost } from './posts';
+import {
+    db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME,
+    currentUserWith, digest, random, tokenOf,
+} from './http';
+import { parse, postStatement, visiblePost, visibleTo } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
-import { assertNoBlockedLinks, hasBlockedLinks } from './unfurl';
+import { assertNoBlockedLinks, blockedDomainsStatement, hasBlockedLinks, primeBlockedDomains } from './unfurl';
 import { ALERTS_COUNT_SQL } from './notifications';
-import { pushAfter } from './push';
+import { pushAfter, pushSubsStatement, type Sub } from './push';
+import { localRequest } from './meter';
 
 export async function blocked(a: string, b: string) {
     return !!await db().prepare('SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)').bind(a, b, b, a).first();
@@ -113,25 +117,28 @@ async function chatListing(conversationId: string, u: User) {
 type AutoPartner = { deleted_at: number | null; role: string; suspended_until: number | null; grade: string | null; first_on: number | null; first_text: string | null;
     away_on: number | null; away_from: number | null; away_to: number | null; away_text: string | null; away_until: number | null };
 const AUTO_GUARD = "NOT EXISTS(SELECT 1 FROM applications ap WHERE ap.conversation_id=?)";
-async function autoReplyStatements(req: Request, conversationId: string, sender: User, partnerId: string, other: AutoPartner, post: any, now: number) {
+// about: the chat's post when the caller already read it (null: none; undefined: read it here). extra: one
+// more condition for every answer (채팅 전송, WP69: the member's message was written by this batch).
+async function autoReplyStatements(req: Request, conversationId: string, sender: User, partnerId: string, other: AutoPartner, post: any, now: number,
+    about?: any, extra: { sql: string; args: unknown[] } = { sql: '1', args: [] }) {
     if (isManager(sender) || other.role === 'manager' || isSuspended(other.suspended_until) || isSuspended(sender.suspended_until)) return [];
     const perks = perksOf({ role: other.role, grade: other.grade || 'normal' }), out: D1PreparedStatement[] = [];
     const away = perks.awayReply ? awayWindow(other, now) : null;
     const awayText = other.away_text || CHAT_AUTO_TEXT.awayDefault;
     if (away !== null && !await hasBlockedLinks(req, awayText)) {
         out.push(...guardedMessageStatements(conversationId, partnerId, awayText, 'auto', 'away:' + away,
-            `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)`, [conversationId, conversationId, 'away:' + away], now));
+            `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?) AND ${extra.sql}`, [conversationId, conversationId, 'away:' + away, ...extra.args], now));
     }
     if (perks.firstReply && other.first_on) {
         // The post this message is about: the one it carries, else the chat's latest post card or 제시.
-        const about = post ?? await db().prepare(`SELECT * FROM posts WHERE id=${aboutPost('?')}`).bind(conversationId).first<any>();
+        about = post ?? (about === undefined ? await db().prepare(`SELECT * FROM posts WHERE id=${aboutPost('?')}`).bind(conversationId).first<any>() : about);
         if (about && about.author_id === partnerId && about.status !== 'closed' && !about.hidden) {
             const details = parse(about.details, {} as Record<string, unknown>);
             const text = fillTemplate(other.first_text || CHAT_AUTO_TEXT.firstDefault, { title: about.title, kind: about.kind, price: about.price_mode === 'offer' ? null : about.price, currentOffer: Number(details.currentOffer) || null });
             if (text && !await hasBlockedLinks(req, text)) out.push(...guardedMessageStatements(conversationId, partnerId, text, 'auto', String(about.id),
                 `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)
-                    AND NOT EXISTS(SELECT 1 FROM messages sm WHERE sm.conversation_id=? AND sm.sender_id=? AND sm.created_at>? AND sm.type!='system')`,
-                [conversationId, conversationId, String(about.id), conversationId, partnerId, now - 86400000], now));
+                    AND NOT EXISTS(SELECT 1 FROM messages sm WHERE sm.conversation_id=? AND sm.sender_id=? AND sm.created_at>? AND sm.type!='system') AND ${extra.sql}`,
+                [conversationId, conversationId, String(about.id), conversationId, partnerId, now - 86400000, ...extra.args], now));
         }
     }
     return out;
@@ -147,7 +154,218 @@ function partner(row: any) {
     return m;
 }
 
+// ---- 채팅 즉시 전송과 실시간 수신 (WP69) ------------------------------------------------------------------
+
+// A room's message columns; cid only on the reader's own messages, so the room can match its 낙관적 전송.
+// Bind the reader's id first.
+const MESSAGE_COLUMNS = 'id,sender_id,body,type,reference_id,attachments,created_at,read_at,CASE WHEN sender_id=? THEN cid END AS cid';
+// The newest of the member's own messages the other side has read: the room's '1' goes away up to it.
+// Marking read goes in id order, so it is the member's newest message below their oldest unread one: a
+// seek in messages_unread, then a short walk back from there (an index on the sender would also be taken
+// by the unread recount, which must keep reading unread rows only). Bind: conversation, member, twice.
+const readThroughSql = (conv: string, me: string) => `COALESCE((SELECT rm.id FROM messages rm WHERE rm.conversation_id=${conv} AND rm.sender_id=${me}
+    AND rm.id<COALESCE((SELECT MIN(um.id) FROM messages um WHERE um.conversation_id=${conv} AND um.sender_id=${me} AND um.read_at IS NULL),9007199254740991) ORDER BY rm.id DESC LIMIT 1),0)`;
+type Conv = { id: string; user_a: string; user_b: string };
+const roomMessage = (m: any) => ({ ...m, attachments: parse(m.attachments, []) });
+
+// What the room shows, in one batch: messages after or before a cursor (100), readThrough, the 제시 with
+// their post, the applications, whether the pair is blocked, and the pair's trades when asked (or when the
+// messages bring a card or a system line).
+async function roomRead(c: Conv, me: string, o: { after?: number; before?: number; trades: boolean }) {
+    const after = o.after !== undefined, cursor = after ? o.after! : o.before ?? Number.MAX_SAFE_INTEGER;
+    const results = await db().batch([
+        db().prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id=? AND id${after ? '>' : '<'}? ORDER BY id ${after ? 'ASC' : 'DESC'} LIMIT 100`).bind(me, c.id, cursor),
+        db().prepare(`SELECT ${readThroughSql('?', '?')} AS last_id`).bind(c.id, me, c.id, me),
+        // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
+        db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,p.status AS post_status,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(c.id),
+        db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(c.id),
+        db().prepare('SELECT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)) AS blocked').bind(c.user_a, c.user_b, c.user_b, c.user_a),
+        ...o.trades ? pairTradeStatements(c.user_a, c.user_b) : [],
+    ]);
+    const [r, seen, offers, applications, block] = results;
+    let tradeRows = o.trades ? results.slice(5) : null;
+    if (!tradeRows && r.results.some((m: any) => m.type === 'review' || m.type === 'system')) tradeRows = await db().batch(pairTradeStatements(c.user_a, c.user_b));
+    const messages = r.results.map(roomMessage);
+    return {
+        messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results, ...tradeRows ? { trades: pairTrades(tradeRows[0], tradeRows[1]) } : {},
+        hasMore: r.results.length === 100, readThrough: (seen.results[0] as any)?.last_id || 0, blocked: !!(block.results[0] as any)?.blocked,
+    };
+}
+
+// Messages per member per minute, as before.
+const MESSAGE_LIMIT = 60;
+const CID = /^[A-Za-z0-9_-]{8,64}$/;
+type RoomRow = AutoPartner & { id: string; partner_id: string; partner_row: string | null; blocked: number; sent: number; own_photos: number; last_id: number; about: string | null };
+
+// The first call's own read, through the session row (the member's id is not known yet): the chat with the
+// partner's row and 채팅 자동화 settings (WP57), the block, this minute's message count, the photos that
+// are the member's own, the newest message id, and the post an automatic 첫 문의 answer would be about.
+function roomStatement(token: string, now: number, chatId: string, images: string[]) {
+    return db().prepare(`SELECT c.id,CASE WHEN c.user_a=s.user_id THEN c.user_b ELSE c.user_a END AS partner_id,pu.id AS partner_row,pu.deleted_at,pu.role,pu.suspended_until,
+            (SELECT g.grade FROM user_grades g WHERE g.user_id=pu.id AND (g.expires_at IS NULL OR g.expires_at>?) ORDER BY g.rank DESC LIMIT 1) AS grade,
+            a.first_on,a.first_text,a.away_on,a.away_from,a.away_to,a.away_text,a.away_until,
+            EXISTS(SELECT 1 FROM blocks bk WHERE (bk.user_id=c.user_a AND bk.target_id=c.user_b) OR (bk.user_id=c.user_b AND bk.target_id=c.user_a)) AS blocked,
+            COALESCE((SELECT rl.count FROM rate_limits rl WHERE rl.key='message:'||s.user_id AND rl.reset_at>?),0) AS sent,
+            (SELECT COUNT(*) FROM uploads up WHERE up.owner_id=s.user_id AND up.id IN (SELECT value FROM json_each(?))) AS own_photos,
+            (SELECT COALESCE(MAX(lm.id),0) FROM messages lm WHERE lm.conversation_id=c.id) AS last_id,
+            CASE WHEN a.first_on=1 THEN (SELECT json_object('id',ap.id,'author_id',ap.author_id,'status',ap.status,'hidden',ap.hidden,'title',ap.title,'kind',ap.kind,'price',ap.price,'price_mode',ap.price_mode,'details',ap.details)
+                FROM posts ap WHERE ap.id=${aboutPost('c.id')}) END AS about
+        FROM sessions s JOIN conversations c ON c.id=? AND (c.user_a=s.user_id OR c.user_b=s.user_id)
+        LEFT JOIN users pu ON pu.id=CASE WHEN c.user_a=s.user_id THEN c.user_b ELSE c.user_a END
+        LEFT JOIN automation a ON a.user_id=pu.id
+        WHERE s.token=? AND s.expires_at>?`).bind(now, now, JSON.stringify(images), chatId, token, now);
+}
+
+// POST chats/:id/messages {body, images, postId, cid, after}: two D1 calls. The first reads the session, the
+// chat, the partner, the post and the link blocklist (stale cache only) together; the second is one batch
+// that writes the message only while the chat, the partner, no block, no 이용 정지 and this minute's count
+// still allow it (INSERT … SELECT … WHERE, so nothing slips in between), with its card, photos, counters,
+// updated_at and automatic answers, and reads back the message (by cid), the messages after `after` and
+// readThrough, so the room never reads again after sending. A repeated cid writes nothing and returns the
+// first message (a retry or a double tap). The rules and their messages are the ones before WP69.
+async function sendMessage(req: Request, chatId: string) {
+    // The body goes into the first call (its photos and post); its own errors come after the access checks.
+    let b: any = {}, bodyError: unknown = null;
+    try { b = await body(req); } catch (e) { bodyError = e; }
+    if (!b || typeof b !== 'object') b = {};
+    const rawImages: unknown = b.images ?? [];
+    const imagesOk = Array.isArray(rawImages) && rawImages.length <= 6 && rawImages.every(x => typeof x === 'string') && new Set(rawImages).size === rawImages.length;
+    const images = imagesOk ? rawImages as string[] : [];
+    const postRef: unknown = b.postId ?? undefined, postReadable = typeof postRef === 'string' || typeof postRef === 'number';
+    const text = typeof b.body === 'string' ? b.body.trim() : '';
+    const defer: D1PreparedStatement[] = [], links = blockedDomainsStatement();
+    const { user: u, results } = await currentUserWith(req, (token, now) => [
+        roomStatement(token, now, chatId, images),
+        ...postReadable ? [postStatement(postRef as string | number)] : [],
+        ...links ? [links] : [],
+    ], defer);
+    if (!u) fail(401, '로그인이 필요합니다.');
+    const room = results[0].results[0] as RoomRow | undefined;
+    if (!room) fail(404, '대화를 찾을 수 없습니다.');
+    if (links) primeBlockedDomains((results[results.length - 1].results[0] as { value: string } | undefined)?.value ?? null);
+    const me = u.id, partnerId = room.partner_id;
+    // A member under 이용 정지 writes only to the manager (to appeal).
+    if (partnerId !== MANAGER_ID) requireActive(u);
+    // Nobody can write to a member who left; their side of the chat stays readable.
+    if (room.deleted_at) fail(404, WITHDRAWN);
+    if (room.blocked) fail(403, '차단된 회원입니다.');
+    if (room.sent >= MESSAGE_LIMIT) fail(429, '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+    if (bodyError) throw bodyError;
+    if (!imagesOk) fail(400, '사진은 한 번에 6장까지 보낼 수 있습니다.');
+    if (text.length > 2000) fail(400, '메시지는 2000자 이내로 입력해 주세요.');
+    if (!text && !images.length) fail(400, '메시지를 입력해 주세요.');
+    // A link to a host the manager blocked (WP48); the list is in the cache now.
+    await assertNoBlockedLinks(req, text);
+    if (images.length && room.own_photos !== images.length) fail(403, '본인이 올린 사진만 보낼 수 있습니다.');
+    // A message sent about a post (the first one after 채팅하기) is preceded by that post's card,
+    // unless the chat's latest card already shows it. Asking about B and then A again gives A, B, A,
+    // so the latest card is always the post being discussed.
+    let post: any = null;
+    if (postRef !== undefined) {
+        if (!postReadable) fail(404, '게시글을 찾을 수 없습니다.');
+        post = visibleTo(results[1].results[0], u);
+        if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
+    }
+    const now = Date.now(), ref = post ? String(post.id) : '';
+    const cid = typeof b.cid === 'string' && CID.test(b.cid) ? b.cid : 's' + random().slice(0, 30);
+    const after = Number.isSafeInteger(b.after) && b.after >= 0 ? b.after as number : room.last_id;
+    // Written by this batch: the member's message with this cid and this request's time.
+    const written = { sql: 'EXISTS(SELECT 1 FROM messages wm WHERE wm.conversation_id=? AND wm.sender_id=? AND wm.cid=? AND wm.created_at=?)', args: [chatId, me, cid, now] };
+    let about: any = null;
+    try { about = room.about ? JSON.parse(room.about) : null; } catch { about = null; }
+    const auto = room.partner_row ? await autoReplyStatements(req, chatId, u, partnerId, room, post, now, about, written) : [];
+    const rateKey = 'message:' + me;
+    const guard = ['EXISTS(SELECT 1 FROM conversations gc WHERE gc.id=? AND (gc.user_a=? OR gc.user_b=?))',
+        'NOT EXISTS(SELECT 1 FROM users gp WHERE gp.id=? AND gp.deleted_at IS NOT NULL)',
+        'NOT EXISTS(SELECT 1 FROM blocks gb WHERE (gb.user_id=? AND gb.target_id=?) OR (gb.user_id=? AND gb.target_id=?))',
+        `COALESCE((SELECT gr.count FROM rate_limits gr WHERE gr.key=?),0)<=${MESSAGE_LIMIT}`,
+        'NOT EXISTS(SELECT 1 FROM messages gm WHERE gm.conversation_id=? AND gm.sender_id=? AND gm.cid=?)',
+        ...partnerId === MANAGER_ID ? [] : ['NOT EXISTS(SELECT 1 FROM users gs WHERE gs.id=? AND gs.suspended_until>?)']].join(' AND ');
+    const guardArgs = [chatId, me, me, partnerId, me, partnerId, partnerId, me, rateKey, chatId, me, cid, ...partnerId === MANAGER_ID ? [] : [me, now]];
+    // 웹 푸시 (WP64): the partner's devices come with this batch, so the push after the response reads nothing.
+    const subs = pushSubsStatement(partnerId, written.sql, written.args);
+    const r = await db().batch([
+        ...defer,
+        db().prepare('INSERT INTO rate_limits (key,count,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<=? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<=? THEN excluded.reset_at ELSE reset_at END')
+            .bind(rateKey, now + 60000, now, now),
+        ...post ? [db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE ${guard}
+            AND COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?`).bind(chatId, me, post.title, ref, now, ...guardArgs, chatId, ref)] : [],
+        db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at,cid) SELECT ?,?,?,'text',NULL,?,?,? WHERE ${guard}
+            ON CONFLICT(conversation_id,sender_id,cid) WHERE cid IS NOT NULL DO NOTHING`).bind(chatId, me, text, JSON.stringify(images), now, cid, ...guardArgs),
+        ...images.length ? [db().prepare('INSERT OR IGNORE INTO message_images(message_id,upload_id) SELECT m.id,j.value FROM messages m,json_each(?) j WHERE m.conversation_id=? AND m.sender_id=? AND m.cid=? AND m.created_at=?')
+            .bind(JSON.stringify(images), chatId, me, cid, now)] : [],
+        db().prepare(`UPDATE conversations SET updated_at=?,${UNREAD_RECOUNT} WHERE id=? AND ${written.sql}`).bind(now, chatId, ...written.args),
+        // The author writing about their own open post keeps it in 자동 끌올 (WP52: touched_at).
+        db().prepare(`UPDATE posts SET touched_at=? WHERE id=${aboutPost('?')} AND author_id=? AND status!='closed' AND ${written.sql}`).bind(now, chatId, me, ...written.args),
+        ...auto,
+        ...subs ? [subs] : [],
+        db().prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id=? AND sender_id=? AND cid=?`).bind(me, chatId, me, cid),
+        db().prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id=? AND id>? ORDER BY id LIMIT 100`).bind(me, chatId, after),
+        // readThrough, and (only when there is no message) why the guard said no.
+        db().prepare(`SELECT ${readThroughSql('?', '?')} AS read_through,x.sent,CASE WHEN x.sent THEN 0 ELSE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NOT NULL) END AS gone,
+            CASE WHEN x.sent THEN 0 ELSE EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=?) OR (user_id=? AND target_id=?)) END AS blocked,
+            CASE WHEN x.sent THEN 0 ELSE COALESCE((SELECT count FROM rate_limits WHERE key=?),0) END AS rate,
+            CASE WHEN x.sent THEN NULL ELSE (SELECT suspended_until FROM users WHERE id=?) END AS suspended_until
+            FROM (SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND cid=?) AS sent) x`)
+            .bind(chatId, me, chatId, me, partnerId, me, partnerId, partnerId, me, rateKey, me, chatId, me, cid),
+    ]);
+    const [sent, fresh, state] = r.slice(-3), flags = state.results[0] as { read_through: number | null; gone: number; blocked: number; rate: number; suspended_until: number | null };
+    const message = sent.results[0] as any;
+    if (!message) {
+        if (flags.gone) fail(404, WITHDRAWN);
+        if (flags.blocked) fail(403, '차단된 회원입니다.');
+        if (partnerId !== MANAGER_ID && isSuspended(flags.suspended_until)) fail(403, `이용 정지 중입니다. (${suspendUntilText(flags.suspended_until!)})`);
+        if (flags.rate > MESSAGE_LIMIT) fail(429, '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+        fail(409, '메시지를 보내지 못했습니다. 다시 보내 주세요.');
+    }
+    // 웹 푸시 (WP64): the partner's devices, after the response, for a message this request wrote.
+    if (message.created_at === now) pushAfter(partnerId, subs ? r[r.length - 4].results as Sub[] : undefined);
+    const messages = fresh.results.map(roomMessage);
+    return json({ id: message.id, message: roomMessage(message), messages, hasMore: messages.length === 100, readThrough: flags.read_through || 0 }, 201);
+}
+
+// GET chats/:id/wait?after=<lastId>&read=<readThrough> (실시간 수신, long polling on the Free plan): answers at
+// once when the room has messages after `after` or readThrough is no longer `read`, else holds the request
+// and looks again every ~1.3 s (one 1-row read of the chat: updated_at moves with every message, and the
+// partner's unread count drops when they read), returning the room's news (as GET messages?after, with the
+// trades) as soon as either moves, or {changed: false} after 20 s. At most 16 D1 calls a request (the
+// first look with the session, 14 more, the news), far under the 50 a request; nothing runs while it waits.
+// The visit writes are left to the room's other requests. ?timeout=<seconds> (1-20) only on a local
+// request (the tests).
+const WAIT_MS = 20000, WAIT_LOOKS = 15, WAIT_STEP_MIN = 1200;
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
+async function waitRoom(req: Request, chatId: string, url: URL) {
+    const afterRaw = url.searchParams.get('after'), readRaw = url.searchParams.get('read');
+    const after = afterRaw === null || afterRaw === '' ? NaN : Number(afterRaw), read = readRaw === null || readRaw === '' ? null : Number(readRaw);
+    if (!Number.isSafeInteger(after) || after < 0 || (read !== null && (!Number.isSafeInteger(read) || read < 0))) fail(400, '메시지 번호를 확인해 주세요.');
+    let hold = WAIT_MS;
+    const t = url.searchParams.get('timeout');
+    if (t !== null && localRequest(req)) { const n = Number(t); if (Number.isFinite(n) && n >= 1 && n <= 20) hold = n * 1000; }
+    const raw = tokenOf(req);
+    if (!raw) fail(401, '로그인이 필요합니다.');
+    const start = Date.now(), token = await digest(raw);
+    const first = await db().prepare(`SELECT s.user_id AS me,c.id,c.user_a,c.user_b,c.updated_at,CASE WHEN c.user_a=s.user_id THEN c.b_unread ELSE c.a_unread END AS partner_unread,
+            (SELECT COALESCE(MAX(lm.id),0) FROM messages lm WHERE lm.conversation_id=c.id) AS last_id,${readThroughSql('c.id', 's.user_id')} AS read_through
+        FROM sessions s LEFT JOIN conversations c ON c.id=? AND (c.user_a=s.user_id OR c.user_b=s.user_id) WHERE s.token=? AND s.expires_at>?`).bind(chatId, token, start).first<any>();
+    if (!first) fail(401, '로그인이 필요합니다.');
+    if (!first.id) fail(404, '대화를 찾을 수 없습니다.');
+    const c: Conv = { id: first.id, user_a: first.user_a, user_b: first.user_b }, me = first.me as string, side = c.user_a === me ? 'b_unread' : 'a_unread';
+    const news = async () => json({ ...await roomRead(c, me, { after, trades: true }), changed: true });
+    if (first.last_id > after || (read !== null && (first.read_through || 0) !== read)) return news();
+    const step = Math.max(WAIT_STEP_MIN, hold / WAIT_LOOKS);
+    for (let k = 1; k < WAIT_LOOKS && k * step < hold; k++) {
+        await sleep(start + k * step - Date.now());
+        const row = await db().prepare(`SELECT updated_at,${side} AS partner_unread FROM conversations WHERE id=?`).bind(c.id).first<{ updated_at: number; partner_unread: number }>();
+        if (!row || row.updated_at !== first.updated_at || row.partner_unread !== first.partner_unread) return news();
+    }
+    await sleep(start + hold - Date.now());
+    return json({ messages: [], changed: false, readThrough: first.read_through || 0 });
+}
+
 export async function chatHandler(req: Request, p: string[], url: URL): Promise<Response | null> {
+    // 채팅 전송 and 실시간 수신 (WP69) read the session inside their own D1 calls.
+    if (p[1] && p[2] === 'messages' && !p[3] && req.method === 'POST') return sendMessage(req, p[1]);
+    if (p[1] && p[2] === 'wait' && !p[3] && req.method === 'GET') return waitRoom(req, p[1], url);
     const method = req.method, u = await requireUser(req);
     // Polled on every page for the header badge. It also returns the member's current
     // badges and grade so a grant shows up without reloading the page. The post card written
@@ -210,77 +428,17 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,u.suspended_until,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
         return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b), listing: await chatListing(c.id, u) } });
     }
-    if (p[1] && p[2] === 'messages') {
+    if (p[1] && p[2] === 'messages' && method === 'GET') {
         const c = await chatMember(p[1], u.id);
-        if (method === 'GET') {
-            const after = url.searchParams.has('after'), cursor = after ? (Number(url.searchParams.get('after')) || 0) : (Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER);
-            // The trades of the pair (WP23) for the '거래 후기 남기기' cards are read on the first load and when the
-            // room asks (?trades=1, after its member writes a 후기); a 4-second poll reads them only when it
-            // brings a card or a system line (a trade confirmed), so the polls of a quiet chat skip them.
-            const withTrades = (!after && !url.searchParams.has('before')) || url.searchParams.get('trades') === '1';
-            const results = await db().batch([
-                db().prepare('SELECT id,sender_id,body,type,reference_id,attachments,created_at,read_at FROM messages WHERE conversation_id=? AND id' + (after ? '>' : '<') + '? ORDER BY id ' + (after ? 'ASC' : 'DESC') + ' LIMIT 100').bind(p[1], cursor),
-                db().prepare('SELECT MAX(id) AS last_id FROM messages WHERE conversation_id=? AND sender_id=? AND read_at IS NOT NULL').bind(p[1], u.id),
-                // post_current_offer is the post's 현젯 now, so the room hides '현젯으로 표시' on the 제시 it already shows.
-                db().prepare("SELECT o.*,p.title,p.kind AS post_kind,p.price AS post_price,p.author_id AS post_author_id,p.status AS post_status,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS post_current_offer FROM offers o JOIN posts p ON p.id=o.post_id WHERE o.conversation_id=?").bind(p[1]),
-                db().prepare('SELECT a.*,u.nickname FROM applications a JOIN users u ON u.id=a.user_id WHERE a.conversation_id=? ORDER BY a.created_at').bind(p[1]),
-                ...withTrades ? pairTradeStatements(c.user_a, c.user_b) : [],
-            ]);
-            const [r, seen, offers, applications] = results;
-            let tradeRows = withTrades ? results.slice(4) : null;
-            if (!tradeRows && r.results.some((m: any) => m.type === 'review' || m.type === 'system')) tradeRows = await db().batch(pairTradeStatements(c.user_a, c.user_b));
-            const messages = r.results.map((m: any) => ({ ...m, attachments: parse(m.attachments, []) }));
-            return json({
-                messages: after ? messages : messages.reverse(), offers: offers.results, applications: applications.results, ...tradeRows ? { trades: pairTrades(tradeRows[0], tradeRows[1]) } : {},
-                hasMore: r.results.length === 100, readThrough: (seen.results[0] as any)?.last_id || 0, blocked: await blocked(c.user_a, c.user_b),
-            });
-        }
-        if (method === 'POST') {
-            const partnerId = c.user_a === u.id ? c.user_b : c.user_a;
-            // A member under 이용 정지 writes only to the manager (to appeal).
-            if (partnerId !== MANAGER_ID) requireActive(u);
-            // Nobody can write to a member who left; their side of the chat stays readable.
-            // The partner's row also brings their grade and 채팅 자동화 settings (WP57) in the same read.
-            const other = await db().prepare(`SELECT u.deleted_at,u.role,u.suspended_until,
-                (SELECT g.grade FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>?) ORDER BY g.rank DESC LIMIT 1) AS grade,
-                a.first_on,a.first_text,a.away_on,a.away_from,a.away_to,a.away_text,a.away_until FROM users u LEFT JOIN automation a ON a.user_id=u.id WHERE u.id=?`).bind(Date.now(), partnerId).first<AutoPartner>();
-            if (other?.deleted_at) fail(404, WITHDRAWN);
-            if (await blocked(c.user_a, c.user_b)) fail(403, '차단된 회원입니다.');
-            await limit('message:' + u.id, 60, 60000);
-            const b = await body(req);
-            const images: unknown = b.images ?? [];
-            if (!Array.isArray(images) || images.length > 6 || images.some(x => typeof x !== 'string') || new Set(images).size !== images.length) fail(400, '사진은 한 번에 6장까지 보낼 수 있습니다.');
-            const text = typeof b.body === 'string' ? b.body.trim() : '';
-            if (text.length > 2000) fail(400, '메시지는 2000자 이내로 입력해 주세요.');
-            if (!text && !images.length) fail(400, '메시지를 입력해 주세요.');
-            // A link to a host the manager blocked (WP48).
-            await assertNoBlockedLinks(req, text);
-            if (images.length) {
-                const r = await db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN(SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(images)).all();
-                if (r.results.length !== images.length) fail(403, '본인이 올린 사진만 보낼 수 있습니다.');
-            }
-            // A message sent about a post (the first one after 채팅하기) is preceded by that post's card,
-            // unless the chat's latest card already shows it. Asking about B and then A again gives A, B, A,
-            // so the latest card is always the post being discussed.
-            let post: any = null;
-            if (b.postId !== undefined && b.postId !== null) {
-                post = await visiblePost(b.postId, u);
-                if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
-            }
-            const now = Date.now(), ref = post ? String(post.id) : '';
-            const auto = other ? await autoReplyStatements(req, p[1], u, partnerId, other, post, now) : [];
-            const r = await db().batch([
-                ...post ? [db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?")
-                    .bind(p[1], u.id, post.title, ref, now, p[1], ref)] : [],
-                ...messageStatements(p[1], u.id, text, 'text', null, images as string[], now),
-                // The author writing about their own open post keeps it in 자동 끌올 (WP52: touched_at).
-                db().prepare(`UPDATE posts SET touched_at=? WHERE id=${aboutPost('?')} AND author_id=? AND status!='closed'`).bind(now, p[1], u.id),
-                ...auto,
-            ]);
-            // 웹 푸시 (WP64): the partner's devices, after the response.
-            pushAfter(partnerId);
-            return json({ id: r[post ? 1 : 0].meta.last_row_id }, 201);
-        }
+        const after = url.searchParams.has('after'), before = url.searchParams.has('before');
+        // The trades of the pair (WP23) for the '거래 후기 남기기' cards are read on the first load and when the
+        // room asks (?trades=1, after its member writes a 후기); a later read takes them only when it brings a
+        // card or a system line (a trade confirmed), so the reads of a quiet chat skip them.
+        return json(await roomRead(c, u.id, {
+            after: after ? Number(url.searchParams.get('after')) || 0 : undefined,
+            before: !after && before ? Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER : undefined,
+            trades: (!after && !before) || url.searchParams.get('trades') === '1',
+        }));
     }
     if (p[1] && p[2] === 'read' && method === 'POST') {
         await chatMember(p[1], u.id);

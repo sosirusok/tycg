@@ -59,13 +59,17 @@ export async function latestSeason() {
 // It also carries the join date and the nickname change (WP51); decorate keeps the earlier nickname
 // only while the change is under 90 days old.
 const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,u.created_at AS author_created_at,u.prev_nickname AS author_prev_nickname,u.nickname_changed_at AS author_nickname_changed_at FROM posts p `);
-async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
+// The read alone, so a caller can put it in its own batch (채팅 전송, WP69) and then apply visibleTo.
+export const postStatement = (id: string | number) => db().prepare(onePostSelect + ' WHERE p.id=?').bind(id);
+async function rawPost(id: string | number) { return postStatement(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
 // no longer holds 대리 인증 (the board list uses the same rule). The author and the manager still see both.
 export async function visiblePost(id: unknown, u: User | null) {
     if (typeof id !== 'string' && typeof id !== 'number') fail(404, '게시글을 찾을 수 없습니다.');
-    const p = await rawPost(id);
+    return visibleTo(await rawPost(id), u);
+}
+export function visibleTo(p: any, u: User | null) {
     const privileged = !!p && (p.author_id === u?.id || u?.role === 'manager');
     const lostProxy = !!p && p.kind === 'proxy_offer' && p.role !== 'manager' && !parse(p.author_badges_json, []).includes('proxy');
     if (!p || !privileged && (p.hidden || lostProxy)) fail(404, '게시글을 찾을 수 없습니다.');
