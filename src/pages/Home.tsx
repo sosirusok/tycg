@@ -114,7 +114,7 @@ export function Home() {
         <section className="container hero">
             <h1>어떤 거래를 찾으세요?</h1>
             <form className="hero-search" onSubmit={search} role="search">
-                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임 (예: 악주, 뱀동)" aria-label="거래 검색" /></label>
+                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)" aria-label="거래 검색" /></label>
             </form>
             <nav className="quick-row" aria-label="거래 종류">
                 {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={40} /><span>{KIND_NAMES[kind]}</span></Link>)}

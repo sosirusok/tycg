@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 
-// 래더 표시 (WP68), unit checks: groupLadders and its helpers (shared/ladder.ts) and the 같은 매물 print's
-// ladder field (shared/listing.ts), both bundled on the fly. The latest season comes from the local
+// 래더 표시 (WP68) and 클랜 래더 (WP70), unit checks: groupLadders and its helpers (shared/ladder.ts) and the
+// 같은 매물 print's ladder, clan ladder and tag fields (shared/listing.ts), both bundled on the fly. The latest season comes from the local
 // Worker's GET /api/config, as the pages read it. TEST_BASE_URL defaults to http://127.0.0.1:8790; this
 // suite never targets a live site.
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790');
@@ -74,4 +74,20 @@ equal(P.listingFields('sell', 'account', {}, [{ tier: 'master', season: 18 }], {
 equal(P.listingFields('sell', 'account', {}, [{ tier: 'master', season: 18 }], { master: 2 }).d.ladder, 'master:18,master:h2', 'the print ladder includes the hidden map');
 check(P.listingFields('exchange', 'account', {}, [], { master: 2 }).d.ladder !== P.listingFields('exchange', 'account', {}, [], { master: 3 }).d.ladder, 'a different hidden count is a different ladder');
 
+// 클랜 래더 (WP70): the clan tiers, highest first, each from the first clan-ladder season (config).
+const clanMin = config.clanMinSeason;
+check(Number.isInteger(clanMin) && clanMin >= 1, `the first clan-ladder season comes from the config (${clanMin})`);
+const clanTiers = L.clanTiersDesc(clanMin);
+equal(clanTiers.map(t => t.name), ['클랜 챔피언', '클랜 챌린저', '클랜 다이아', '클랜 플래티넘', '클랜 골드', '클랜 실버', '클랜 브론즈'], 'clan tiers read 챔피언 to 브론즈');
+equal([clanTiers[0].rank, clanTiers[6].rank, clanTiers[4].short], ['1위', '71~100위', '골드'], 'each clan tier carries its clan rank and short name');
+const clanLabels = tags => L.groupLadders(tags, null, latest, clanTiers).map(g => g.label);
+equal(clanLabels(range('champion', clanMin, latest)), ['모든 시즌 클랜 챔피언'], '모든 시즌 클랜 챔피언');
+equal(clanLabels([...range('gold', 28, latest), { tier: 'diamond', season: 20 }]), ['클랜 다이아 20시즌', `클랜 골드 28~${latest}시즌`], `클랜 골드 28~${latest}시즌, highest tier first`);
+equal(L.fullTiers(range('gold', clanMin, latest), latest, clanTiers), ['gold'], 'fullTiers works on the clan tiers');
+// The 같은 매물 print: the clan ladder supports a clan listing, tags support an account; both empty keep
+// the values earlier prints stored.
+equal(P.listingFields('sell', 'clan', { clanName: '포토존' }, [], null, [{ tier: 'gold', season: 30 }]).s.clanLadder, 'gold:30', 'a clan print holds its clan ladder');
+equal('clanLadder' in P.listingFields('sell', 'clan', { clanName: '포토존' }).s, false, 'a clan print without one is unchanged');
+equal(P.listingFields('sell', 'account', { featureTags: '["불새상류","top10"]' }).s.tags, 'top10,불새상류', 'an account print holds its 특징 태그 (sorted)');
+equal(P.listingFields('buy', 'clan', {}, [], null, [{ tier: 'champion', season: 32 }]).d.clanLadder, 'champion:32', 'a 구매 clan print holds the wanted clan ladder');
 console.log(JSON.stringify({ passed: checks, suite: 'ladder' }));

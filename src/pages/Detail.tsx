@@ -3,7 +3,7 @@ import { Bell, BellRing, ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHo
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, clanTierName, closedLabel, featureTags, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -21,7 +21,7 @@ import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoShee
 import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
-import { LadderTags, hasLadder } from '../components/LadderTags';
+import { ClanTierPill, FeatureTags, LadderTags, hasLadder, tierClass } from '../components/LadderTags';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
@@ -54,9 +54,19 @@ function specBlock(rows: Row[]) {
 function tagBlock(title: string, names: string[]) {
     return names.length ? [<h3 key={title + '-h'}>{title}</h3>, <div className="tags" key={title}>{names.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div>] : [];
 }
-// Ladders as one tier-colored pill per tier, highest first ('모든 시즌 챔피언', '마스터 18시즌 · 시즌 비공개 2', WP68).
-function ladderBlock(title: string, tags: Post['tags'], hidden?: Post['ladder_hidden']) {
-    return hasLadder(tags, hidden) ? [<h3 key={title + '-h'}>{title}</h3>, <LadderTags key={title} className="ladder-block" tags={tags} hidden={hidden} />] : [];
+// Ladders as one tier-colored pill per tier, highest first ('모든 시즌 챔피언', '마스터 18시즌 · 시즌 비공개 2', WP68);
+// clan: the clan tiers ('모든 시즌 클랜 챔피언', '클랜 골드 28~32시즌', WP70).
+function ladderBlock(title: string, tags: Post['tags'], hidden?: Post['ladder_hidden'], clan = false) {
+    return hasLadder(tags, hidden) ? [<h3 key={title + '-h'}>{title}</h3>, <LadderTags key={title} className="ladder-block" tags={tags} hidden={hidden} clan={clan} />] : [];
+}
+// 특징 태그 (WP70): '#불새상류' chips.
+function featureBlock(title: string, raw?: string) {
+    const tags = featureTags(raw);
+    return tags.length ? [<h3 key={title + '-h'}>{title}</h3>, <FeatureTags key={title} tags={tags} />] : [];
+}
+// 현재 클랜 티어 (WP70) as one pill in the clan color.
+function clanTierBlock(title: string, tier?: string) {
+    return tier && clanTierName(tier) ? [<h3 key={title + '-h'}>{title}</h3>, <div className="ladder-tags ladder-block" key={title}><ClanTierPill tier={tier} /></div>] : [];
 }
 
 function nicknameRange(d: Record<string, string>, prefix = '') {
@@ -82,7 +92,26 @@ function offeredBlocks(post: Post): ReactNode[] {
         ...ladderBlock('래더 기록', post.tags, post.ladder_hidden),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d.skinTags))),
         ...d.rareSkins ? [<h3 key="rare-h">기타 스킨</h3>, <p className="body-text" key="rare">{d.rareSkins}</p>] : [],
+        ...featureBlock('계정 특징 태그', d.featureTags),
     ];
+}
+
+// 클랜 (WP70): the clan's fields with the clan name in its 현재 클랜 티어 color (as in the game), the tier pill,
+// its 클랜 래더 (구매: the clan tiers wanted) and its 특징 태그.
+function clanBlocks(post: Post): ReactNode[] {
+    const d = post.details, tier = clanTierName(d.clanTier || '') ? d.clanTier : '';
+    return [
+        ...specBlock((DETAIL_FIELDS.clan || []).map(f => [f.label, f.id === 'clanName' && d.clanName && tier
+            ? <span className={'clan-name ' + tierClass(tier, true)}>{d.clanName}</span>
+            : f.type === 'number' ? num(d[f.id]) : d[f.id]] as Row)),
+        ...clanTierBlock('현재 클랜 티어', tier),
+        ...ladderBlock(post.kind === 'buy' ? '원하는 클랜 티어' : '클랜 래더 기록', post.clan_tags || [], undefined, true),
+        ...featureBlock('클랜 특징 태그', d.featureTags),
+    ];
+}
+// The clan a 교환 asks for: its 현재 클랜 티어 and clan ladder.
+function wantedClanBlocks(post: Post): ReactNode[] {
+    return [...clanTierBlock('현재 클랜 티어', post.details.wantedClanTier), ...ladderBlock('원하는 클랜 티어', post.wanted_clan_tags || [], undefined, true)];
 }
 
 // Buyer-side wishes (구매, and the wanted side of 교환 with the "wanted" prefix).
@@ -259,14 +288,14 @@ export function Detail({ id }: { id: string }) {
     // The rows of each section are built first; a section without any is left out.
     let info: ReactNode[];
     if (post.kind === 'exchange') {
-        const offered = post.category === 'account' ? offeredBlocks(post) : genericBlocks(post, 'clan');
-        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : [];
+        const offered = post.category === 'account' ? offeredBlocks(post) : clanBlocks(post);
+        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : wantedClanBlocks(post);
         info = [
             ...offered.length ? [<h3 key="offered-h">내놓는 {categoryName(post.category)}</h3>, <Fragment key="offered">{offered}</Fragment>] : [],
             <h3 key="wanted-h">구하는 {categoryName(exchangeWanted)}</h3>,
             wanted.length ? <Fragment key="wanted">{wanted}</Fragment> : <p className="muted" key="wanted">따로 정한 조건 없음 · 내용 참고</p>,
         ];
-    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : genericBlocks(post, post.category);
+    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : post.category === 'clan' ? clanBlocks(post) : genericBlocks(post, post.category);
 
     const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} onClick={bumpNow}>
         <span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>;

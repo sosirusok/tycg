@@ -69,12 +69,14 @@ function skinsOf(raw: unknown) {
 }
 const filled = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 
-// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details, season tags and 시즌 비공개
-// (hidden, WP68: 판매 and the offered side of 교환 only) say.
-export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = [], hidden?: Record<string, number> | null): ListingFields {
+// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details, season tags, 시즌 비공개
+// (hidden, WP68: 판매 and the offered side of 교환 only) and 클랜 래더 (clan, WP70: a clan post's own seasons)
+// say. 특징 태그 (details.featureTags) and 현재 클랜 티어 (details.clanTier) come with the details; new fields
+// stay empty on older posts, so earlier prints keep matching.
+export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = [], hidden?: Record<string, number> | null, clan: SeasonTag[] = []): ListingFields {
     const d = details || {};
     if (kind === 'buy' || kind === 'proxy_request') {
-        const want: Record<string, string> = { ladder: ladderOf(seasons) };
+        const want: Record<string, string> = { ladder: ladderOf(seasons), clanLadder: ladderOf(clan) };
         for (const [k, v] of Object.entries(d)) {
             if (k === 'currentOffer') continue;
             want[k] = typeof v === 'string' && v.trim().startsWith('[') ? list(v) : num(v);
@@ -92,6 +94,8 @@ export function listingFields(kind: string, category: string, details: Record<st
         const sup: Record<string, string> = {
             ...Object.fromEntries(SUPPORTING_CHOICES.map(k => [k, k === 'ownerCount' ? num(d[k]) : typeof d[k] === 'string' ? d[k].trim() : ''])),
             ...Object.fromEntries(SUPPORTING_TEXT.map(k => [k, text(d[k])])),
+            // 특징 태그 can only contradict: a seller's own words, never enough to call two posts the same.
+            tags: list(d.featureTags),
         };
         return { m: 'acct', d: filled(dist), s: filled(sup) };
     }
@@ -101,8 +105,10 @@ export function listingFields(kind: string, category: string, details: Record<st
     for (const [k, v] of Object.entries(d)) {
         // The wanted side of 교환 describes another listing, so it never decides or contradicts.
         if (k === 'currentOffer' || k.startsWith('wanted')) continue;
-        (keys.some(([id]) => id === k) ? key : rest)[k] = num(v);
+        (keys.some(([id]) => id === k) ? key : rest)[k] = typeof v === 'string' && v.trim().startsWith('[') ? list(v) : num(v);
     }
+    // The clan's own 클랜 래더 (WP70) supports the 클랜명 like the other clan fields.
+    if (category === 'clan') rest.clanLadder = ladderOf(clan);
     return { m: 'key', d: filled(key), s: filled(rest) };
 }
 

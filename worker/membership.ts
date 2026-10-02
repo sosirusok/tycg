@@ -3,7 +3,7 @@ import { db, fail, requireUser, requireActive, requireManager, json, body, limit
 import { storageMode } from './storage';
 import { notifyOne } from './notifications';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
-import { latestSeason } from './posts';
+import { clanMinSeason, latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
@@ -11,7 +11,7 @@ import {
     AUTO_TEXT, GRADES, PERKS, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, gradeInfo, isBadge, isGrade, planInfo,
     type ApplicationKind, type BadgeId, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
-import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
+import { FEATURE_TAG_MAX, SUSPEND_DAYS, SUSPEND_FOREVER, normalizeTag, suspendDaysLabel, type User } from '../shared/market';
 
 export async function siteConfig() {
     await initManager();
@@ -20,7 +20,8 @@ export async function siteConfig() {
     const w = await trialWindow(), open = trialOpen(w);
     // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
-    return { latestSeason: await latestSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains() };
+    // clanMinSeason: the first clan-ladder season (WP70) for the clan season pickers.
+    return { latestSeason: await latestSeason(), clanMinSeason: await clanMinSeason(), paymentNotice: await setting('payment_notice') || '', manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains() };
 }
 
 const DAY = 86400000;
@@ -426,6 +427,19 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             if (!Number.isInteger(n) || n < 32 || n > 200) fail(400, '현재 시즌은 32 이상의 숫자로 입력해 주세요.');
             if (n < await latestSeason()) fail(400, '이미 등록된 시즌보다 낮출 수 없습니다.');
             statements.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind('latest_season', String(n), now));
+        }
+        // 클랜 래더 첫 시즌 and 고정 태그 (WP70).
+        const put = (key: string, value: string) => statements.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key, value, now));
+        if (b.clanMinSeason !== undefined) {
+            const n = Number(b.clanMinSeason), latest = typeof b.latestSeason === 'number' ? Math.max(b.latestSeason, await latestSeason()) : await latestSeason();
+            if (!Number.isInteger(n) || n < 1 || n > latest) fail(400, `클랜 래더 첫 시즌: 1~${latest} 사이 숫자로 입력해 주세요.`);
+            put('sys:clan_min_season', String(n));
+        }
+        if (b.pinnedTags !== undefined) {
+            const list = typeof b.pinnedTags === 'string' ? b.pinnedTags.split(',').map((v: string) => v.trim()).filter(Boolean) : null;
+            const tags: (string | null)[] | undefined = list?.map((v: string) => normalizeTag(v));
+            if (!tags || tags.length > FEATURE_TAG_MAX || tags.some(t => !t)) fail(400, '고정 태그: 쉼표로 나눠 10개까지, 한 개에 1~12자로 입력해 주세요.');
+            put('sys:pinned_tags', [...new Set(tags as string[])].join(','));
         }
         if (statements.length) await db().batch(statements);
         return json(await siteConfig());

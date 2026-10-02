@@ -452,6 +452,55 @@ try {
     equal((await read(copyId)).ladder_hidden, { master: 2 }, 'an edit without the field keeps 시즌 비공개');
     await edit(seller, copyId, { ...olderPage, kind: 'buy', title: `[로컬 QA] ${run}-hidden copy`, tags: [] }, 'the copy edited into a 구매 post');
     equal((await read(copyId)).ladder_hidden, {}, 'a 구매 post drops 시즌 비공개');
+
+    // ---- 클랜 래더 티어, 현재 클랜 티어 and 특징 태그 (WP70) ----
+    const clanSeasons = [{ tier: 'gold', season: 30 }, { tier: 'gold', season: 31 }, { tier: 'champion', season: 32 }];
+    const clanSale = { ...common, category: 'clan', title: `[로컬 QA] ${run}-clan 골드`, tags: [], clanTags: clanSeasons, details: { clanName: `큐에이${run}`, clanLevel: '15', clanMembers: '30', clanTier: 'gold', featureTags: JSON.stringify(['#클랜태그' + run.slice(0, 3)]) } };
+    const clanId = await create(seller, clanSale, 'clan sale with clan seasons, 현재 클랜 티어 and a tag');
+    const clanPost = await read(clanId);
+    equal([clanPost.clan_tags, clanPost.details.clanTier, JSON.parse(clanPost.details.featureTags)], [[{ tier: 'champion', season: 32 }, { tier: 'gold', season: 31 }, { tier: 'gold', season: 30 }], 'gold', ['클랜태그' + run.slice(0, 3)]], 'GET returns the clan seasons, the current tier and the tag');
+    const clanBuyId = await create(seller, { ...common, kind: 'buy', category: 'clan', title: `[로컬 QA] ${run}-clan buy`, tags: [], clanTags: [{ tier: 'diamond', season: 31 }], details: { clanTier: 'diamond' } }, '구매 clan post with 원하는 클랜 티어');
+    equal((await read(clanBuyId)).clan_tags, [{ tier: 'diamond', season: 31 }], 'a 구매 clan post keeps its wanted clan seasons');
+    const swapClanId = await create(seller, { ...common, kind: 'exchange', category: 'account', title: `[로컬 QA] ${run}-clan swap`, price: null, tags: [], wantedClanTags: [{ tier: 'platinum', season: 29 }], details: { wantedCategory: 'clan', wantedClanTier: 'platinum' } }, '교환 asking for a clan');
+    const swap = await read(swapClanId);
+    equal([swap.wanted_clan_tags, swap.details.wantedClanTier, swap.clan_tags], [[{ tier: 'platinum', season: 29 }], 'platinum', []], 'the wanted clan ladder and tier are kept apart from the offered side');
+    const clanQuery = { kind: 'sell', category: 'clan', q: run + '-clan' };
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }]) }), 'clan filter (any): 31시즌 클랜 골드');
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }, { tier: 'gold', season: 12 }]) }), 'clan filter (any) with one season it lacks');
+    check(!await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }, { tier: 'gold', season: 12 }]), match: 'all' }), 'clan filter (all) needs every season');
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 30 }, { tier: 'gold', season: 31 }]), match: 'all' }), 'clan filter (all) with both seasons');
+    check(await finds(clanId, { ...clanQuery, clanTier: 'gold' }) && !await finds(clanId, { ...clanQuery, clanTier: 'diamond' }), '현재 클랜 티어 filter');
+    check(await finds(clanId, { ...clanQuery, clanLevel: '15', clanMembersMin: '30', clanMembersMax: '30' }) && !await finds(clanId, { ...clanQuery, clanLevel: '16' }), '클랜 레벨 and 클랜원 수 filters');
+    check(await finds(clanId, { kind: 'sell', tag: '클랜태그' + run.slice(0, 3) }), 'the tag filter finds the clan post');
+    for (const [label, query] of [['an unknown clan tier', { clanTier: 'master' }], ['a clan season out of range', { clanTags: JSON.stringify([{ tier: 'gold', season: 999 }]) }], ['a tag with a space', { tag: '불새 상류' }]]) {
+        equal((await guest('posts?' + new URLSearchParams({ kind: 'sell', category: 'clan', ...query }))).status, 400, 'search refuses ' + label);
+    }
+    // An edit from a page without the clan fields keeps them; an empty list clears them.
+    const { clanTags: _clanOmit, ...olderClan } = clanSale;
+    await edit(seller, clanId, olderClan, 'clan edit from a page without clanTags');
+    equal((await read(clanId)).clan_tags.length, 3, 'an edit without clanTags keeps the clan seasons');
+    await edit(seller, clanId, { ...clanSale, clanTags: [] }, 'clan edit with an empty clan ladder');
+    equal((await read(clanId)).clan_tags, [], 'an empty clanTags clears them');
+    const tagList = n => JSON.stringify(Array.from({ length: n }, (_, i) => `태그${i}`));
+    for (const [label, payload] of [
+        ['a personal tier on a clan ladder', { ...clanSale, clanTags: [{ tier: 'master', season: 30 }] }],
+        ['a clan season before the first clan-ladder season', { ...clanSale, clanTags: [{ tier: 'gold', season: 5 }] }],
+        ['a clan season after the latest season', { ...clanSale, clanTags: [{ tier: 'gold', season: 999 }] }],
+        ['an unknown 현재 클랜 티어', { ...clanSale, details: { ...clanSale.details, clanTier: 'master' } }],
+        ['11 tags', { ...common, title: `[로컬 QA] ${run}-tags 11`, details: { featureTags: tagList(11) } }],
+        ['a 13-character tag', { ...common, title: `[로컬 QA] ${run}-tags 13`, details: { featureTags: JSON.stringify(['가나다라마바사아자차카타파']) } }],
+        ['a tag with a space', { ...common, title: `[로컬 QA] ${run}-tags space`, details: { featureTags: JSON.stringify(['불새 상류']) } }],
+        ['tags on a 구매 post', { ...common, kind: 'buy', title: `[로컬 QA] ${run}-tags buy`, tags: [], details: { featureTags: JSON.stringify(['불새상류']) } }],
+    ]) {
+        const response = await validator('posts', 'POST', payload);
+        if (response.status === 201) fixturePosts.push({ owner: validator, id: response.data.id });
+        equal(response.status, 400, label + ' is refused');
+    }
+    const tenTags = await create(seller, { ...common, title: `[로컬 QA] ${run}-tags 10`, details: { featureTags: tagList(10) } }, '10 tags (the most) are accepted');
+    equal(JSON.parse((await read(tenTags)).details.featureTags).length, 10, 'the 10 tags are kept');
+    // 레어닉 is a 닉 종류.
+    const rareId = await create(seller, { ...common, title: `[로컬 QA] ${run}-rare 사과`, details: { nicknameChars: '2', nicknameTypes: JSON.stringify(['레어닉']) } }, '레어닉 sale');
+    check(await finds(rareId, { kind: 'sell', category: 'account', q: run + '-rare', nicknameTypes: JSON.stringify(['레어닉']) }), 'nicknameTypes 레어닉 finds the 레어닉 sale');
 } catch (error) {
     failed = error;
 } finally {

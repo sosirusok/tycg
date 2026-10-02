@@ -19,6 +19,51 @@ export const TIERS = [
 
 export type SeasonTag = { tier: string; season: number };
 
+// 클랜 래더 티어 (WP70), low → high, decided by the clan's rank in each 래더 season; the clan name takes the
+// tier's color in the game. Every clan tier starts at the manager's first clan-ladder season
+// (sys:clan_min_season, default CLAN_MIN_SEASON).
+export const CLAN_TIERS = [
+    { id: 'bronze', name: '브론즈', rank: '71~100위' },
+    { id: 'silver', name: '실버', rank: '46~70위' },
+    { id: 'gold', name: '골드', rank: '26~45위' },
+    { id: 'platinum', name: '플래티넘', rank: '11~25위' },
+    { id: 'diamond', name: '다이아', rank: '4~10위' },
+    { id: 'challenger', name: '챌린저', rank: '2~3위' },
+    { id: 'champion', name: '챔피언', rank: '1위' },
+] as const;
+export const CLAN_MIN_SEASON = 6;
+export const clanTierName = (id: string) => CLAN_TIERS.find(t => t.id === id)?.name || '';
+export const isClanTier = (id: unknown): id is string => typeof id === 'string' && CLAN_TIERS.some(t => t.id === id);
+// Clan ladder seasons: known clan tiers from the first clan-ladder season to the latest one.
+export function validClanTags(input: unknown, latest = LATEST_SEASON, min = CLAN_MIN_SEASON): input is SeasonTag[] {
+    return Array.isArray(input) && input.length <= 300 && input.every(t => t && typeof t === 'object'
+        && Number.isInteger(t.season) && isClanTier(t.tier) && t.season >= min && t.season <= latest);
+}
+
+// 특징 태그 (WP70): words the community names an account or a clan by ('#불새상류'). Up to 10 per post, each 1–12
+// characters without spaces, kept without '#', NFKC with Latin letters in lower case.
+export const FEATURE_TAG_MAX = 10;
+export const FEATURE_TAG_LEN = 12;
+export function normalizeTag(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const v = raw.normalize('NFKC').trim().replace(/^#+/, '').toLowerCase();
+    const n = [...v].length;
+    return n >= 1 && n <= FEATURE_TAG_LEN && /^[\p{L}\p{N}_]+$/u.test(v) ? v : null;
+}
+export const TAG_TEXT = {
+    invalid: '특징 태그: 띄어쓰기 없이 1~12자로 입력해 주세요.',
+    max: '특징 태그는 10개까지입니다.',
+    side: '특징 태그는 판매·교환 계정·클랜 글에만 넣을 수 있습니다.',
+    hint: '띄어쓰기 없이 12자까지',
+} as const;
+// The stored tags of a post (details.featureTags, a JSON list).
+export function featureTags(raw?: string): string[] {
+    try {
+        const v: unknown = JSON.parse(raw || '[]');
+        return Array.isArray(v) ? [...new Set(v.map(normalizeTag).filter((t): t is string => !!t))].slice(0, FEATURE_TAG_MAX) : [];
+    } catch { return []; }
+}
+
 export type User = {
     id: string;
     nickname: string;
@@ -81,6 +126,10 @@ export type Post = {
     wanted_tags?: SeasonTag[];
     // 시즌 비공개 (WP68): hidden emblems per tier on 판매 and the offered side of 교환 ({ master: 2 }).
     ladder_hidden?: Record<string, number>;
+    // 클랜 래더 (WP70): the clan's own ladder (판매, 구매 and the offered side of 교환 on clan posts) and the
+    // clan ladder an exchange wants in return.
+    clan_tags?: SeasonTag[];
+    wanted_clan_tags?: SeasonTag[];
     category: string;
     price_mode: string;
     accepts_offers: number;
@@ -311,7 +360,9 @@ export function expandSkins(chosen: string[]) {
 
 export const NICK_RANKS = ['R', 'S', 'A', 'B', '잡'] as const;
 // 닉 종류 as nickname trades name them ('S급 여사', '남사닉 필수', '두 글자 무받침 영어').
-export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '무받침', '연예인'] as const;
+// 레어닉 (WP70): a word everyone knows or a name from the game ('사과', '철수', '엠제이').
+export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '무받침', '연예인', '레어닉'] as const;
+export const RARE_NICK_HINT = '레어닉: 누구나 아는 단어나 게임 속 이름 (예: 사과, 철수, 엠제이)';
 export function nickTypesText(types: readonly string[]) { return types.join('/'); }
 
 export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;

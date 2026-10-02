@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { REPORT_REASONS, dateText, manToWon, priceText, relativeTime, type Post, type User } from '../../shared/market';
+import { CLAN_MIN_SEASON, REPORT_REASONS, dateText, manToWon, priceText, relativeTime, type Post, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, SERVICE_NAMES, applicationTitle, kstDateTime, type Application, type ServiceKind } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -370,11 +370,14 @@ function LinkBlockCard() {
 function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } }) {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
-    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); }, [config]);
+    // 클랜 래더 첫 시즌 and 고정 태그 (WP70); the pinned tags come from GET /api/tags.
+    const [clanMin, setClanMin] = useState(String(config.clanMinSeason ?? CLAN_MIN_SEASON)), [pinned, setPinned] = useState<string | null>(null);
+    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); setClanMin(String(config.clanMinSeason ?? CLAN_MIN_SEASON)); }, [config]);
+    useEffect(() => { api<{ pinned: string[] }>('tags').then(d => setPinned(d.pinned.join(', '))).catch(() => setPinned('')); }, []);
     async function save(e: FormEvent) {
         e.preventDefault();
         setBusy(true);
-        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season) }); refreshConfig(); toast('저장 완료'); }
+        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season), clanMinSeason: Number(clanMin), ...pinned !== null ? { pinnedTags: pinned } : {} }); refreshConfig(); toast('저장 완료'); }
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
@@ -385,6 +388,12 @@ function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday
         <label className="field"><span className="field-label">현재 래더 시즌</span>
             <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={32} max={200} value={season} onChange={e => setSeason(e.target.value)} /><span>시즌</span></div>
             <span className="field-hint">새 시즌 오픈 시 변경. 글쓰기, 검색 시즌 목록에 반영. 낮출 수 없음.</span></label>
+        <label className="field"><span className="field-label">클랜 래더 첫 시즌</span>
+            <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={1} max={Number(season) || 200} value={clanMin} onChange={e => setClanMin(e.target.value)} /><span>시즌</span></div>
+            <span className="field-hint">클랜 래더 기록, 원하는 클랜 티어 시즌 목록의 시작</span></label>
+        <label className="field"><span className="field-label">고정 태그</span>
+            <input className="input" maxLength={200} value={pinned ?? ''} disabled={pinned === null} onChange={e => setPinned(e.target.value)} placeholder="예: 불새상류, 올스킨" />
+            <span className="field-hint">게시판 태그 필터 맨 앞에 표시. 쉼표로 구분, 10개까지</span></label>
         <div><button className="btn btn-primary" disabled={busy}>저장</button></div>
     </form></>;
 }

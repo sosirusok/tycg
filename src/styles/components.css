@@ -147,6 +147,29 @@
 .tier-silver { --tier-bg: var(--tier-silver-bg); --tier-ink: var(--tier-silver-ink); --tier-line: var(--tier-silver-line); }
 .tier-bronze { --tier-bg: var(--tier-bronze-bg); --tier-ink: var(--tier-bronze-ink); --tier-line: var(--tier-bronze-line); }
 .tier-iron { --tier-bg: var(--tier-iron-bg); --tier-ink: var(--tier-iron-ink); --tier-line: var(--tier-iron-line); }
+/* 클랜 래더 티어 (WP70): solid clan colors; the line is the clan text color (a gold pill keeps a darker edge). */
+.clan-tier-champion { --tier-bg: var(--clan-champion-bg); --tier-ink: var(--clan-champion-ink); --tier-line: var(--clan-champion-text); --clan-text: var(--clan-champion-text); }
+.clan-tier-challenger { --tier-bg: var(--clan-challenger-bg); --tier-ink: var(--clan-challenger-ink); --tier-line: var(--clan-challenger-text); --clan-text: var(--clan-challenger-text); }
+.clan-tier-diamond { --tier-bg: var(--clan-diamond-bg); --tier-ink: var(--clan-diamond-ink); --tier-line: var(--clan-diamond-text); --clan-text: var(--clan-diamond-text); }
+.clan-tier-platinum { --tier-bg: var(--clan-platinum-bg); --tier-ink: var(--clan-platinum-ink); --tier-line: var(--clan-platinum-text); --clan-text: var(--clan-platinum-text); }
+.clan-tier-gold { --tier-bg: var(--clan-gold-bg); --tier-ink: var(--clan-gold-ink); --tier-line: var(--clan-gold-text); --clan-text: var(--clan-gold-text); }
+.clan-tier-silver { --tier-bg: var(--clan-silver-bg); --tier-ink: var(--clan-silver-ink); --tier-line: var(--clan-silver-text); --clan-text: var(--clan-silver-text); }
+.clan-tier-bronze { --tier-bg: var(--clan-bronze-bg); --tier-ink: var(--clan-bronze-ink); --tier-line: var(--clan-bronze-text); --clan-text: var(--clan-bronze-text); }
+/* The clan name on the detail page takes its 현재 클랜 티어 color, as in the game. */
+.clan-name { color: var(--clan-text); font-weight: 700; }
+/* 현재 클랜 티어 chips: the clan rank after the name ('챔피언 1위'). */
+.clan-tier-chips { gap: 6px; }
+.clan-tier-chips .chip small { color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+.clan-tier-chips .chip.has-picks, .clan-tier-chips .chip.has-picks[aria-pressed='true'] { background: var(--tier-bg); border-color: var(--tier-line); color: var(--tier-ink); font-weight: 600; }
+.clan-tier-chips .chip.has-picks small { color: inherit; }
+
+/* 특징 태그 (WP70): small gray '#불새상류' chips; in the editor they are removable like 'picked'. */
+.feature-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.feature-tag { display: inline-flex; align-items: center; max-width: 100%; height: 22px; padding: 0 8px; border-radius: var(--r-4); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.post-card-tags { margin-top: 6px; }
+.tag-input { display: grid; gap: 8px; min-width: 0; }
+.tag-input .picked { margin-top: 0; }
+.tag-chips { gap: 6px; }
 
 /* Choice grid (skins, ranks) */
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }

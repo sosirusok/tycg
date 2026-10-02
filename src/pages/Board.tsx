@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Keyb
 import { Bell, BellRing, PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, validTags, wonToMan,
+    ACCOUNT_CHOICES, CLAN_MIN_SEASON, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, clanTierName, isTradeKind, manToWon, normalizeTag,
+    parseList, priceLabel, priceText, rankText, skinTags, validClanTags, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -12,8 +13,8 @@ import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
 import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
-import { groupLadders } from '../../shared/ladder';
-import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { clanTiersDesc, groupLadders } from '../../shared/ladder';
+import { ClanTierPicker, IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker, useTagList } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
 
@@ -55,6 +56,11 @@ function cachePut(key: string, data: ListData) {
 }
 
 type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
+// '전체' (WP70) on 구매 and 판매 lists every category; the account filters stay on screen there, and picking
+// one moves the board to 계정.
+const ALL_CATEGORY = { id: 'all', name: '전체' } as const;
+const hasAllCategory = (kind: string) => kind === 'buy' || kind === 'sell';
+const boardCategoryName = (id: string) => id === ALL_CATEGORY.id ? ALL_CATEGORY.name : categoryName(id);
 
 // Saved searches (GET /searches, 20 per member for every grade), read once per member per page load
 // and kept here so moving between tabs does not ask again. The stored query is the board's own
@@ -77,7 +83,11 @@ function allowedKeys(ctx: Ctx) {
     if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord', 'wantedMyPhantom');
     if (kind !== 'exchange') keys.push('min', 'max');
     if (category === 'account' || category === 'ladder') keys.push('tags', 'match');
-    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType', 'myPhantom'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS]));
+    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType', 'myPhantom'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS, ...ACCOUNT_MINS.map(m => m.key), 'tag']));
+    // 클랜 (WP70): 클랜 래더, 현재 클랜 티어, 클랜 레벨, 클랜원 수 and (판매, 교환) 태그.
+    if (category === 'clan') keys.push('clanTags', 'match', 'clanTier', 'clanLevel', 'clanMembersMin', 'clanMembersMax', ...(kind === 'buy' ? [] : ['tag']));
+    // 판매 '전체' keeps its 태그 (accounts and clans both have them).
+    if (category === ALL_CATEGORY.id && kind === 'sell') keys.push('tag');
     return keys;
 }
 
@@ -92,15 +102,38 @@ const CONDITIONS: { label: string; values: Record<string, string> }[] = [
     { label: '미통', values: { integrated: '미통합' } },
 ];
 const CONDITION_KEYS = ['passwordChange', 'phoneChange', 'backupEmail', 'integrated'];
+// Account minimums (the API's level, skins, gas and minerals).
+const ACCOUNT_MINS = [
+    { key: 'level', label: '레벨', max: 999 }, { key: 'skins', label: '인간 스킨 수', max: 9999 },
+    { key: 'gas', label: '가스', max: 1000000000 }, { key: 'minerals', label: '미네랄', max: 1000000000 },
+] as const;
 const conditionOn = (params: URLSearchParams, c: typeof CONDITIONS[number]) => Object.entries(c.values).every(([k, v]) => params.get(k) === v);
 const conditionOff = (c: typeof CONDITIONS[number]) => Object.fromEntries(Object.keys(c.values).map(k => [k, '']));
 const MY_RECORDS = ['무전적', '전적 있음'] as const;
+// 전적 in plain words (WP70): a reset record counts as 무전적.
+const recordLabel = (v: string) => v === '무전적' ? '무전적 (초기화 포함)' : v;
 
 // 닉 종류 filter values: a JSON list in the address (like 우대 스킨).
 const readTypes = (raw: string | null) => parseList(raw || '', NICK_TYPES);
 
 function readTags(raw: string | null): SeasonTag[] {
     try { const v = JSON.parse(raw || '[]'); return validTags(v, 999) ? v : []; } catch { return []; }
+}
+function readClanTags(raw: string | null): SeasonTag[] {
+    try { const v = JSON.parse(raw || '[]'); return validClanTags(v, 999, 1) ? v : []; } catch { return []; }
+}
+// How many filters a group holds: one per set key, or the items of a list (tiers for a ladder).
+function activeCount(params: URLSearchParams, keys: string[]) {
+    let n = 0;
+    for (const key of keys) {
+        const v = params.get(key);
+        if (!v) continue;
+        if (key === 'tags' || key === 'wantedTags') n += new Set(readTags(v).map(t => t.tier)).size;
+        else if (key === 'clanTags') n += new Set(readClanTags(v).map(t => t.tier)).size;
+        else if (v.trim().startsWith('[')) { try { n += (JSON.parse(v) as unknown[]).length; } catch { n++; } }
+        else n++;
+    }
+    return n;
 }
 
 // Number field that commits after the user stops typing (or on Enter / blur). Integer fields are
@@ -119,19 +152,26 @@ function LazyNumber({ value, onCommit, placeholder, unit, max, min = 0, integer 
     </div>;
 }
 
-function Group({ title, children, hint }: { title: string; children: ReactNode; hint?: string }) {
-    return <div className="filter-group"><h4>{title}</h4>{children}{hint && <p className="field-hint">{hint}</p>}</div>;
+// A filter group folds away (WP70); its title shows how many of its filters are on.
+function Group({ title, children, hint, count = 0 }: { title: string; children: ReactNode; hint?: string; count?: number }) {
+    return <details className="filter-group" open>
+        <summary><h4>{title}{count > 0 && <b className="filter-group-count">{count}</b>}</h4></summary>
+        {children}{hint && <p className="field-hint">{hint}</p>}
+    </details>;
 }
 
-// '내 계정으로 찾기' on 구매 and on the wanted side of 교환: buyers' posts that my account fits.
+// '내 계정으로 찾기' on 구매 and on the wanted side of 교환: buyers' posts that my account fits, with its 전적 and
+// 닉네임 (글자 수, 등급, 종류 including 레어닉) under their own labels.
 function MyAccount({ params, update, prefix }: { params: URLSearchParams; update: (v: Record<string, string>) => void; prefix: '' | 'wanted' }) {
     const key = (name: string) => prefix ? prefix + name[0].toUpperCase() + name.slice(1) : name;
     const owners = key('ownerCountOfMine'), chars = key('nicknameChars'), rank = key('nicknameRank'), record = key('myRecord'), type = key('myNicknameType'), phantom = key('myPhantom');
-    return <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 글만 표시">
+    return <Group title="내 계정으로 찾기" hint="내 계정 조건에 맞는 글만 표시" count={activeCount(params, [owners, chars, rank, record, type, phantom])}>
         <div className="grid-gap-8">
             <LazyNumber label="내 계정 대주 수" value={params.get(owners) || ''} onCommit={v => update({ [owners]: v })} placeholder="내 계정 대주 수" unit="대주" integer min={1} max={9999} />
             <LazyNumber label="내 계정 팬텀 %" value={params.get(phantom) || ''} onCommit={v => update({ [phantom]: v })} placeholder="내 계정 팬텀 %" unit="%" integer max={PHANTOM_MAX} />
-            <Segmented name="내 계정 전적" options={MY_RECORDS} value={params.get(record) || ''} onChange={v => update({ [record]: v })} />
+            <span className="filter-sub">전적</span>
+            <Segmented name="내 계정 전적" options={MY_RECORDS} label={recordLabel} value={params.get(record) || ''} onChange={v => update({ [record]: v })} />
+            <span className="filter-sub">닉네임</span>
             <LazyNumber label="내 닉네임 글자 수" value={params.get(chars) || ''} onCommit={v => update({ [chars]: v })} placeholder="내 닉네임 글자 수" unit="글자" integer min={1} max={20} />
             <RankPicker value={params.get(rank) ? [params.get(rank)!] : []} onChange={v => update({ [rank]: v[0] || '' })} />
             <NickTypePicker value={params.get(type) ? [params.get(type)!] : []} onChange={v => update({ [type]: v[0] || '' })} />
@@ -139,16 +179,41 @@ function MyAccount({ params, update, prefix }: { params: URLSearchParams; update
     </Group>;
 }
 
-// Order: 가격/MAX, 래더, 우대 스킨, 대주 · 전적, 닉네임, 스킨 수 (팬텀 %), 계정 조건, 작성자 인증.
+// 태그 (WP70): the pinned and most used tags as chips (one at a time), plus a free tag.
+function TagFilter({ params, update }: { params: URLSearchParams; update: (v: Record<string, string>) => void }) {
+    const { pinned, popular } = useTagList();
+    const current = params.get('tag') || '';
+    const [draft, setDraft] = useState('');
+    const chips = [...new Set([...pinned, ...popular, ...current ? [current] : []])];
+    const submit = () => { const tag = normalizeTag(draft); if (tag) { update({ tag }); setDraft(''); } };
+    return <Group title="태그" count={current ? 1 : 0}>
+        <div className="grid-gap-8">
+            {chips.length > 0 && <div className="chip-row tag-chips" role="group" aria-label="태그">
+                {chips.map(t => <button type="button" key={t} className="chip chip-sm" aria-pressed={current === t} onClick={() => update({ tag: current === t ? '' : t })}>#{t}</button>)}
+            </div>}
+            <input className="input" value={draft} placeholder="태그 입력 (예: 불새상류)" aria-label="태그 입력" enterKeyHint="search"
+                onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }} onBlur={submit} />
+        </div>
+    </Group>;
+}
+
+// Order: 가격/MAX, 래더, 우대 스킨, 대주 · 전적, 닉네임, 스킨 수 (팬텀 %), 레벨 · 스킨 · 재화, 계정 조건, 태그, 작성자 인증.
+// The account filters show whenever the board lists accounts: on 계정, and on 구매/판매 '전체', where picking
+// any of them (태그 aside) moves the board to 계정 (WP70). Clan boards get 클랜 래더, 현재 클랜 티어, 클랜 레벨 and 클랜원 수.
 function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; update: (v: Record<string, string>) => void }) {
     const { kind, category } = ctx;
-    const buying = kind === 'buy', account = category === 'account', exchange = kind === 'exchange';
-    const tags = readTags(params.get('tags'));
+    const buying = kind === 'buy', exchange = kind === 'exchange', clan = category === 'clan';
+    const toAccount = category === ALL_CATEGORY.id && hasAllCategory(kind);
+    const account = category === 'account' || toAccount;
+    // On '전체' a picked account filter also moves the board to 계정.
+    const set = (v: Record<string, string>) => update(toAccount && Object.values(v).some(Boolean) ? { ...v, category: 'account' } : v);
+    const tags = readTags(params.get('tags')), clanTags = readClanTags(params.get('clanTags'));
     const money = (key: string) => wonToMan(params.get(key) ? Number(params.get(key)) : null);
     const setMoney = (key: string, v: string) => { const won = manToWon(v); update({ [key]: won === null || Number.isNaN(won) ? '' : String(won) }); };
     const wantedTags = readTags(params.get('wantedTags'));
+    const count = (...keys: string[]) => activeCount(params, keys);
     return <>
-        {!exchange && <Group title={priceLabel(kind)}>
+        {!exchange && <Group title={priceLabel(kind)} count={count('min', 'max')}>
             <div className="range">
                 <LazyNumber label="최소 금액 (만원)" value={money('min')} onCommit={v => setMoney('min', v)} placeholder="최소" unit="만원" step="0.1" />
                 <span>~</span>
@@ -158,48 +223,74 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
         {exchange && ctx.wanted === 'account' && <>
             <h3 className="filter-section">상대가 구하는 계정</h3>
             <MyAccount params={params} update={update} prefix="wanted" />
-            <Group title="구하는 래더" hint="하나라도 맞으면 표시">
+            <Group title="구하는 래더" hint="하나라도 맞으면 표시" count={count('wantedTags')}>
                 <SeasonPicker value={wantedTags} onChange={v => update({ wantedTags: v.length ? JSON.stringify(v) : '' })} />
             </Group>
         </>}
-        {exchange && (account || category === 'ladder') && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
-        {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'}>
-            <SeasonPicker value={tags} onChange={v => update({ tags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
+        {exchange && (account || category === 'ladder' || clan) && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
+        {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'} count={count('tags')}>
+            <SeasonPicker value={tags} onChange={v => set({ tags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
             {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌 모두 포함</label>}
         </Group>}
-        {account && <Group title="우대 스킨">
-            <SkinPicker compact value={skinTags(params.get('skinTags') || '')} onChange={v => update({ skinTags: v.length ? JSON.stringify(v) : '' })} />
+        {account && <Group title="우대 스킨" count={count('skinTags')}>
+            <SkinPicker compact value={skinTags(params.get('skinTags') || '')} onChange={v => set({ skinTags: v.length ? JSON.stringify(v) : '' })} />
         </Group>}
-        {account && buying && <MyAccount params={params} update={update} prefix="" />}
-        {account && !buying && <Group title="대주 · 전적">
+        {account && buying && <MyAccount params={params} update={set} prefix="" />}
+        {account && !buying && <Group title="대주 · 전적" count={count('maxOwners', 'recordStatus')}>
             <div className="grid-gap-8">
-                <LazyNumber label="최대 대주 수" value={params.get('maxOwners') || ''} onCommit={v => update({ maxOwners: v })} placeholder="몇 대주 이하" unit="대주 이하" integer min={1} max={9999} />
-                <Segmented name="전적" options={MY_RECORDS} value={params.get('recordStatus') || ''} onChange={v => update({ recordStatus: v })} />
+                <LazyNumber label="최대 대주 수" value={params.get('maxOwners') || ''} onCommit={v => set({ maxOwners: v })} placeholder="몇 대주 이하" unit="대주 이하" integer min={1} max={9999} />
+                <Segmented name="전적" options={MY_RECORDS} label={recordLabel} value={params.get('recordStatus') || ''} onChange={v => set({ recordStatus: v })} />
             </div>
         </Group>}
-        {account && !buying && <Group title="닉네임">
+        {account && !buying && <Group title="닉네임" hint={RARE_NICK_HINT} count={count('nicknameChars', 'nicknameRank', 'nicknameTypes')}>
             <div className="grid-gap-8">
-                <LazyNumber label="닉네임 글자 수" value={params.get('nicknameChars') || ''} onCommit={v => update({ nicknameChars: v })} placeholder="글자 수" unit="글자" integer min={1} max={20} />
-                <RankPicker value={params.get('nicknameRank') ? [params.get('nicknameRank')!] : []} onChange={v => update({ nicknameRank: v[0] || '' })} />
-                <NickTypePicker multiple value={readTypes(params.get('nicknameTypes'))} onChange={v => update({ nicknameTypes: v.length ? JSON.stringify(v) : '' })} />
+                <LazyNumber label="닉네임 글자 수" value={params.get('nicknameChars') || ''} onCommit={v => set({ nicknameChars: v })} placeholder="글자 수" unit="글자" integer min={1} max={20} />
+                <RankPicker value={params.get('nicknameRank') ? [params.get('nicknameRank')!] : []} onChange={v => set({ nicknameRank: v[0] || '' })} />
+                <NickTypePicker multiple value={readTypes(params.get('nicknameTypes'))} onChange={v => set({ nicknameTypes: v.length ? JSON.stringify(v) : '' })} />
             </div>
         </Group>}
-        {account && !buying && <Group title={PHANTOM_LABEL} hint={PHANTOM_HINT}>
-            <LazyNumber label="최소 팬텀 %" value={params.get('phantom') || ''} onCommit={v => update({ phantom: v })} placeholder="몇 % 이상" unit="% 이상" integer max={PHANTOM_MAX} />
+        {account && !buying && <Group title={PHANTOM_LABEL} hint={PHANTOM_HINT} count={count('phantom')}>
+            <LazyNumber label="최소 팬텀 %" value={params.get('phantom') || ''} onCommit={v => set({ phantom: v })} placeholder="몇 % 이상" unit="% 이상" integer max={PHANTOM_MAX} />
         </Group>}
-        {account && !buying && <Group title="계정 조건">
+        {account && !buying && <Group title="레벨 · 스킨 · 재화" count={count(...ACCOUNT_MINS.map(m => m.key))}>
+            <div className="grid-gap-8">
+                {ACCOUNT_MINS.map(m => <LazyNumber key={m.key} label={`최소 ${m.label}`} value={params.get(m.key) || ''} onCommit={v => set({ [m.key]: v })} placeholder={`${m.label} 이상`} unit="이상" integer max={m.max} />)}
+            </div>
+        </Group>}
+        {account && !buying && <Group title="계정 조건" count={CONDITIONS.filter(c => conditionOn(params, c)).length}>
             <div className="chip-row condition-chips" role="group" aria-label="계정 조건">
-                {CONDITIONS.map(c => { const on = conditionOn(params, c); return <button type="button" key={c.label} className="chip chip-sm" aria-pressed={on} onClick={() => update(on ? conditionOff(c) : c.values)}>{c.label}</button>; })}
+                {CONDITIONS.map(c => { const on = conditionOn(params, c); return <button type="button" key={c.label} className="chip chip-sm" aria-pressed={on} onClick={() => on ? update(conditionOff(c)) : set(c.values)}>{c.label}</button>; })}
             </div>
         </Group>}
-        <Group title="작성자 인증">
+        {clan && <>
+            <Group title={buying ? '원하는 클랜 티어' : '클랜 래더'} hint={clanTags.length > 1 ? undefined : '하나라도 맞으면 표시'} count={count('clanTags')}>
+                <SeasonPicker clan value={clanTags} onChange={v => update({ clanTags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
+                {clanTags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌 모두 포함</label>}
+            </Group>
+            <Group title="현재 클랜 티어" count={count('clanTier')}>
+                <ClanTierPicker value={params.get('clanTier') || ''} onChange={v => update({ clanTier: v })} />
+            </Group>
+            <Group title="클랜 레벨 · 클랜원" count={count('clanLevel', 'clanMembersMin', 'clanMembersMax')}>
+                <div className="grid-gap-8">
+                    <LazyNumber label="최소 클랜 레벨" value={params.get('clanLevel') || ''} onCommit={v => update({ clanLevel: v })} placeholder="클랜 레벨" unit="레벨 이상" integer max={9999} />
+                    <div className="range">
+                        <LazyNumber label="최소 클랜원 수" value={params.get('clanMembersMin') || ''} onCommit={v => update({ clanMembersMin: v })} placeholder="최소" unit="명" integer max={9999} />
+                        <span>~</span>
+                        <LazyNumber label="최대 클랜원 수" value={params.get('clanMembersMax') || ''} onCommit={v => update({ clanMembersMax: v })} placeholder="최대" unit="명" integer max={9999} />
+                    </div>
+                </div>
+            </Group>
+        </>}
+        {/* 태그 holds on 계정, 클랜 and 판매 '전체' (both kinds of posts carry tags), so it never moves the board. */}
+        {!buying && (account || clan) && <TagFilter params={params} update={update} />}
+        <Group title="작성자 인증" count={count('badge')}>
             {/* 대리(진행) lists only 대리 인증 holders already, so that option would filter nothing there. */}
             <Segmented name="작성자 인증" options={ctx.kind === 'proxy_offer' ? BADGE_FILTERS.filter(b => b !== 'proxy') : BADGE_FILTERS} label={v => BADGE_FILTER_NAMES[v]} value={params.get('badge') || ''} onChange={v => update({ badge: v })} />
         </Group>
     </>;
 }
 
-function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<string, string>) => void, latest: number) {
+function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<string, string>) => void, latest: number, clanMin: number) {
     const chips: { key: string; label: string; clear: () => void }[] = [];
     const add = (key: string, label: string) => { if (params.get(key)) chips.push({ key, label, clear: () => update({ [key]: '' }) }); };
     add('q', `‘${params.get('q')}’`);
@@ -233,6 +324,17 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
     add('myPhantom', `내 팬텀 ${params.get('myPhantom')}%`);
     add('min', `${priceText(Number(params.get('min')))} 이상`);
     add('max', `${priceText(Number(params.get('max')))} 이하`);
+    for (const m of ACCOUNT_MINS) add(m.key, `${m.label} ${Number(params.get(m.key)).toLocaleString('ko-KR')} 이상`);
+    // 클랜 (WP70): one chip per clan tier ('모든 시즌 클랜 챔피언'), 현재 클랜 티어, 클랜 레벨, 클랜원 수; 태그.
+    const clanTags = readClanTags(params.get('clanTags'));
+    for (const g of groupLadders(clanTags, null, latest, clanTiersDesc(clanMin))) {
+        chips.push({ key: 'clan-' + g.tier, label: g.label, clear: () => { const rest = clanTags.filter(t => t.tier !== g.tier); update({ clanTags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
+    }
+    add('clanTier', `현재 클랜 ${clanTierName(params.get('clanTier') || '')}`);
+    add('clanLevel', `클랜 ${params.get('clanLevel')}레벨 이상`);
+    add('clanMembersMin', `클랜원 ${params.get('clanMembersMin')}명 이상`);
+    add('clanMembersMax', `클랜원 ${params.get('clanMembersMax')}명 이하`);
+    add('tag', `#${params.get('tag')}`);
     for (const c of CONDITIONS) if (conditionOn(params, c)) chips.push({ key: 'cond-' + c.label, label: c.label, clear: () => update(conditionOff(c)) });
     // A single condition from an older or typed address still shows, so it can be cleared.
     for (const key of CONDITION_KEYS) {
@@ -250,7 +352,8 @@ export function Board() {
     const rawKind = params.get('kind');
     const kind: TradeKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
     const categories = kind === 'all' ? [] : categoriesForKind(kind);
-    const category = kind === 'all' ? '' : categories.some(c => c.id === params.get('category')) ? params.get('category')! : categories[0].id;
+    const rawCategory = params.get('category');
+    const category = kind === 'all' ? '' : rawCategory === ALL_CATEGORY.id && hasAllCategory(kind) ? ALL_CATEGORY.id : categories.some(c => c.id === rawCategory) ? rawCategory! : categories[0].id;
     const wanted = params.get('wantedCategory') === 'clan' ? 'clan' : 'account';
     const ctx: Ctx = { kind, category, wanted };
 
@@ -338,7 +441,7 @@ export function Board() {
         if (nextKind !== 'all') {
             p.kind = nextKind;
             const cats = categoriesForKind(nextKind);
-            p.category = nextCategory && cats.some(c => c.id === nextCategory) ? nextCategory : cats[0].id;
+            p.category = nextCategory && (cats.some(c => c.id === nextCategory) || (nextCategory === ALL_CATEGORY.id && hasAllCategory(nextKind))) ? nextCategory : cats[0].id;
             if (nextKind === 'exchange') p.wantedCategory = nextWanted || 'account';
         }
         if (keepSearch && params.get('q')) p.q = params.get('q')!;
@@ -356,7 +459,7 @@ export function Board() {
         const y = takeScrollRestore();
         if (y !== null) window.scrollTo(0, y);
     }, [loading, cacheKey]);
-    const chips = activeChips(ctx, query, update, config.latestSeason);
+    const chips = activeChips(ctx, query, update, config.latestSeason, config.clanMinSeason ?? CLAN_MIN_SEASON);
     // Saved searches of this tab above the list; '이 조건 저장' next to the filter chips.
     const currentKey = searchKey(query);
     const tabSaved = saved.filter(v => (new URLSearchParams(v.query).get('kind') || 'all') === kind);
@@ -417,7 +520,7 @@ export function Board() {
         });
     }
     const boardBellOn = !!boardSaved?.alert;
-    const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
+    const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category: category === ALL_CATEGORY.id ? '' : category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
     const compose = () => requireLogin(u => {
         if (kind === 'proxy_offer' && !(u.role === 'manager' || u.badges.includes('proxy'))) openApply({ kind: 'badge', target: 'proxy' });
@@ -444,8 +547,8 @@ export function Board() {
         <div className="board-head">
             <h1 className="page-title">{title}</h1>
             <div className="board-head-tools">
-                {kind !== 'all' && <button type="button" className={'icon-btn board-bell' + (boardBellOn ? ' is-on' : '')} aria-label={ALERT_TEXT.boardBell} aria-pressed={boardBellOn} title={`${KIND_NAMES[kind]} · ${categoryName(category)} ${ALERT_TEXT.boardBell}`} disabled={alerting}
-                    onClick={() => alertFor(boardKey, `${KIND_NAMES[kind]} · ${categoryName(category)}`, boardSaved, !boardBellOn)}>{boardBellOn ? <BellRing size={20} /> : <Bell size={20} />}</button>}
+                {kind !== 'all' && <button type="button" className={'icon-btn board-bell' + (boardBellOn ? ' is-on' : '')} aria-label={ALERT_TEXT.boardBell} aria-pressed={boardBellOn} title={`${KIND_NAMES[kind]} · ${boardCategoryName(category)} ${ALERT_TEXT.boardBell}`} disabled={alerting}
+                    onClick={() => alertFor(boardKey, `${KIND_NAMES[kind]} · ${boardCategoryName(category)}`, boardSaved, !boardBellOn)}>{boardBellOn ? <BellRing size={20} /> : <Bell size={20} />}</button>}
                 <button type="button" className="btn btn-line btn-sm board-write" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
             </div>
         </div>
@@ -459,7 +562,7 @@ export function Board() {
                 <span>에서</span>
                 <Segmented name="구하는 대상" options={exchangeSides} label={categoryName} allowEmpty={false} value={wanted} onChange={v => { if (v) switchTo(kind, category, v); }} />
                 <span>구함</span>
-            </div> : <div className="chip-scroll">{categories.map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
+            </div> : <div className="chip-scroll">{[...hasAllCategory(kind) ? [ALL_CATEGORY] : [], ...categories].map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
         </div>}
         {proxyLocked && <div className="board-notice"><CIcon name={KIND_ICONS.proxy_offer} size={28} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
 
@@ -472,7 +575,7 @@ export function Board() {
                 <div className="list-top">
                     <form className="search-input" role="search" onSubmit={submit}>
                         <Search size={20} />
-                        <input value={q} onChange={e => setQ(e.target.value)} placeholder={kind === 'all' ? '스킨, 제목, 닉네임 (예: 악주, 뱀동)' : `${KIND_NAMES[kind]} 글 검색`} aria-label="검색어" />
+                        <input value={q} onChange={e => setQ(e.target.value)} placeholder={kind === 'all' ? '스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)' : `${KIND_NAMES[kind]} 글 검색`} aria-label="검색어" />
                         {q && <button type="button" className="icon-btn" aria-label="검색어 지우기" onClick={() => { setQ(''); update({ q: '' }); }}><X size={18} /></button>}
                     </form>
                     {filters && <button type="button" className="btn btn-line filter-open" onClick={() => setSheet(true)}><SlidersHorizontal size={18} />필터{chips.length > 0 && <b className="filter-count">{chips.length}</b>}</button>}

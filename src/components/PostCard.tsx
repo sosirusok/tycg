@@ -2,16 +2,16 @@ import type { ReactNode } from 'react';
 import { Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, KIND_NAMES, LATEST_SEASON, accountSummary, categoryName, exchangeLabel, listingPrice, priceLabel, priceText, relativeTime, statusName,
+    CLAN_MIN_SEASON, KIND_ICONS, KIND_NAMES, LATEST_SEASON, accountSummary, categoryName, clanTierName, exchangeLabel, featureTags, listingPrice, priceLabel, priceText, relativeTime, statusName,
     type Post, type SeasonTag,
 } from '../../shared/market';
-import { groupLadders } from '../../shared/ladder';
+import { clanTiersDesc, groupLadders } from '../../shared/ladder';
 import { Link, navigate } from '../lib/router';
 import { api, errorText, imageUrl } from '../lib/api';
 import { useApp } from '../app/state';
 import { CIcon, DataItems, NameLine } from './ui';
 import { titleTier } from '../../shared/membership';
-import { LadderTags, hasLadder } from './LadderTags';
+import { FeatureTags, LadderTags, hasLadder } from './LadderTags';
 
 export function postSummary(post: Post) {
     const d = post.details;
@@ -25,8 +25,17 @@ export function postSummary(post: Post) {
 // What an exchange post wants in return, in the same short form as the offered side:
 // the ladders per tier ('모든 시즌 챔피언', '마스터 18시즌 외 1', WP68) and the other conditions, kept
 // apart so the detail page can show them on two lines.
-export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags'>, latest = LATEST_SEASON): [string[], string[]] {
+// A 교환 that asks for a clan shows the clan tiers it wants ('클랜 골드 28~32시즌', WP70) and the wanted
+// 현재 클랜 티어.
+export function wantedSummary(post: Pick<Post, 'details' | 'wanted_tags' | 'wanted_clan_tags'>, latest = LATEST_SEASON, clanMin = CLAN_MIN_SEASON): [string[], string[]] {
     const d = post.details;
+    if (d.wantedCategory === 'clan') {
+        const groups = groupLadders(post.wanted_clan_tags, null, latest, clanTiersDesc(clanMin)).map(g => g.label);
+        const clanLadder = groups.slice(0, 2);
+        if (groups.length > 2) clanLadder[1] += ` 외 ${groups.length - 2}`;
+        const tier = clanTierName(d.wantedClanTier || '');
+        return [clanLadder, tier ? [`현재 클랜 ${tier}`] : clanLadder.length ? [] : [categoryName('clan')]];
+    }
     if (d.wantedCategory !== 'account') return [[], [categoryName(d.wantedCategory || 'account')]];
     const unprefixed: Record<string, string> = {};
     for (const [k, v] of Object.entries(d)) if (k.startsWith('wanted') && k !== 'wantedCategory') unprefixed[k[6].toLowerCase() + k.slice(7)] = v;
@@ -69,7 +78,7 @@ export function PriceLine({ post, large = false }: { post: Post; large?: boolean
         {dealState}
     </div>;
     if (post.kind === 'exchange') {
-        const [ladder, conditions] = wantedSummary(post, config.latestSeason);
+        const [ladder, conditions] = wantedSummary(post, config.latestSeason, config.clanMinSeason);
         const lines = large ? [ladder, conditions].filter(l => l.length) : [[...ladder, ...conditions].slice(0, CARD_ITEMS)].filter(l => l.length);
         return <div className={'price price-exchange' + (large ? ' price-lg' : '')}>
             <span className="price-label">원하는 {categoryName(post.details.wantedCategory || 'account')}</span>
@@ -92,6 +101,13 @@ export function PriceLine({ post, large = false }: { post: Post; large?: boolean
     </div>;
 }
 
+// The card's tier pills: the personal ladder (WP68), or on a clan post its 현재 클랜 티어 then its 클랜 래더 (WP70).
+function CardLadder({ post, highlight, max }: { post: Post; highlight?: SeasonTag[]; max: number }) {
+    if (post.category === 'clan') return <LadderTags bare clan tags={post.clan_tags} lead={clanTierName(post.details.clanTier || '') ? post.details.clanTier : undefined} max={max} />;
+    return <LadderTags bare tags={post.tags} hidden={post.ladder_hidden} highlight={highlight} max={max} />;
+}
+const hasCardLadder = (post: Post) => post.category === 'clan' ? !!post.clan_tags?.length || !!clanTierName(post.details.clanTier || '') : hasLadder(post.tags, post.ladder_hidden);
+
 // Time shown on a row: the last 끌올 for a bumped post (or a relist at its place), else when it was
 // written. A new post placed ahead of now (새 글 우선) never reads '끌올 방금 전'.
 export function postTime(p: Pick<Post, 'created_at' | 'bumped_at' | 'bump_count'>, now = Date.now()) {
@@ -111,7 +127,7 @@ export function listPhoto(post: Pick<Post, 'images' | 'thumb' | 'photo_count'>) 
 export function PostCard({ post, highlight = [], onChange, showKind = true, hideAuthor = false, flag }: { post: Post; highlight?: SeasonTag[]; onChange?: () => void; showKind?: boolean; hideAuthor?: boolean; flag?: ReactNode }) {
     const { me, requireLogin } = useApp();
     const href = '/posts/' + post.id;
-    const ladder = hasLadder(post.tags, post.ladder_hidden);
+    const ladder = hasCardLadder(post), tags = featureTags(post.details.featureTags);
     const summary = postSummary(post);
     // Logged-out members log in first; the heart is then saved for the post they clicked.
     const favorite = () => requireLogin(u => { if (u.id !== post.author_id) void save(); });
@@ -143,9 +159,11 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             <h3 className={'post-card-title ' + titleClass(post)}><Link to={href}>{post.title}</Link></h3>
             {(ladder || summary.length > 0) && <div className={'post-card-specs' + (ladder ? ' has-ladder' : '')}>
                 {/* One tier pill per tier (WP68), the board's ladder filter first, then '+N'. */}
-                {ladder && <LadderTags bare tags={post.tags} hidden={post.ladder_hidden} highlight={highlight} max={3} />}
+                {ladder && <CardLadder post={post} highlight={highlight} max={3} />}
                 {summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, CARD_ITEMS)} /></span>}
             </div>}
+            {/* 특징 태그 (WP70): '#불새상류'. */}
+            <FeatureTags tags={tags} max={3} className="post-card-tags" />
             <div className="post-card-bottom">
                 <PriceLine post={post} />
                 {!hideAuthor && <div className="post-card-author">
@@ -171,12 +189,12 @@ export function AppraisedLine({ post }: { post: Pick<Post, 'appraised'> }) {
 // href: the link (the home '엘리트 매물' row passes '?from=ad', WP53).
 export function MiniCard({ post, href = '/posts/' + post.id }: { post: Post; href?: string }) {
     const summary = postSummary(post);
-    const ladder = hasLadder(post.tags, post.ladder_hidden);
+    const ladder = hasCardLadder(post);
     const { thumb, thumbSrc, count } = listPhoto(post);
     const head = <>
         <div className="post-card-meta"><CIcon name={KIND_ICONS[post.kind]} size={18} /><span>{tradeLabel(post)}</span><span className="post-card-time">{postTime(post)}</span></div>
         <h3 className={'mini-card-title ' + titleClass(post)}>{post.title}</h3>
-        {(ladder || summary.length > 0) && <div className={'post-card-specs' + (ladder ? ' has-ladder' : '')}>{ladder && <LadderTags bare tags={post.tags} hidden={post.ladder_hidden} max={2} />}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
+        {(ladder || summary.length > 0) && <div className={'post-card-specs' + (ladder ? ' has-ladder' : '')}>{ladder && <CardLadder post={post} max={2} />}{summary.length > 0 && <span className="spec"><DataItems items={summary.slice(0, 2)} /></span>}</div>}
     </>;
     // With a photo the text and the 64px 대표 sit side by side (grid 1fr 64px); without one it stays text only.
     return <Link to={href} className={'mini-card' + (post.status === 'closed' ? ' is-closed' : '')}>

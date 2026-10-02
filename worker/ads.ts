@@ -108,19 +108,22 @@ export function pickSimilar<T extends AdRow & { category: string }>(rows: T[], p
     return rotate(pool, `${Math.floor(now / ROTATE_MS)}:similar:${post.id}`, SIMILAR_SIZE);
 }
 
-// The home '엘리트 매물' row: 엘리트 and above across every tab.
+// The home '엘리트 매물' row: 엘리트 and above, 판매 posts only (WP70: 판매중 accounts and other 판매 listings;
+// 구매, 교환 and 대리 ads stay in their own boards' box), read through posts_ad (kind, featured_at).
 export function homeAdsStatement(u: User | null, now: number) {
     const f = baseFilters(u, null, now), base = adFilters(f.where, f.values), w = adWhere(now, 3);
-    return db().prepare(`${adSelect()} WHERE ${w.sql} AND ${base.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...w.args, ...base.values);
+    return db().prepare(`${adSelect()} WHERE p.kind='sell' AND ${w.sql} AND ${base.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...w.args, ...base.values);
 }
 // The home row's 6 cards, and up to 3 posts for the home bottom card that are never a post of the row:
 // other advertisers first (the rotation's next ones), then another slot post of an advertiser already in
 // the row (each within its grade's slots), in the same seeded order. No other slot post, no card.
 export const HOME_CARD_EXTRA = 3;
+const isAccount = (r: object) => (r as { category?: string }).category === 'account';
 export function pickHome<T extends AdRow>(rows: T[], now: number) {
     const seed = `${Math.floor(now / ROTATE_MS)}:home`;
     const picked = rotate(rows, seed, HOME_SIZE + HOME_CARD_EXTRA);
-    const row = picked.slice(0, HOME_SIZE), card = picked.slice(HOME_SIZE);
+    // 계정 first, then the other 판매 categories, each in the rotation's order (WP70).
+    const row = picked.slice(0, HOME_SIZE).sort((a, b) => Number(isAccount(b)) - Number(isAccount(a))), card = picked.slice(HOME_SIZE);
     if (card.length < HOME_CARD_EXTRA) {
         const taken = new Set(picked.map(r => r.id)), counted = new Map<string, number>();
         const more = [...rows].sort((a, b) => (b.featured_pin - a.featured_pin) || (b.featured_at - a.featured_at)).filter(r => {

@@ -6,15 +6,19 @@
 // otherwise '챌린저 23~32, 20, 18시즌' (consecutive seasons as low~high ranges, newest first). 시즌 비공개
 // (hidden emblems of a known tier and unknown season, seller side only) adds ' · 시즌 비공개 2', or reads
 // '마스터 시즌 비공개 2' without visible seasons.
-import { LATEST_SEASON, TIERS, type SeasonTag } from './market';
+import { CLAN_MIN_SEASON, CLAN_TIERS, LATEST_SEASON, TIERS, type SeasonTag } from './market';
 
 // 시즌 비공개 per tier id: { master: 2 }.
 export type LadderHidden = Record<string, number>;
 export const HIDDEN_MAX = 99;
 
-type Tier = { readonly id: string; readonly name: string; readonly min: number };
+export type Tier = { readonly id: string; readonly name: string; readonly min: number };
 // Every ladder display lists the highest tier first: 챔피언, 챌린저, 마스터 … 아이언.
 export const TIERS_DESC = [...TIERS].reverse();
+// 클랜 래더 (WP70): the clan tiers highest first, each from the first clan-ladder season, named '클랜 골드'
+// so a pill reads '모든 시즌 클랜 챔피언' or '클랜 골드 28~32시즌'. short: the bare tier name for chips.
+export const clanTiersDesc = (min = CLAN_MIN_SEASON): (Tier & { short: string; rank: string })[] =>
+    [...CLAN_TIERS].reverse().map(t => ({ id: t.id, name: '클랜 ' + t.name, short: t.name, rank: t.rank, min }));
 
 export type LadderGroup = {
     tier: string;
@@ -71,8 +75,8 @@ export function ladderText(tags: readonly SeasonTag[] | undefined, hidden?: Ladd
 
 // The tiers a search filter covers completely (every season from the tier's first to the latest): the
 // '모든 시즌 T' intent, which also finds 시즌 비공개 emblems of T (their season is unknown).
-export function fullTiers(tags: readonly SeasonTag[], latest = LATEST_SEASON) {
-    return TIERS.filter(t => {
+export function fullTiers(tags: readonly SeasonTag[], latest = LATEST_SEASON, tiers: readonly Tier[] = TIERS) {
+    return tiers.filter(t => {
         const span = latest - t.min + 1;
         return span > 0 && new Set(tags.filter(v => v.tier === t.id && v.season >= t.min && v.season <= latest).map(v => v.season)).size === span;
     }).map(t => t.id);

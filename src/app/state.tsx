@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from '../../shared/market';
-import { LATEST_SEASON } from '../../shared/market';
+import { CLAN_MIN_SEASON, LATEST_SEASON } from '../../shared/market';
 import type { ApplicationKind, PlanId, TrialState } from '../../shared/membership';
 import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
 
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[] };
+// clanMinSeason: the first clan-ladder season (WP70, manager setting).
+export type SiteConfig = { latestSeason: number; clanMinSeason?: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[] };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -93,7 +94,7 @@ export function useAdaptivePoll(poll: () => void, enabled: boolean) {
     }, [enabled]);
 }
 
-const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };
+const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, clanMinSeason: CLAN_MIN_SEASON, paymentNotice: '', manager: null };
 
 export function AppProvider({ children }: { children: ReactNode }) {
     const [me, setMe] = useState<User | null>(null);
