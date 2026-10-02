@@ -70,6 +70,7 @@ const FREE_ITEMS = [
     '판매자 구독',
     '거래 기록·후기',
     '신고·차단',
+    '공유·카톡 미리보기',
 ];
 
 export default function Guide() {

@@ -321,7 +321,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,u.ad_off,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,u.ad_off,u.avatar_thumb,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
             const [grants, badges, apps, sanctions, trades, tradeCounts] = await db().batch([

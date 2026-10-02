@@ -69,10 +69,12 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             db().prepare("SELECT COUNT(*) AS n FROM service_requests WHERE status='open'"),
             // '자동 끌올 어제 46번 · 지연 120번' (WP52), written by the daily cron.
             db().prepare("SELECT value FROM settings WHERE key='sys:auto_stats'"),
+            // The '비밀번호 재설정' tab's count (WP59).
+            db().prepare("SELECT COUNT(*) AS n FROM reset_requests WHERE status='pending'"),
         ]);
         let auto: { done: number; delayed: number } | null = null;
         try { const v = JSON.parse((r[5].results[0] as { value: string } | undefined)?.value || 'null'); if (v) auto = { done: Number(v.done) || 0, delayed: Number(v.delayed) || 0 }; } catch { /* none yet */ }
-        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n, openServices: (r[4].results[0] as any).n,
+        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n, openServices: (r[4].results[0] as any).n, pendingResets: (r[6].results[0] as any).n,
             usage: { relistsYesterday: (r[3].results[0] as any).n, autoYesterday: auto } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
@@ -156,6 +158,26 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             else await db().prepare('INSERT INTO notices(title,body,created_at,updated_at) VALUES(?,?,?,?)').bind(title, content, Date.now(), Date.now()).run();
             return json({ ok: true });
         }
+    }
+    // 비밀번호 재설정 (WP59): the pending 비밀번호 찾기 requests, newest first, each with the member the id
+    // names (none: '회원 없음'; a member who left counts as none) and whether they hold 본인 인증. The
+    // manager issues a temporary password (POST manage/users/:id/password) and marks the request done.
+    if (p[1] === 'reset-requests' && !p[2] && method === 'GET') {
+        const r = await db().prepare(`SELECT r.id,r.username,r.contact,r.created_at,m.id AS user_id,m.nickname,m.role,
+                EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=m.id AND b.badge='identity') AS identity
+            FROM reset_requests r LEFT JOIN users m ON m.username=r.username AND m.deleted_at IS NULL
+            WHERE r.status='pending' ORDER BY r.created_at DESC LIMIT 100`).all<any>();
+        return json({ requests: r.results.map(row => ({ ...row, identity: !!row.identity })) });
+    }
+    if (p[1] === 'reset-requests' && p[2] && !p[3] && method === 'PATCH') {
+        const r = await db().prepare("UPDATE reset_requests SET status='done',done_at=? WHERE id=? AND status='pending'").bind(Date.now(), p[2]).run();
+        if (!r.meta.changes) fail(404, '요청을 찾을 수 없습니다.');
+        return json({ ok: true });
+    }
+    // '프로필 사진 삭제' (WP59) from the member panel; the photo then falls to the unused-photo cleanup.
+    if (p[1] === 'users' && p[2] && p[3] === 'avatar' && !p[4] && method === 'DELETE') {
+        await db().prepare('UPDATE users SET avatar_id=NULL,avatar_thumb=NULL WHERE id=?').bind(p[2]).run();
+        return json({ ok: true });
     }
     return manageMembers(req, u, p, url);
 }

@@ -8,8 +8,13 @@ export function CIcon({ name, size = 24, alt = '' }: { name: string; size?: numb
     return <img className="cicon" src={`/icons/${name}.svg`} width={size} height={size} alt={alt} loading="lazy" decoding="async" />;
 }
 
-export function Avatar({ name, size = '' }: { name: string; size?: '' | 'sm' | 'lg' }) {
-    return <span className={'avatar' + (size ? ' avatar-' + size : '')} aria-hidden="true">{name.slice(0, 1)}</span>;
+// The member's 프로필 사진 (WP59) when src is given (the 64px inline copy in lists and rows, the 256px photo
+// on the profile head), else the initial letter; a photo that fails to load falls back to the letter.
+export function Avatar({ name, size = '', src }: { name: string; size?: '' | 'sm' | 'lg'; src?: string | null }) {
+    const [broken, setBroken] = useState<string | null>(null);
+    const cls = 'avatar' + (size ? ' avatar-' + size : '');
+    if (src && broken !== src) return <span className={cls + ' avatar-photo'} aria-hidden="true"><img src={src} alt="" decoding="async" onError={() => setBroken(src)} /></span>;
+    return <span className={cls} aria-hidden="true">{name.slice(0, 1)}</span>;
 }
 
 // Data items separated by ' · ', each kept whole so a line breaks only between items.

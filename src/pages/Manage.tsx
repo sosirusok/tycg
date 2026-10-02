@@ -7,10 +7,11 @@ import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
-import { MemberPanel } from '../components/MemberPanel';
+import { MemberPanel, TempPassword } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
+import { RichBody } from '../components/RichBody';
 
-type TabId = 'applications' | 'services' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
+type TabId = 'applications' | 'services' | 'members' | 'resets' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
@@ -24,8 +25,8 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
-    const tab = (['applications', 'services', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
+    const tab = (['applications', 'services', 'members', 'resets', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
+    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; pendingResets?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
@@ -37,6 +38,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
             { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
             { id: 'services', label: <>중개·가측{summary?.openServices ? <b>{summary.openServices}</b> : null}</> },
             { id: 'members', label: '회원' },
+            { id: 'resets', label: <>비밀번호 재설정{summary?.pendingResets ? <b>{summary.pendingResets}</b> : null}</> },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
         ]} /></div>
@@ -44,6 +46,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
             {tab === 'applications' ? <Applications onChange={loadSummary} />
                 : tab === 'services' ? <Services onChange={loadSummary} />
                 : tab === 'members' ? <Members />
+                : tab === 'resets' ? <Resets onChange={loadSummary} />
                 : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
                 : tab === 'notices' ? <Notices /> : <Settings usage={summary?.usage} />}
@@ -126,6 +129,43 @@ function Services({ onChange }: { onChange: () => void }) {
         </Modal>
         <Modal open={!!cancelling} onClose={() => { if (!busy) setCancelling(null); }} title="신청 취소" description={cancelling ? `${cancelling.nickname}님의 ${SERVICE_NAMES[cancelling.kind]} 신청${cancelling.coupon ? ' · 무료 쿠폰은 돌려줍니다.' : ''}` : ''}
             footer={<><button className="btn btn-line" disabled={!!busy} onClick={() => setCancelling(null)}>닫기</button><button className="btn btn-dark" disabled={!!busy} onClick={() => cancelling && decide(cancelling, 'cancel')}>신청 취소</button></>} />
+    </>;
+}
+
+// 비밀번호 재설정 (WP59): pending 비밀번호 찾기 requests, newest first. '회원 있음' names the member (with 본인
+// 인증 or not, to judge the request); the temporary password goes to '연락받을 곳', then '처리 완료'.
+type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean };
+function Resets({ onChange }: { onChange: () => void }) {
+    const [rows, setRows] = useState<ResetRow[] | null>(null), [busy, setBusy] = useState(0), [member, setMember] = useState<string | null>(null);
+    // The request whose member gets a temporary password; it stays set so the password stays on screen.
+    const [target, setTarget] = useState<ResetRow | null>(null), [confirming, setConfirming] = useState(false);
+    const load = useCallback(() => api<{ requests: ResetRow[] }>('manage/reset-requests').then(d => setRows(d.requests)).catch(e => toast.error(errorText(e))), []);
+    useEffect(() => { void load(); }, [load]);
+    async function done(r: ResetRow) {
+        if (busy) return;
+        setBusy(r.id);
+        try { await api('manage/reset-requests/' + r.id, 'PATCH', { status: 'done' }); toast('처리 완료'); void load(); onChange(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(0); }
+    }
+    if (!rows) return <SkeletonRows count={3} height={72} />;
+    return <>
+        {rows.length ? <ul className="simple-list">{rows.map(r => <li key={r.id}>
+            <span className="grow">
+                <span className="row small"><strong>@{r.username}</strong><span className={'tag' + (r.user_id ? '' : ' tag-line')}>{r.user_id ? '회원 있음' : '회원 없음'}</span>
+                    {r.user_id && <><button type="button" className="link-btn" onClick={() => setMember(r.user_id)}>{r.nickname}</button><span className="muted">{r.identity ? '본인 인증' : '본인 인증 없음'}</span></>}</span>
+                <span className="small reset-contact">연락받을 곳: <RichBody text={r.contact} /></span>
+                <span className="muted small">{relativeTime(r.created_at)}</span>
+            </span>
+            <span className="report-actions">
+                {r.user_id && r.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
+                <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => void done(r)}>처리 완료</button>
+            </span>
+        </li>)}</ul> : <EmptyState icon="file" title="대기 중인 요청이 없습니다" />}
+        {target?.user_id && <TempPassword userId={target.user_id} open={confirming} onClose={() => setConfirming(false)} hint="연락받을 곳으로 전달">
+            <p className="small">@{target.username} · {target.nickname}</p>
+        </TempPassword>}
+        <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} />}</Modal>
     </>;
 }
 

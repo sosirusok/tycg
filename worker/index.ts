@@ -6,6 +6,7 @@ import { meterOn, metered } from './meter';
 import { allowKvTestFailure } from './storage';
 import { bumpJob, dropJob, remindJob, TICK_A, TICK_B, type TickShare } from './automation';
 import { alertJob } from './alerts';
+import { sharePage } from './share';
 
 // Three cron triggers (wrangler.jsonc): tick A (자동 끌올), tick B ('끌올 가능' 알림 and 새 글 알림) and the daily cleanup
 // (any other expression, as the tests send). With TEST_HOOKS=on (local tests only) the ticks take the
@@ -42,11 +43,15 @@ async function scheduledRun(run: () => Promise<unknown>) {
 }
 
 // Static files are served by Workers Static Assets before this Worker runs
-// (see "run_worker_first" in wrangler.jsonc). Only /api/* reaches this handler.
+// (see "run_worker_first" in wrangler.jsonc). Only /api/* and the share address /p/* (WP59: the
+// post's og: tags in index.html) reach this handler.
 export default {
     async fetch(request, env) {
         const url = new URL(request.url);
         if (url.pathname.startsWith('/api/')) return handleApi(request);
+        // Local test servers run without static assets (scripts/test-local.mjs), so without the binding too.
+        if (!env.ASSETS) return new Response('Not found', { status: 404 });
+        if (url.pathname.startsWith('/p/') && (request.method === 'GET' || request.method === 'HEAD')) return sharePage(request, env.ASSETS);
         return env.ASSETS.fetch(request);
     },
     async scheduled(controller, _env, ctx) {

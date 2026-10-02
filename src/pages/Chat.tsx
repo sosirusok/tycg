@@ -19,10 +19,12 @@ import { CompleteSheet } from '../components/CompleteSheet';
 import { ServiceSheet } from '../components/ServiceSheet';
 import { RichBody } from '../components/RichBody';
 
-type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null };
+type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null;
+    // 프로필 사진 (WP59): the 64px copy, inline.
+    avatar_thumb?: string };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
-type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean };
+type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean; avatar_thumb?: string };
 // The post the chat is about, pinned under the room header.
 type Listing = { id: number; title: string; kind: string; category?: string; price: number | null; price_mode: string; status: string; closed_at?: number | null; thumb: string | null; author_id: string; currentOffer: number | null; canAsk?: boolean; hidden?: boolean };
 type ChatFilter = 'all' | 'applications';
@@ -152,7 +154,7 @@ export default function Chat({ id }: { id?: string }) {
                     : chats === null ? <div className="grid-gap-8" style={{ padding: 16 }}>{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 64 }} />)}</div>
                     : chats.length === 0 ? (view === 'applications' ? <EmptyState title="대기 중인 신청이 없습니다" /> : <EmptyState icon="message" title="채팅 내역이 없습니다" />)
                     : <ul>{chats.map(c => <li key={c.id}><Link to={'/chat/' + c.id} className={'chat-item' + (c.id === id ? ' is-active' : '')} aria-current={c.id === id ? 'page' : undefined}>
-                        <Avatar name={c.nickname} />
+                        <Avatar name={c.nickname} src={c.avatar_thumb} />
                         {/* Time top-right and the unread count bottom-right of the text column; the post's photo sits outside it. */}
                         <span className="chat-item-main">
                             <span className="chat-item-top"><NameLine nickname={c.nickname} grade={c.grade} trial={c.grade_trial} role={c.role} badges={c.badges} compact /><time className="chat-item-time">{relativeTime(c.updated_at)}</time></span>
@@ -450,7 +452,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
             <header className="room-head">
                 <Link to="/chat" className="icon-btn room-back" aria-label="채팅 목록"><ArrowLeft size={22} /></Link>
                 {partner?.deleted ? <span className="room-who"><Avatar name={partner.nickname} size="sm" /><span>{partner.nickname}</span></span>
-                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" /><span className="room-who-text">
+                    : partner ? <Link to={'/profile/' + partner.id} className="room-who"><Avatar name={partner.nickname} size="sm" src={partner.avatar_thumb} /><span className="room-who-text">
                         <NameLine nickname={partner.nickname} grade={partner.grade} trial={partner.grade_trial} role={partner.role} badges={partner.badges} compact />
                         {partner.last_seen_at && <span className="room-seen">{lastSeenText(partner.last_seen_at)}</span>}
                     </span></Link> : <span className="grow" />}

@@ -140,6 +140,8 @@ function partner(row: any) {
     const { deleted_at, suspended_until, ...rest } = row;
     const m: Record<string, unknown> = withMember(rest);
     delete m.grade_expires_at;
+    // 프로필 사진 (WP59): the 64px copy inline, so the list and the room header make no image request.
+    if (!m.avatar_thumb || deleted_at) delete m.avatar_thumb;
     if (deleted_at) { m.nickname = WITHDRAWN_NAME; m.deleted = true; delete m.last_seen_at; }
     // The room shows '이용 제한 회원입니다' over a partner under 이용 정지 (the end date stays private).
     else if (isSuspended(suspended_until)) m.suspended = true;
@@ -174,7 +176,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         const sinceRaw = url.searchParams.get('since'), since = sinceRaw === null ? 0 : Number(sinceRaw);
         if (!Number.isSafeInteger(since) || since < 0) fail(400, '채팅 목록 조건을 확인해 주세요.');
         const at = Date.now();
-        const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,${memberColumns('u')},${preview} AS last_message,
+        const r = await db().prepare(`SELECT c.id,c.updated_at,u.id AS partner_id,u.nickname,u.role,u.deleted_at,u.avatar_thumb,${memberColumns('u')},${preview} AS last_message,
             CASE WHEN c.user_a=? THEN c.a_unread ELSE c.b_unread END AS unread,
             (SELECT COUNT(*) FROM applications a WHERE a.conversation_id=c.id AND a.status='pending') AS pending_applications,
             lp.title AS last_post_title,json_extract(lp.images,'$[0]') AS last_post_thumb
@@ -206,7 +208,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
     if (p[1] && !p[2] && method === 'GET') {
         const c = await chatMember(p[1], u.id), partnerId = c.user_a === u.id ? c.user_b : c.user_a;
         // The room header also shows the partner's '최근 접속' (last_seen_at); the chat list leaves it out.
-        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,u.suspended_until,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
+        const other = await db().prepare(`SELECT u.id,u.nickname,u.role,u.created_at,u.deleted_at,u.last_seen_at,u.suspended_until,u.avatar_thumb,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(partnerId).first<any>();
         return json({ chat: { id: c.id, partner: other ? partner(other) : null, blocked: await blocked(c.user_a, c.user_b), listing: await chatListing(c.id, u) } });
     }
     if (p[1] && p[2] === 'messages') {

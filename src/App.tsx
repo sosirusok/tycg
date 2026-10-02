@@ -74,8 +74,11 @@ function CappedNotice({ home }: { home: boolean }) {
 
 function Shell() {
     const { me, unread, alerts, requireLogin, openAuth, openApply, logout } = useApp();
-    const { path, params, parts } = useLocation();
-    const page = parts[0] || '';
+    const { path, params, parts, search } = useLocation();
+    // The share address /p/:id (WP59: the Worker gave it the post's og: tags) shows the post and is
+    // replaced with /posts/:id below.
+    const shared = parts[0] === 'p' && !!parts[1];
+    const page = shared ? 'posts' : parts[0] || '';
     const write = writeHref(params, path);
     // Stored while rendering, so the links below already point at the board on screen.
     if (page === 'trade') rememberBoard(params);
@@ -106,11 +109,12 @@ function Shell() {
         if (y !== null) window.scrollTo(0, y);
     }, [path, params, page]);
 
-    // Links from the previous version (board at "/?kind=…", "/activity/…").
+    // Links from the previous version (board at "/?kind=…", "/activity/…"), and the share address.
     useEffect(() => {
         if (path === '/' && params.get('kind')) void navigate('/trade?' + params.toString(), { replace: true, force: true });
         if (page === 'activity') void navigate('/me/' + (parts[1] || 'posts'), { replace: true, force: true });
-    }, [path, params, page, parts]);
+        if (shared) void navigate('/posts/' + parts[1] + search, { replace: true, force: true });
+    }, [path, params, page, parts, shared, search]);
 
     const go = (to: string) => requireLogin(() => void navigate(to));
     // 대리(진행) needs 대리 인증; without it the button opens the application instead of the form.

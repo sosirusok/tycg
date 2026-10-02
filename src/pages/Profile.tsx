@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Ban, Bell, BellRing, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { ALERT_TEXT, BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
-import { ApiError, api, errorText } from '../lib/api';
+import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
@@ -20,7 +20,9 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 // tradeCount, dealSum (거금), goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
 type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean;
     // 판매자 구독 (WP54): whether the viewer follows the member, '구독 허용', and (own profile) the follower count.
-    followed?: boolean; follow_allowed?: boolean; follower_count?: number };
+    followed?: boolean; follow_allowed?: boolean; follower_count?: number;
+    // 프로필 사진 (WP59): the 256px photo for the head and its 64px copy; none: the initial letter.
+    avatar_id?: string; avatar_thumb?: string };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
 // brokered: the trade of the 후기 was brokered by the manager (운영진 중개, WP65).
 type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean; brokered?: number };
@@ -45,6 +47,8 @@ export default function ProfilePage({ id }: { id?: string }) {
     // Counts list resets (tab switch, profile save), so a '더 보기' page for an old list is dropped.
     const listGen = useRef(0);
     const [account, setAccount] = useState<'' | 'password' | 'withdraw'>(''), [reporting, setReporting] = useState(false);
+    // 프로필 사진 (WP59): the owner picks a photo from the head (or the 프로필 수정 sheet); it is cut to a square.
+    const avatarInput = useRef<HTMLInputElement>(null), [avatarBusy, setAvatarBusy] = useState(false);
     const mine = me?.id === id;
 
     useEffect(() => {
@@ -90,6 +94,22 @@ export default function ProfilePage({ id }: { id?: string }) {
         } catch (e) { setEditError(errorText(e)); }
         finally { setSaving(false); }
     }
+    async function pickAvatar(file: File | undefined) {
+        if (avatarInput.current) avatarInput.current.value = '';
+        if (!file || avatarBusy) return;
+        setAvatarBusy(true);
+        try { const d = await setAvatar(file); setUser(v => v && { ...v, avatar_id: d.avatar_id, avatar_thumb: d.avatar_thumb }); toast('사진 변경 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAvatarBusy(false); }
+    }
+    async function removeAvatar() {
+        if (avatarBusy) return;
+        setAvatarBusy(true);
+        try { await api('me/avatar', 'DELETE'); setUser(v => v && { ...v, avatar_id: undefined, avatar_thumb: undefined }); toast('사진 삭제 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAvatarBusy(false); }
+    }
+    const photo = user.avatar_id ? imageUrl(user.avatar_id) : null;
     // A member may change their nickname once every 30 days (the manager's is fixed).
     const nicknameLocked = !!user.nickname_next_at && user.nickname_next_at > Date.now();
     const chat = () => requireLogin(async () => {
@@ -148,7 +168,11 @@ export default function ProfilePage({ id }: { id?: string }) {
     const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
     return <div className="container page profile">
         <section className="profile-head">
-            <Avatar name={user.nickname} size="lg" />
+            {mine ? <button type="button" className="avatar-edit" aria-label="프로필 사진 변경" disabled={avatarBusy} onClick={() => avatarInput.current?.click()}>
+                <Avatar name={user.nickname} size="lg" src={photo} />
+                <span className="avatar-edit-badge" aria-hidden="true">{avatarBusy ? <LoaderCircle size={14} className="spin" /> : <Camera size={14} />}</span>
+            </button> : <Avatar name={user.nickname} size="lg" src={photo} />}
+            {mine && <input ref={avatarInput} type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={e => void pickAvatar(e.target.files?.[0])} />}
             <div className="grow">
                 <NameLine nickname={user.nickname} grade={user.grade} trial={user.grade_trial} role={user.role} badges={user.badges} size="lg" />
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
@@ -217,6 +241,10 @@ export default function ProfilePage({ id }: { id?: string }) {
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>
             <div className="form-stack">
+                <div className="field"><span className="field-label">프로필 사진</span>
+                    <div className="avatar-row"><Avatar name={user.nickname} src={user.avatar_thumb} />
+                        <button type="button" className="btn btn-line btn-sm" disabled={avatarBusy} onClick={() => avatarInput.current?.click()}>사진 변경</button>
+                        {photo && <button type="button" className="btn btn-text small" disabled={avatarBusy} onClick={() => void removeAvatar()}>사진 삭제</button>}</div></div>
                 <div className="field"><label className="field-label" htmlFor="profile-nickname">닉네임</label>
                     <input id="profile-nickname" className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager' || nicknameLocked} aria-describedby={user.role === 'manager' ? undefined : 'profile-nickname-hint'} />
                     {user.role !== 'manager' && <span id="profile-nickname-hint" className="field-hint">{nicknameLocked ? `${monthDay(user.nickname_next_at!)}부터 변경 가능` : '30일에 한 번 변경 가능'}</span>}</div>
