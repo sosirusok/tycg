@@ -191,6 +191,9 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // server puts its card right before it. The param is then dropped from the address.
     const { params } = useLocation();
     const aboutPost = useRef(params.get('post'));
+    // '채팅 보내기' from a 자동 매칭 (WP58, /chat/:id?post=N&match=1): the post is the member's own, sent as a
+    // match with the first message (엘리트 and up, 20 a day).
+    const matchSend = useRef(params.get('match') === '1');
     const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), idle = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
     // The application template ApplyModal left for this room goes into the composer once.
     const takeDraft = () => {
@@ -299,14 +302,15 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         setSending(true);
         const postId = aboutPost.current && /^\d+$/.test(aboutPost.current) ? Number(aboutPost.current) : undefined;
         try {
-            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId });
+            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId, ...postId !== undefined && matchSend.current ? { match: true } : {} });
             if (postId !== undefined) forgetPost();
             setText(''); setPhotos([]); stick.current = true;
             await poll(); activity.current();
         } catch (err) {
             // A post that is gone (or not the partner's) must not block the chat: the next try goes
             // without it. Other errors, such as a message that is too long, keep the post for the retry.
-            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH)) forgetPost();
+            // A match send over the day's limit (429) or without the grade (403) goes on as a plain chat.
+            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH || (matchSend.current && (err.status === 429 || err.status === 403)))) forgetPost();
             toast.error(errorText(err));
         }
         finally { setSending(false); input.current?.focus(); }
@@ -314,8 +318,13 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // The post goes with one message only; the address loses the param too.
     function forgetPost() {
         aboutPost.current = null;
+        matchSend.current = false;
         const url = new URL(location.href);
-        if (url.searchParams.has('post')) { url.searchParams.delete('post'); history.replaceState(history.state, '', url.pathname + url.search + url.hash); }
+        if (url.searchParams.has('post') || url.searchParams.has('match')) {
+            url.searchParams.delete('post');
+            url.searchParams.delete('match');
+            history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+        }
     }
     function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send(); }

@@ -2,16 +2,17 @@ import { env } from 'cloudflare:workers';
 import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStatsStatement, tradeStatsOf, withMember, isSuspended, setting, mayHaveBlocks, digest, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
-    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName,
+    FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName, matchQuery,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
-import { AD_TEXT, SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
+import { AD_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
 import { favoritesNotify, notifyStatement } from './notifications';
-import { newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
+import { bulkAuto, newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
+import { MATCH_SCAN, pairSql, reachable } from './match';
 import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
@@ -927,6 +928,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     }
     const u = await requireUser(req);
     await limit('post:' + u.id, 50, 60000);
+    // 내 글 일괄 변경 (WP58).
+    if (p[1] === 'bulk' && !p[2] && method === 'POST') return bulkPosts(req, u);
     const existing = p[1] ? await visiblePost(p[1], u) : null;
     if (p[2] === 'favorite' && method === 'POST') {
         const b = await body(req);
@@ -942,6 +945,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         return json({ ok: true });
     }
     if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '권한이 없습니다.');
+    // The list behind a '맞는 구매 글' 알림 (WP58).
+    if (p[2] === 'matches' && method === 'GET') return matchesOf(u, existing, url);
     if (method === 'DELETE' && existing) {
         await db().prepare('DELETE FROM posts WHERE id=?').bind(existing.id).run();
         return json({ ok: true });
@@ -970,6 +975,147 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         await unfurlOnSave(req, id, v.content, u, !!v.linkPreview);
     }
     return res;
+}
+
+// 내 글 일괄 변경 (WP58): POST posts/bulk {action, ids} with at most BULK_MAX own posts, for every grade.
+// Each action is a fixed number of set-based statements in one batch (never one per post, so 30 posts stay
+// inside the Free plan's 50 queries a request), and the answer names what happened to every id:
+// {done: [ids], skipped: [{id, reason}]}, each reason the message the single-post route gives.
+// - bump: the posts that can be bumped, oldest bumped first, 1 끌올 each while the wallet holds; the
+//   UPDATE re-checks the gap, 새 글 우선 and the wallet inside the batch, so parallel requests never
+//   overspend. {all: true} instead of ids is '모두 끌올': every open post of the member until the wallet is
+//   empty; its skipped list starts with the most useful reason (the wallet, else the soonest post).
+// - close: 완료 without a trade record (one can still be asked for within 7 days, as after '사이트 밖 거래'):
+//   pending and accepted 제시 end with their line, 찜 members hear '판매완료 · 제목', 광고 and 가격 내리기 end.
+// - delete: as the single route. auto {on}: the 선택 bar's [자동 끌올] (엘리트 and up, worker/automation.ts).
+type BulkRow = { id: number; author_id: string; kind: string; status: string; hidden: number; bumped_at: number; created_at: number; bump_count: number };
+type Skip = { id: number; reason: string };
+async function bulkPosts(req: Request, u: User) {
+    const b = await body(req), now = Date.now(), action = b.action;
+    if (!['bump', 'close', 'delete', 'auto'].includes(action)) fail(400, BULK_TEXT.action);
+    const all = action === 'bump' && b.all === true;
+    let ids: number[] = [];
+    if (!all) {
+        if (!Array.isArray(b.ids) || !b.ids.length) fail(400, BULK_TEXT.none);
+        if (b.ids.length > BULK_MAX) fail(400, BULK_TEXT.max);
+        if (b.ids.some((x: unknown) => !Number.isSafeInteger(x) || (x as number) < 1)) fail(400, '게시글 번호를 확인해 주세요.');
+        ids = [...new Set(b.ids as number[])];
+    }
+    if (action === 'auto' && typeof b.on !== 'boolean') fail(400, '설정을 확인해 주세요.');
+    // 이용 정지 stops 끌올 and 자동 끌올; closing and deleting still work, as on one post.
+    if (action === 'bump' || action === 'auto') requireActive(u);
+    const cols = 'SELECT id,author_id,kind,status,hidden,bumped_at,created_at,bump_count FROM posts';
+    const [rowsR, walletR] = await db().batch([
+        all ? db().prepare(`${cols} INDEXED BY posts_author_status WHERE author_id=? AND status='open' AND hidden=0 ORDER BY bumped_at,id LIMIT 300`).bind(u.id)
+            : db().prepare(`${cols} WHERE id IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(ids)),
+        db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
+    ]);
+    const rows = new Map((rowsR.results as BulkRow[]).map(r => [r.id, r]));
+    if (all) ids = [...rows.keys()];
+    const skipped: Skip[] = [], mine: BulkRow[] = [];
+    for (const id of ids) {
+        const r = rows.get(id);
+        if (!r || (r.author_id !== u.id && r.hidden)) skipped.push({ id, reason: '게시글을 찾을 수 없습니다.' });
+        else if (r.author_id !== u.id) skipped.push({ id, reason: '권한이 없습니다.' });
+        else mine.push(r);
+    }
+    const list = (posts: BulkRow[]) => JSON.stringify(posts.map(r => r.id));
+    if (action === 'bump') return bulkBump(u, mine, skipped, walletR.results[0] as { bump_tokens: number; bump_at: number }, now);
+    if (action === 'close') return bulkClose(u, mine, skipped, now);
+    // done keeps the order of the request.
+    if (action === 'auto') {
+        const changed = new Set(mine.length ? await bulkAuto(u, list(mine), b.on, now) : []);
+        for (const r of mine) if (!changed.has(r.id)) skipped.push({ id: r.id, reason: '거래중인 글만 자동 끌올할 수 있습니다.' });
+        return json({ done: mine.filter(r => changed.has(r.id)).map(r => r.id), skipped });
+    }
+    const r = mine.length ? await db().prepare('DELETE FROM posts WHERE id IN (SELECT value FROM json_each(?)) AND author_id=? RETURNING id').bind(list(mine), u.id).all<{ id: number }>() : null;
+    const deleted = new Set(r ? r.results.map(x => x.id) : []);
+    for (const m of mine) if (!deleted.has(m.id)) skipped.push({ id: m.id, reason: '게시글을 찾을 수 없습니다.' });
+    return json({ done: mine.filter(m => deleted.has(m.id)).map(m => m.id), skipped });
+}
+
+async function bulkBump(u: User, mine: BulkRow[], skipped: Skip[], stored: { bump_tokens: number; bump_at: number }, now: number) {
+    const perks = perksOf(u), gapMs = perks.bumpGapMinutes * 60000;
+    const ready: BulkRow[] = [], later: (Skip & { at: number })[] = [];
+    for (const r of mine) {
+        if (r.status !== 'open' || r.hidden) { skipped.push({ id: r.id, reason: '거래중인 글만 끌올할 수 있습니다.' }); continue; }
+        if (r.kind === 'proxy_offer' && !canOfferProxy(u)) { skipped.push({ id: r.id, reason: '대리(진행) 글은 대리 인증 회원만 끌올할 수 있습니다.' }); continue; }
+        // As bumpPost words it: the blocker that ends last (새 글 우선 or the same-post gap).
+        const priorityEnd = r.bumped_at > now ? r.bumped_at : 0, gapEnd = (r.bump_count ? r.bumped_at : r.created_at) + gapMs;
+        if (priorityEnd && priorityEnd >= gapEnd) later.push({ id: r.id, reason: `새 글 우선 중인 글은 ${clock(priorityEnd)}부터 끌올할 수 있습니다.`, at: priorityEnd });
+        else if (gapEnd > now) later.push({ id: r.id, reason: `같은 글은 ${gapText(perks.bumpGapMinutes)}마다 끌올할 수 있습니다. (${clock(gapEnd)}부터 가능)`, at: gapEnd });
+        else ready.push(r);
+    }
+    const chosen = ready.sort((x, y) => x.bumped_at - y.bumped_at || x.id - y.id).slice(0, BULK_MAX);
+    const capped = Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000, ads = perks.adSlots;
+    const ids = JSON.stringify(chosen.map(r => r.id));
+    const moved = 'SELECT id FROM posts WHERE id IN (SELECT value FROM json_each(?)) AND author_id=? AND bumped_at=?', movedArgs = [ids, u.id, now];
+    // The posts move in the order of the list (oldest first) while the wallet holds; the wallet then
+    // spends exactly as many as moved, and each gets its 'bump' event.
+    const r = chosen.length ? await db().batch([
+        db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,touched_at=?,featured_at=CASE WHEN ?>0 AND featured_pin>=0 THEN ? ELSE featured_at END
+            WHERE id IN (SELECT id FROM (SELECT q.id,ROW_NUMBER() OVER (ORDER BY j.key) AS rn FROM json_each(?) j JOIN posts q ON q.id=j.value
+                WHERE q.author_id=? AND q.status='open' AND q.hidden=0 AND q.bumped_at<=? AND (CASE WHEN q.bump_count=0 THEN q.created_at ELSE q.bumped_at END)<=?)
+                ${capped ? `WHERE rn<=(SELECT ${WALLET_NOW} FROM users WHERE id=?)` : ''})`)
+            .bind(now, now, ads, now, ids, u.id, now, now - gapMs, ...capped ? [M, now, R, u.id] : []),
+        ...ads ? [adTrimStatement(u.id, ads)] : [],
+        db().prepare(`UPDATE post_auto SET bump_remind=0 WHERE post_id IN (${moved}) AND bump_remind>0`).bind(...movedArgs),
+        ...capped ? [db().prepare(`UPDATE users SET bump_tokens=${WALLET_NOW}-(SELECT COUNT(*) FROM (${moved})),
+            bump_at=CASE WHEN bump_tokens+CAST((?-bump_at)/? AS INTEGER)>=? THEN ? ELSE bump_at+CAST((?-bump_at)/? AS INTEGER)*? END
+            WHERE id=? AND EXISTS(${moved})`).bind(M, now, R, ...movedArgs, now, R, M, now, now, R, R, u.id, ...movedArgs)] : [],
+        db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at) SELECT ?,id,'bump',? FROM (${moved})`).bind(u.id, now, ...movedArgs),
+        db().prepare(moved).bind(...movedArgs),
+        db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
+    ]) : null;
+    // done in the order they went (oldest first).
+    const movedIds = new Set(r ? (r[r.length - 2].results as { id: number }[]).map(x => x.id) : []);
+    const done = chosen.filter(x => movedIds.has(x.id)).map(x => x.id);
+    const after = r ? r[r.length - 1].results[0] as { bump_tokens: number; bump_at: number } : stored;
+    const w = walletOf(after.bump_tokens, after.bump_at, perks, now);
+    const empty = w.tokens < 1 && w.nextRefillAt ? `끌올이 없습니다. ${clock(w.nextRefillAt)}에 1개 충전됩니다.` : '잠시 후 다시 시도해 주세요.';
+    const wallet = ready.filter(x => !done.includes(x.id)).map(x => ({ id: x.id, reason: empty }));
+    return json({ done, skipped: [...wallet, ...later.sort((x, y) => x.at - y.at).map(({ id, reason }) => ({ id, reason })), ...skipped], ...walletJson(after, perks, now) });
+}
+
+async function bulkClose(u: User, mine: BulkRow[], skipped: Skip[], now: number) {
+    const open = mine.filter(r => r.status !== 'closed'), perks = perksOf(u);
+    for (const r of mine) if (r.status === 'closed') skipped.push({ id: r.id, reason: '이미 완료된 글입니다.' });
+    const closed = 'SELECT id FROM posts WHERE id IN (SELECT value FROM json_each(?)) AND author_id=? AND closed_at=?', closedArgs = [JSON.stringify(open.map(r => r.id)), u.id, now];
+    // No partner is named, so an accepted 제시 ends too (COMPLETE_ENDS_OFFERS with null), the line first.
+    const ended = `post_id IN (${closed}) AND status IN ('pending','accepted')`;
+    const names = JSON.stringify(Object.fromEntries(TRADE_KINDS.map(k => [k, statusName(k, 'closed')])));
+    const r = open.length ? await db().batch([
+        db().prepare("UPDATE posts SET status='closed',closed_at=?,featured_at=NULL WHERE id IN (SELECT value FROM json_each(?)) AND author_id=? AND status!='closed'").bind(now, closedArgs[0], u.id),
+        db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT DISTINCT conversation_id,?,?,'system',NULL,'[]',? FROM offers WHERE ${ended}`).bind(u.id, OFFERS_ENDED_TEXT, now, ...closedArgs),
+        db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${ended})`).bind(now, ...closedArgs),
+        db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${ended}`).bind(now, ...closedArgs),
+        notifyStatement('fav_closed', `SELECT f.user_id,CAST(f.post_id AS TEXT) AS ref,f.post_id,p.author_id AS actor_id,COALESCE(json_extract(?,'$.'||p.kind),'')||' · '||p.title AS text
+            FROM favorites f JOIN posts p ON p.id=f.post_id WHERE f.post_id IN (${closed}) AND p.hidden=0`, [names, ...closedArgs], now),
+        db().prepare(`UPDATE post_auto SET drop_on=0 WHERE post_id IN (${closed}) AND drop_on=1`).bind(...closedArgs),
+        // 광고 (WP53): each freed slot takes the member's newest automatic open post.
+        ...Array.from({ length: perks.adSlots }, () => adFillStatement(u.id, perks.adSlots, now)),
+        db().prepare(closed).bind(...closedArgs),
+    ]) : null;
+    const closedIds = new Set(r ? (r[r.length - 1].results as { id: number }[]).map(x => x.id) : []);
+    const done = open.filter(o => closedIds.has(o.id)).map(o => o.id);
+    for (const o of open) if (!closedIds.has(o.id)) skipped.push({ id: o.id, reason: '이미 완료된 글입니다.' });
+    return json({ done, skipped });
+}
+
+// GET posts/:id/matches?from=<post id> (WP58): the posts of the other side that match the member's own open
+// 판매 or 구매 post (worker/match.ts), from the 알림's first match on (MATCH_SCAN ids, as the 알림함 counts
+// them), or without from in the board's 30 days; newest first, at most 20, as list rows.
+async function matchesOf(u: User, own: any, url: URL) {
+    if (own.kind !== 'sell' && own.kind !== 'buy') fail(400, MATCH_TEXT.kinds);
+    const now = Date.now(), from = Number(url.searchParams.get('from')), byId = Number.isSafeInteger(from) && from > 0;
+    const range = byId ? 'p.id>=? AND p.id<?' : 'p.kind=? AND p.category=? AND p.bumped_at>?';
+    const args = byId ? [from, from + MATCH_SCAN] : [own.kind === 'sell' ? 'buy' : 'sell', own.category, now - LIST_WINDOW];
+    const r = await db().prepare(`${postSelect} JOIN posts o ON o.id=? AND o.status='open' AND o.hidden=0 WHERE ${range} AND p.relist=0 AND p.status!='closed'
+        AND ${pairSql('o', 'p')} AND ${reachable('o.author_id', String(now))} ORDER BY p.bumped_at DESC,p.id DESC LIMIT 20`).bind(own.id, ...args).all();
+    // The own post comes along for the sheet's title and its '게시판에서 보기' link (the same board query as
+    // the '맞는 구매 글' link).
+    const [mine, ...posts] = await decorate([own, ...r.results as any[]], u);
+    return json({ posts, own: { id: mine.id, kind: mine.kind, title: mine.title, query: matchQuery(mine)?.query ?? null } });
 }
 
 type Valid = Awaited<ReturnType<typeof validatePost>>;

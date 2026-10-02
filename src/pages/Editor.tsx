@@ -156,6 +156,10 @@ export default function Editor({ id }: { id?: string }) {
     // A link to a 대리(진행) form without 대리 인증 opens 대리(구함) instead and offers the application.
     const proxyBlocked = !id && params.get('kind') === 'proxy_offer' && !!me && !proxyAllowed;
     const urlKind = isTradeKind(params.get('kind'));
+    // '다시 올리기' and '복사해서 새 글' (WP58): /write?from=<id> starts a new post from one of the member's
+    // own posts, with the photos the member still owns. Saving places it as WP44 decides (a relist of the
+    // same listing is a 끌올, or its old place inside the gap).
+    const fromId = !id && /^\d+$/.test(params.get('from') || '') ? params.get('from')! : null;
     const [initial] = useState(() => normalize({
         kind: proxyBlocked ? 'proxy_request' : urlKind ? params.get('kind') as TradeKind : 'sell',
         category: params.get('category') || undefined,
@@ -180,6 +184,8 @@ export default function Editor({ id }: { id?: string }) {
     const [dup, setDup] = useState<Dup | null>(null);
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
+    // The copied post's form ('새로 쓰기' goes back to it).
+    const copy = useRef<Form | null>(null);
     formRef.current = form;
     // New posts share one draft slot, so the waiting draft of another kind is not overwritten
     // until the member loads it or closes the banner.
@@ -223,21 +229,35 @@ export default function Editor({ id }: { id?: string }) {
         if (!me) return;
         let alive = true;
         Promise.all([
-            id ? api<{ post: Post }>('posts/' + id) : Promise.resolve(null),
+            id || fromId ? api<{ post: Post }>('posts/' + (id || fromId)) : Promise.resolve(null),
             api<{ draft: Draft | null }>('drafts/' + draftKey),
             api<Usage>('me/usage').catch(() => null),
-        ]).then(([p, dr, usage]) => {
+        ]).then(async ([src, dr, usage]) => {
             if (!alive) return;
-            if (p && p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
-            // A completed post is read-only (WP43).
-            if (p && p.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
-            const base = p ? fromPost(p.post) : initial;
+            if (src && src.post.author_id !== me.id) throw new Error(id ? '본인 글만 수정할 수 있습니다.' : '본인 글만 복사할 수 있습니다.');
+            // A completed post is read-only (WP43); it can still be copied (WP58).
+            if (src && id && src.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
+            const p = id ? src : null;
+            const cap = usage?.rules.photosPerPost ?? PHOTO_CAP;
+            let base = p ? fromPost(p.post) : initial;
+            if (src && !p) {
+                // A copy is a new post: its photos are the ones the member still owns, within the new-post cap,
+                // and its 꾸미기 those of the member's grade now.
+                const ids = src.post.images.slice(0, 100);
+                const owned = ids.length ? (await api<{ owned?: string[] }>('uploads/lookup', 'POST', { ids })).owned ?? [] : [];
+                if (!alive) return;
+                const f = fromPost(src.post);
+                base = { ...f, status: 'open', images: f.images.filter(i => owned.includes(i)).slice(0, cap), body_style: normalizeMarks(f.body, f.body_style, rank) };
+                copy.current = base;
+            }
             post.current = p?.post || null;
             // An edit may keep the photos a post already has.
-            setPhotoCap(Math.max(usage?.rules.photosPerPost ?? PHOTO_CAP, p?.post.images.length || 0));
+            setPhotoCap(Math.max(cap, p?.post.images.length || 0));
             setUsage(usage);
             const draft = dr.draft && typeof dr.draft.kind === 'string' && 'offer' in dr.draft ? dr.draft : null;
             if (!draft) replaceForm(base, false);
+            // A copy keeps a waiting draft for '불러오기', as a link to another kind does.
+            else if (copy.current) { replaceForm(base, false); setBanner({ mode: 'offer', draft }); }
             else if (p) {
                 // An edit draft counts only when it is newer than the post itself.
                 if ((draft.savedAt || 0) > p.post.updated_at) { replaceForm(fromDraft(draft), true); setBanner({ mode: 'loaded' }); }
@@ -251,7 +271,7 @@ export default function Editor({ id }: { id?: string }) {
             setLoaded(true);
         }).catch(e => { if (alive) setLoadError(errorText(e)); });
         return () => { alive = false; };
-    }, [id, me?.id]);
+    }, [id, fromId, me?.id]);
 
     const persist = async (manual = false) => {
         if (!loaded || done.current || (!dirty.current && !manual) || (holding.current && !manual)) return true;
@@ -295,7 +315,7 @@ export default function Editor({ id }: { id?: string }) {
     }
 
     function startOver() {
-        replaceForm(post.current ? fromPost(post.current) : initial, false);
+        replaceForm(post.current ? fromPost(post.current) : copy.current || initial, false);
         setSavedAt('');
         setBanner(null);
         api('drafts/' + draftKey, 'DELETE').catch(() => {});

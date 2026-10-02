@@ -139,28 +139,31 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // whether '최저가 미만 제시 자동 거절' is available.
 // 채팅 자동화 (WP57): replyTemplates own quick replies (내 빠른 답장), templateVars whether they can hold
 // {제목} {즉거가} {현젯}, firstReply '첫 문의 자동 안내' and awayReply '자리 비움' (both off by default).
+// 자동 매칭 (WP58): matchPosts own 판매·구매 posts get 'match' 알림 for new posts of the other side
+// (0: none, Infinity: every open post), and matchChats '채팅 보내기' a day from a match (엘리트 and up).
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
     serviceCoupons: number; filterAlerts: number; filterAlertEvents: 'new' | 'all';
     autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
     replyTemplates: number; templateVars: boolean; firstReply: boolean; awayReply: boolean;
+    matchPosts: number; matchChats: number;
 };
 
 const PRICE_PERIODS = [12, 24, 48, 72];
 const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all',
     autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true,
-    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true };
+    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true, matchPosts: Infinity, matchChats: 20 };
 export const PERKS: Record<GradeId, Perks> = {
     normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
         autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false,
-        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false },
+        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0 },
     plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new',
         autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false,
-        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false },
+        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0 },
     premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all',
         autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false,
-        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false },
+        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false, matchPosts: 3, matchChats: 0 },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -381,6 +384,52 @@ export const ALERT_TEXT = {
     member: (nickname: string) => `${nickname} 새 글`,
     count: (n: number) => ` ${n >= 99 ? '99+' : n}개`,
 };
+// 자동 매칭 and 맞는 글 (WP58, round-3 copy.md 매칭). The links are for every grade; the 알림 for
+// 프리미엄 (3 own posts) and up (every own post), '채팅 보내기' for 엘리트 and up.
+export const MATCH_TEXT = {
+    buyLink: '맞는 구매 글',
+    sellLink: '맞는 판매 글',
+    switch: '자동 매칭',
+    chat: '채팅 보내기',
+    off: '자동 매칭은 프리미엄부터 가능합니다.',
+    locked: '자동 매칭 · 프리미엄부터',
+    full: (n: number) => `자동 매칭은 글 ${n}개까지입니다.`,
+    kinds: '판매·구매 글만 자동 매칭할 수 있습니다.',
+    open: '거래중인 글만 자동 매칭할 수 있습니다.',
+    chatOff: '채팅 보내기는 엘리트부터 가능합니다.',
+    chatMax: (n: number) => `맞는 글 채팅은 하루 ${n}번까지입니다.`,
+    // The own post's side decides the other side's word: a 판매 post is matched with 구매 글.
+    link: (kind: string) => kind === 'sell' ? '맞는 구매 글' : '맞는 판매 글',
+    alert: (title: string, kind: string) => `‘${title}’ 글과 맞는 ${kind === 'sell' ? '구매' : '판매'} 글`,
+    // User voice: the member's own first message, prefilled in the composer (sent only by the member).
+    prefill: (kind: string) => kind === 'sell' ? '구매 글 보고 연락드립니다.' : '판매 글 보고 연락드립니다.',
+    all: '내 글 전체',
+    empty: '맞는 글이 없습니다.',
+    board: '게시판에서 보기',
+};
+// The guide cell: '-', '내 글 3개', '내 글 전체 · 채팅 보내기 하루 20번'.
+export function matchGuideText(perks: Perks) {
+    if (!perks.matchPosts) return '-';
+    const posts = Number.isFinite(perks.matchPosts) ? `내 글 ${perks.matchPosts}개` : MATCH_TEXT.all;
+    return perks.matchChats ? `${posts} · ${MATCH_TEXT.chat} 하루 ${perks.matchChats}번` : posts;
+}
+
+// 내 글 일괄 변경 (WP58): every grade, at most BULK_MAX posts a request.
+export const BULK_MAX = 30;
+export const BULK_TEXT = {
+    max: `한 번에 ${BULK_MAX}개까지 선택할 수 있습니다.`,
+    none: '글을 선택해 주세요.',
+    action: '일괄 변경을 확인해 주세요.',
+    closeAsk: (n: number) => `선택한 글 ${n}개를 거래완료로 바꿉니다. 되돌릴 수 없습니다.`,
+    deleteAsk: (n: number) => `선택한 글 ${n}개를 삭제합니다. 복구할 수 없습니다.`,
+    bumped: (n: number) => `끌올 완료 · ${n}개`,
+    closed: (n: number) => `상태 변경: 거래완료 · ${n}개`,
+    deleted: (n: number) => `삭제 완료 · ${n}개`,
+    selected: (n: number) => `${n}개 선택`,
+    bumpAll: '모두 끌올',
+    select: '선택',
+};
+
 // The 조건 알림 cell of the guide table: '-', '3개 (새 글)', '10개 (새 글 · 가격 내림)'.
 export function filterAlertText(perks: Perks) {
     if (!perks.filterAlerts) return '-';

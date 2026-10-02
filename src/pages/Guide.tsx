@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, MATCH_TEXT, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, matchGuideText, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -48,6 +48,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['운영진 가측가 표시', () => 'O'],
     // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
     ['조건 알림', g => filterAlertText(PERKS[g.id])],
+    // 자동 매칭 (WP58): own posts matched with new posts of the other side, from PERKS.matchPosts and matchChats:
+    // '-', '내 글 3개', '내 글 전체 · 채팅 보내기 하루 20번'.
+    [MATCH_TEXT.switch, g => matchGuideText(PERKS[g.id])],
     // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
     ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
     // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
@@ -60,6 +63,10 @@ const FREE_ITEMS = [
     `거래중 글 ${SITE_RULES.openPosts}개`,
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    // WP58: every grade.
+    `모두 끌올 · 일괄 변경 ${BULK_MAX}개`,
+    '다시 올리기 · 복사해서 새 글',
+    '맞는 구매 글·판매 글 링크',
     '댓글·답글',
     '채팅·제시',
     '기본 빠른 답장',

@@ -179,12 +179,16 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     // compressed nor uploaded again, and the match counts as a use for the unused-photo cleanup.
     if (p[0] === 'uploads' && p[1] === 'lookup' && !p[2] && method === 'POST') {
         const u = await requireUser(req), b = await body(req);
-        // {ids}: the editor's photos restored with a draft; only the posts they are in (no touch).
+        // {ids}: the editor's photos restored with a draft; only the posts they are in (no touch), and which
+        // of them the member still owns (owned: '다시 올리기' and '복사해서 새 글' keep only those, WP58).
         if (Array.isArray(b.ids)) {
             const ids = [...new Set(b.ids.filter((v: unknown): v is string => typeof v === 'string' && v.length <= 64))].slice(0, 100);
-            if (!ids.length) return json({ usedIn: {} });
-            const used = await usedInStatement(u.id, 'SELECT value FROM json_each(?)', [JSON.stringify(ids)]).all<UsedRow>();
-            return json({ usedIn: usedInMap(used.results, u, Date.now()) });
+            if (!ids.length) return json({ usedIn: {}, owned: [] });
+            const [used, owned] = await db().batch([
+                usedInStatement(u.id, 'SELECT value FROM json_each(?)', [JSON.stringify(ids)]),
+                db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN (SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(ids)),
+            ]);
+            return json({ usedIn: usedInMap(used.results as UsedRow[], u, Date.now()), owned: (owned.results as { id: string }[]).map(r => r.id) });
         }
         const hashes = Array.isArray(b.hashes) ? [...new Set(b.hashes.filter((h: unknown): h is string => typeof h === 'string' && HEX64.test(h)))].slice(0, 100) : [];
         if (!hashes.length) return json({ found: {}, usedIn: {} });

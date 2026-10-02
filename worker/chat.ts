@@ -1,5 +1,5 @@
 import { fillTemplate, type User } from '../shared/market';
-import { CHAT_AUTO_TEXT, awayWindow, perksOf } from '../shared/membership';
+import { CHAT_AUTO_TEXT, MATCH_TEXT, awayWindow, perksOf } from '../shared/membership';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
@@ -261,10 +261,17 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             // A message sent about a post (the first one after 채팅하기) is preceded by that post's card,
             // unless the chat's latest card already shows it. Asking about B and then A again gives A, B, A,
             // so the latest card is always the post being discussed.
+            // 자동 매칭 (WP58): '채팅 보내기' from a match (match: true) carries the sender's own open 판매 or 구매
+            // post instead, for 엘리트 and up, perks.matchChats a day.
             let post: any = null;
             if (b.postId !== undefined && b.postId !== null) {
                 post = await visiblePost(b.postId, u);
-                if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
+                if (b.match === true) {
+                    const perks = perksOf(u);
+                    if (!perks.matchChats) fail(403, MATCH_TEXT.chatOff);
+                    if (post.author_id !== u.id || post.status === 'closed' || post.hidden || (post.kind !== 'sell' && post.kind !== 'buy')) fail(400, '게시글 작성자를 확인해 주세요.');
+                    await limit('matchchat:' + u.id, perks.matchChats, 86400000, MATCH_TEXT.chatMax(perks.matchChats));
+                } else if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
             }
             const now = Date.now(), ref = post ? String(post.id) : '';
             const auto = other ? await autoReplyStatements(req, p[1], u, partnerId, other, post, now) : [];

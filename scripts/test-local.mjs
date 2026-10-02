@@ -121,8 +121,10 @@ try {
     // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now),
     // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
     // verify-promo (WP53) checks the 광고 placements against the strict rules.
+    // verify-auto-bulk (WP58) runs 일괄 변경 against the real wallet, 다시 올리기 against the WP44 placement and
+    // 자동 매칭 in tick B (cursor and pause times set with wrangler d1 execute).
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
         // call), so they get longer.
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : 180000);

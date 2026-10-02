@@ -300,11 +300,12 @@ export function csrf(r: Request) {
     if (r.headers.get('sec-fetch-site') === 'cross-site') fail(403, '허용되지 않은 요청입니다.');
 }
 
-export async function limit(key: string, max: number, ms: number) {
+// `text` names the limit when it is a rule members meet (WP58: '맞는 글 채팅은 하루 20번까지입니다.').
+export async function limit(key: string, max: number, ms: number, text = '요청이 많습니다. 잠시 후 다시 시도해 주세요.') {
     const now = Date.now();
     const r = await db().prepare('INSERT INTO rate_limits (key,count,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<=? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<=? THEN excluded.reset_at ELSE reset_at END RETURNING count')
         .bind(key, now + ms, now, now).first<{ count: number }>();
-    if (r && r.count > max) fail(429, '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+    if (r && r.count > max) fail(429, text);
 }
 
 export function textField(v: unknown, min: number, max: number, label: string) {

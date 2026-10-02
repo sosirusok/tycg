@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { relativeTime } from '../../shared/market';
-import { ALERT_TEXT } from '../../shared/membership';
+import { KIND_ICONS, listingPrice, relativeTime, type Post } from '../../shared/market';
+import { ALERT_TEXT, MATCH_TEXT, perksOf } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
-import { navigate } from '../lib/router';
+import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
+import { chatDraftKey } from '../app/ApplyModal';
 import { CIcon, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { AlertCard } from './Auto';
 
@@ -26,7 +27,52 @@ const ICONS: Record<string, string> = {
     comment: 'memo', reply: 'memo',
     // 자동 가격 내리기 (WP56).
     drop_stopped: 'warning', drop_done: 'money-with-wings',
+    // 자동 매칭 (WP58).
+    match: 'shopping-cart',
 };
+
+// 자동 매칭 (WP58): the posts of the other side that match the member's own post (the 알림's ref), from its
+// first match on, newest first. 엘리트 and up get '채팅 보내기' on each: the chat opens with the own post
+// going with the first message and the composer filled ('구매 글 보고 연락드립니다.'); the member sends it.
+type MatchList = { posts: Post[]; own: { id: number; kind: string; title: string; query: string | null } };
+function MatchSheet({ alert, onClose }: { alert: Alert | null; onClose: () => void }) {
+    const { me } = useApp();
+    const [d, setD] = useState<MatchList | null>(null), [busy, setBusy] = useState(false);
+    useEffect(() => {
+        if (!alert) return;
+        let alive = true;
+        setD(null);
+        api<MatchList>(`posts/${alert.ref}/matches?from=${alert.post_id ?? ''}`).then(r => { if (alive) setD(r); })
+            .catch(e => { if (alive) { toast.error(errorText(e)); onClose(); } });
+        return () => { alive = false; };
+    }, [alert?.id]);
+    const chats = !!me && perksOf(me).matchChats > 0;
+    const title = d ? MATCH_TEXT.link(d.own.kind) : alert?.text.endsWith(MATCH_TEXT.buyLink) ? MATCH_TEXT.buyLink : MATCH_TEXT.sellLink;
+    async function chat(p: Post) {
+        if (busy || !d) return;
+        setBusy(true);
+        try {
+            const c = await api<{ id: string }>('chats', 'POST', { userId: p.author_id });
+            try { sessionStorage.setItem(chatDraftKey(c.id), MATCH_TEXT.prefill(d.own.kind)); } catch { /* the member types it */ }
+            onClose();
+            void navigate(`/chat/${c.id}?post=${d.own.id}&match=1`);
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    return <Modal open={!!alert} onClose={onClose} title={title}
+        footer={d?.own.query ? <Link to={'/trade?' + d.own.query} className="btn btn-line btn-block">{MATCH_TEXT.board}</Link> : undefined}>
+        {!d ? <SkeletonRows count={3} height={56} />
+            : d.posts.length ? <ul className="auto-list match-list">{d.posts.map(p => <li key={p.id}>
+                <Link to={'/posts/' + p.id} className="auto-thumb" tabIndex={-1} aria-hidden="true">{p.thumb || p.images[0] ? <img src={p.thumb || imageUrl(p.images[0])} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[p.kind]} size={24} />}</Link>
+                <span className="auto-main">
+                    <Link to={'/posts/' + p.id} className="auto-title">{p.title}</Link>
+                    <span className="auto-sub">{listingPrice(p)} · {p.nickname}</span>
+                </span>
+                {chats && <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => void chat(p)}>{MATCH_TEXT.chat}</button>}
+            </li>)}</ul>
+            : <p className="auto-empty">{MATCH_TEXT.empty}</p>}
+    </Modal>;
+}
 
 // 구독 관리 (WP54): the members this member follows, newest first, each with '구독 해제'.
 function FollowsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -60,6 +106,8 @@ export default function Alerts() {
     const [list, setList] = useState<Alert[] | null>(null);
     const [page, setPage] = useState(1), [hasMore, setHasMore] = useState(false), [loading, setLoading] = useState(false);
     const [follows, setFollows] = useState(false), [searches, setSearches] = useState(false);
+    // The '맞는 구매 글' sheet of a 'match' row (WP58).
+    const [match, setMatch] = useState<Alert | null>(null);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
@@ -113,6 +161,8 @@ export default function Alerts() {
             q.delete('page');
             void navigate('/trade?' + q.toString());
         }
+        // 자동 매칭 (WP58): the matching posts, with '채팅 보내기' for 엘리트 and up.
+        else if (a.type === 'match') setMatch(a);
         // 댓글·답글 (WP55): the post at its 댓글 section.
         else if ((a.type === 'comment' || a.type === 'reply') && a.post) void navigate('/posts/' + a.post.id + '#comments');
         else if (a.post) void navigate('/posts/' + a.post.id);
@@ -129,6 +179,7 @@ export default function Alerts() {
         </div>
         <FollowsModal open={follows} onClose={() => setFollows(false)} />
         <Modal open={searches} onClose={() => setSearches(false)} title={ALERT_TEXT.searches}>{searches && <AlertCard bare />}</Modal>
+        <MatchSheet alert={match} onClose={() => setMatch(null)} />
         <div className="mt-16">
             {list === null ? <SkeletonRows count={4} height={72} />
                 : list.length ? <>
