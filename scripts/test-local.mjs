@@ -15,6 +15,8 @@ process.chdir(root);
 if (spawnSync(process.execPath, ['tests/copy-lint.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
 // The static migration check (additive only from 0016 on) needs no server either.
 if (spawnSync(process.execPath, ['tests/verify-migrations.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
+// Neither does the Pages folder of the public address (WP67): scripts/pages-out.mjs on a fake build.
+if (spawnSync(process.execPath, ['tests/verify-pages-out.mjs'], { cwd: root, stdio: 'inherit' }).status !== 0) process.exit(1);
 const config = 'dist/zombiego_market/wrangler.json';
 await access(config).catch(() => { throw new Error('빌드 결과가 없습니다. 먼저 pnpm build를 실행해 주세요.'); });
 

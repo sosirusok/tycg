@@ -104,6 +104,14 @@ function history(post) {
 
 let failed;
 try {
+    // /api/health (deploy.yml checks it on both addresses, WP67): ok and whether the visitor's address
+    // reached the Worker, as a boolean only; the address itself is never sent back.
+    const health = await guest('health');
+    equal(health.status, 200, 'health answers 200');
+    equal(Object.keys(health.data).sort(), ['ip', 'ok'], 'health has only ok and ip');
+    check(health.data.ok === true && typeof health.data.ip === 'boolean', 'health ok is true and ip is a boolean');
+    check(!/\d+\.\d+\.\d+\.\d+|::/.test(JSON.stringify(health.data)), 'health never shows an address');
+
     // Separate fixture accounts keep normal application rate limits in force.
     for (const [index, request] of [seller, categories, validator].entries()) {
         const username = `v9_${run}_${index}`;

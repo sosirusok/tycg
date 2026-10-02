@@ -2,6 +2,8 @@
 
 좀비고 계정·클랜·굿즈 거래와 대리를 위한 한국어 거래 게시판입니다. 화면 구조는 숨고(soomgo.com)의 목록·프로필·채팅 흐름을 따르고, 메인 색은 파랑 `#0066FF` 한 가지만 씁니다.
 
+**사이트 주소: <https://zhstrade.pages.dev>** (이전 주소 `https://zombiego-market.<계정 이름>.workers.dev`는 새 주소로 자동 이동)
+
 - 거래 탭: **구매 · 판매 · 교환 · 대리(구함) · 대리(진행)**
 - 세부 분류: 구매·판매는 계정/클랜/굿즈 및 쿠폰/기타, 대리는 래더/스토리 및 재화/이벤트, 교환은 “[계정·클랜]에서 [계정·클랜] 구함”
 - 판매: 즉거가·현젯(만원 단위), 즉거가를 바꾸면 이전 가격이 취소선으로 남음(예: ~~60만원~~ ~~50만원~~ 40만원)
@@ -23,20 +25,29 @@
 1. **Cloudflare API 토큰 만들기**
    1. <https://dash.cloudflare.com/sign-up> 에서 무료 가입(이미 있으면 로그인)
    2. <https://dash.cloudflare.com/profile/api-tokens> → **Create Token** → **Edit Cloudflare Workers** 템플릿의 **Use template**
-   3. Permissions에 **+ Add more** → `Account` · `D1` · `Edit` 한 줄 추가
+   3. Permissions에 **+ Add more** → `Account` · `D1` · `Edit` 한 줄, `Account` · `Cloudflare Pages` · `Edit` 한 줄 추가(두 번째 줄은 새 주소 zhstrade.pages.dev용)
    4. Account Resources는 본인 계정 선택 → **Continue to summary** → **Create Token** → 표시된 토큰 복사
 2. **GitHub 저장소에 비밀값 등록**: 저장소 **Settings → Secrets and variables → Actions → New repository secret**
    - `CLOUDFLARE_API_TOKEN`: 위에서 복사한 토큰
    - `MANAGER_PASSWORD` (**필수**, 8자 이상): 매니저 계정(아이디 `sosirusok`, 닉네임 `우와오`)의 비밀번호. 매니저 계정이 처음 만들어질 때만 쓰입니다. 매니저 계정이 없는데 이 값도 없으면 배포가 실패하고 안내가 남습니다(매니저가 없으면 인증/등급 신청을 받을 수 없음).
 3. **Actions → Deploy to Cloudflare → Run workflow** (이후에는 main 브랜치에 반영될 때마다 자동 배포)
 
-실행 결과 요약(Summary)에 사이트 주소 `https://zombiego-market.<계정 이름>.workers.dev` 가 표시됩니다. 처음 만든 주소는 연결까지 몇 분 걸릴 수 있습니다.
+실행 결과 요약(Summary)에 사이트 주소 `https://zhstrade.pages.dev`가 표시됩니다(그 이름을 다른 곳에서 이미 쓰고 있으면 Cloudflare가 붙인 `zhstrade-xxxx.pages.dev`). 처음 만든 주소는 연결까지 몇 분 걸릴 수 있습니다.
 
 - 사진은 R2에 가입된 계정이면 R2에, 아니면 D1에 저장합니다. R2는 대시보드에서 별도 가입 절차가 필요하므로 켜지 않아도 됩니다. R2를 쓰지 않으려면 저장소 Variables에 `USE_R2`=`false`를 넣으세요.
 - 토큰으로 볼 수 있는 Cloudflare 계정이 여러 개라면 `CLOUDFLARE_ACCOUNT_ID` 비밀값도 추가하세요.
-- 원하는 주소 이름이 있으면 저장소 **Variables**에 `WORKERS_SUBDOMAIN`을 넣으세요. 개인 도메인은 Cloudflare의 Worker 설정에서 연결합니다.
+- 원하는 workers.dev 주소 이름이 있으면 저장소 **Variables**에 `WORKERS_SUBDOMAIN`을 넣으세요. 개인 도메인은 Cloudflare Pages 프로젝트(`zhstrade`)의 **Custom domains**에서 연결합니다(Worker에 연결하면 이전 주소처럼 새 주소로 자동 이동됨).
 - 비밀값이 없으면 배포 작업은 아무것도 바꾸지 않고 안내만 남깁니다.
 - 웹 푸시(휴대폰 알림) 키는 배포가 처음 한 번 만들어 Worker 비밀값(`VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`)으로 저장하고, 이후 배포에서는 그대로 둡니다. 따로 등록할 것은 없습니다. 키를 바꾸면 회원들이 알림을 다시 켜야 하므로 지우거나 바꾸지 마세요.
+
+### 새 주소 (zhstrade.pages.dev)
+
+- **구조**: Cloudflare Pages 프로젝트 `zhstrade`가 화면 파일을 직접 내보내고, `/api/*` 요청만 서비스 바인딩으로 지금의 Worker(`zombiego-market`)에 넘깁니다. 서버, 데이터베이스, 사진, 예약 작업(자동 끌올·알림·정리)은 그대로입니다. 프로젝트는 배포가 처음 한 번 만들고, 지우거나 다시 만들지 않습니다.
+- **이전 주소**: 같은 배포에서 새 주소가 첫 화면, API(방문자 주소 전달 포함), 하위 경로 확인을 통과한 뒤에만 `workers.dev` 주소가 새 주소로 자동 이동(301)합니다. 확인을 통과하지 못하면 배포는 경고(`새 주소 미적용`)만 남기고 초록색으로 끝나며, 사이트는 이전 주소에서 그대로 열립니다. API(`/api/*`)는 이전 주소에서도 계속 응답하므로 열려 있던 화면과 휴대폰 알림도 그대로 동작합니다.
+- **다시 로그인**: 로그인은 주소마다 따로 저장되므로, 회원은 새 주소에서 한 번 더 로그인합니다.
+- **토큰 권한**: API 토큰에 `Account` · `Cloudflare Pages` · `Edit`이 필요합니다(**Edit Cloudflare Workers** 템플릿에는 없음). 이미 만든 토큰이면 <https://dash.cloudflare.com/profile/api-tokens>에서 그 토큰의 **Edit** → 권한 한 줄 추가 → **Update token** 후 Actions에서 다시 실행하면 됩니다(토큰 값은 바뀌지 않음).
+- **요금**: 화면 파일(HTML, JS, 아이콘, 글꼴) 요청은 Pages가 무료·무제한으로 처리하고 함수도 실행하지 않습니다. `/api/*` 요청만 Pages 함수 한 번으로 계산되고, Worker로 넘기는 서비스 바인딩 호출은 추가 요청으로 계산되지 않으므로 하루 요청 사용량(무료 10만 건)은 지금과 거의 같습니다. 다른 비용도 바뀌지 않습니다.
+- **설정**: 다른 프로젝트 이름은 저장소 Variables의 `PAGES_PROJECT`에 넣습니다. `USE_PAGES`=`false`이면 새 주소 단계를 건너뛰고, 그 배포부터 이전 주소가 다시 사이트를 직접 보여 줍니다(Pages 프로젝트는 지우지 않음).
 
 ## 운영 메모
 
@@ -79,6 +90,7 @@ pnpm test      # 로컬 서버를 띄워 API 검증 5종(거래, 인증·등급,
 | `shared/` | 화면과 서버가 함께 쓰는 거래 규칙(티어·시즌, 분류, 우대 스킨, 등급·인증 정의) |
 | `migrations/` | D1 테이블 변경 기록(추가만 함) |
 | `tests/`, `scripts/test-local.mjs` | 로컬 API 검증 |
+| `scripts/pages-out.mjs` | 새 주소(Pages)에 올릴 폴더(`_worker.js`, `_routes.json`, 서비스 바인딩 설정)와 이전 주소의 자동 이동 파일(`_redirects`) 생성 |
 | `public/icons/` | Microsoft Fluent Emoji 컬러 아이콘(MIT, `LICENSE.md` 포함) |
 | `.github/workflows/` | CI(타입 검사·빌드·검증)와 Cloudflare 자동 배포 |
 | `docs/research.md` | 거래 용어·우대 스킨·배포 제약 조사 근거 |

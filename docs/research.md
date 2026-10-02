@@ -76,8 +76,9 @@
 | D1 | DB 500MB, 행 2MB, 하루 쓰기 10만 행, 하루 읽기 500만 행 | 채팅 새 메시지 확인은 4초(1분 무응답 후 15초), 목록은 20초, 안 읽은 수는 30초 간격(전용 가벼운 요청). 사진·신청·제안 조회는 색인으로 찾음. R2 없이 D1에 사진을 둘 때는 1인 30MB, 사이트 300MB까지. 매일 03:17(한국 시각)에 만료된 로그인과 하루 넘게 쓰이지 않은 사진을 정리 |
 | API 토큰 | ‘Edit Cloudflare Workers’ 템플릿에는 D1 권한이 없음 | README에 `Account · D1 · Edit` 추가 안내 |
 | workers.dev | 계정에 하위 도메인이 없으면 배포 실패 | 배포 워크플로가 자동 등록 |
+| 사이트 주소 | workers.dev 주소에는 계정 하위 도메인이 붙음(`zombiego-market.<계정>.workers.dev`) | Pages 프로젝트 `zhstrade`(`zhstrade.pages.dev`)가 화면을 내보내고 `/api/*`만 서비스 바인딩으로 같은 Worker에 넘김. Pages 정적 파일 요청은 무료·무제한이고 함수는 `/api/*`에서만 실행(Workers 하루 요청 한도에 한 번 계산), 서비스 바인딩 호출은 추가 요청이 아님. 하루 요청 사용량은 그대로. 이전 주소는 새 주소 확인 뒤 `_redirects` 301(Worker가 먼저 처리하는 `/api/*`에는 적용되지 않음) |
 
-출처: <https://developers.cloudflare.com/workers/platform/limits/>, <https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/>, <https://developers.cloudflare.com/r2/get-started/>, <https://developers.cloudflare.com/d1/platform/limits/>, <https://developers.cloudflare.com/fundamentals/api/reference/template/>, <https://developers.cloudflare.com/workers/configuration/routing/workers-dev/>
+출처: <https://developers.cloudflare.com/pages/functions/routing/>, <https://developers.cloudflare.com/pages/functions/pricing/>, <https://developers.cloudflare.com/workers/platform/pricing/#service-bindings>, <https://developers.cloudflare.com/workers/static-assets/redirects/>, <https://developers.cloudflare.com/workers/platform/limits/>, <https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/>, <https://developers.cloudflare.com/r2/get-started/>, <https://developers.cloudflare.com/d1/platform/limits/>, <https://developers.cloudflare.com/fundamentals/api/reference/template/>, <https://developers.cloudflare.com/workers/configuration/routing/workers-dev/>
 
 ## 6. 숨고 화면 기준
 
