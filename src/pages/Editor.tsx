@@ -7,6 +7,7 @@ import {
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
+import { validHidden, type LadderHidden } from '../../shared/ladder';
 import { findLinks } from '../../shared/links';
 import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
@@ -27,16 +28,19 @@ type Form = {
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
+    ladderHidden: LadderHidden; // 시즌 비공개 (WP68): 판매 and the offered side of 교환 only
     link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
     body_style: Mark[]; // 글자 꾸미기 (WP49): ranges over body, shifted as it is typed; drafts carry them
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true, body_style: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], ladderHidden: {}, link_preview: true, body_style: [] };
+// 시즌 비공개 goes with 판매 and the offered side of 교환, on account posts only (the server refuses it elsewhere).
+const holdsHidden = (f: Pick<Form, 'kind' | 'category'>) => (f.kind === 'sell' || f.kind === 'exchange') && f.category === 'account';
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
-    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
+    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [], ladderHidden: validHidden(raw.ladderHidden) || {} };
     form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
@@ -44,7 +48,7 @@ function normalize(raw: Partial<Form>): Form {
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], ladderHidden: p.ladder_hidden || {}, link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -129,11 +133,12 @@ function forKind(f: Form, kind: TradeKind): Form {
     const shared = category === f.category && ((f.kind === 'sell' && kind === 'exchange') || (f.kind === 'exchange' && kind === 'sell'));
     const details: Record<string, string> = shared ? Object.fromEntries(Object.entries(f.details).filter(([k]) => !k.startsWith('wanted'))) : {};
     if (kind === 'exchange') details.wantedCategory = 'account';
-    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], details };
+    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], ladderHidden: shared ? f.ladderHidden : {}, details };
 }
 function dropsInput(f: Form, next: Form) {
     return Object.entries(f.details).some(([k, v]) => k !== 'wantedCategory' && !!v && next.details[k] !== v)
-        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags);
+        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags)
+        || (Object.keys(f.ladderHidden).length > 0 && next.ladderHidden !== f.ladderHidden);
 }
 
 // '15:40' on the Korean clock.
@@ -325,7 +330,7 @@ export default function Editor({ id }: { id?: string }) {
     function changeCategory(category: string) {
         if (category === form.category) return;
         const keep = form.kind === 'exchange' ? Object.fromEntries(Object.entries(form.details).filter(([k]) => k.startsWith('wanted'))) : {};
-        patch({ category, tags: [], details: keep });
+        patch({ category, tags: [], ladderHidden: {}, details: keep });
     }
 
     // Photos from the picker, a paste or a drop, within the cap; one batch at a time, 3 uploads at
@@ -421,7 +426,7 @@ export default function Editor({ id }: { id?: string }) {
             // edit keeps the thumbnail it had while the 대표 is the same.
             const cover = form.images[0], had = post.current;
             const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], ladderHidden: holdsHidden(form) ? form.ladderHidden : {}, details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
@@ -486,7 +491,7 @@ export default function Editor({ id }: { id?: string }) {
     const hasWanted = form.wantedTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
 
     const sellerAccount = <div className="grid-gap-16">
-        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} /></div>
+        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} hidden={form.ladderHidden} onHiddenChange={ladderHidden => patch({ ladderHidden })} /></div>
         <div className="ed-grid">
             <Num label="대주 수" value={d.ownerCount || ''} onChange={v => setDetail('ownerCount', v)} unit="대주" max={9999} placeholder="예: 2" />
             <div className="field"><span className="field-label">전적</span><Segmented name="전적" options={['무전적', '전적 있음'] as const} value={d.recordStatus || ''} onChange={v => setDetail('recordStatus', v)} /></div>

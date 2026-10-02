@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Keyb
 import { Bell, BellRing, PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
+    ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, validTags, wonToMan,
     type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
@@ -12,6 +12,7 @@ import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
 import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
+import { groupLadders } from '../../shared/ladder';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
@@ -198,20 +199,20 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
     </>;
 }
 
-function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<string, string>) => void) {
+function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<string, string>) => void, latest: number) {
     const chips: { key: string; label: string; clear: () => void }[] = [];
     const add = (key: string, label: string) => { if (params.get(key)) chips.push({ key, label, clear: () => update({ [key]: '' }) }); };
     add('q', `‘${params.get('q')}’`);
     if (params.get('closed') === 'only') chips.push({ key: 'closed', label: '거래완료만', clear: () => update({ closed: '' }) });
     const tags = readTags(params.get('tags'));
-    for (const tier of TIERS) {
-        const seasons = tags.filter(t => t.tier === tier.id).map(t => t.season).sort((a, b) => a - b);
-        // Season first, as tagName writes it everywhere else ('29시즌 마스터', '29, 30시즌 마스터').
-        if (seasons.length) chips.push({ key: 'tier-' + tier.id, label: seasons.length === 1 ? tagName({ tier: tier.id, season: seasons[0] }) : `${seasons.join(', ')}시즌 ${tier.name}`, clear: () => { const rest = tags.filter(t => t.tier !== tier.id); update({ tags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
+    // One chip per tier in the grouped form, highest tier first ('모든 시즌 마스터', '마스터 29~30시즌', WP68).
+    for (const g of groupLadders(tags, null, latest)) {
+        chips.push({ key: 'tier-' + g.tier, label: g.label, clear: () => { const rest = tags.filter(t => t.tier !== g.tier); update({ tags: rest.length ? JSON.stringify(rest) : '', match: rest.length > 1 ? params.get('match') || '' : '' }); } });
     }
     for (const skin of skinTags(params.get('skinTags') || '')) chips.push({ key: 'skin-' + skin, label: skin, clear: () => { const rest = skinTags(params.get('skinTags') || '').filter(v => v !== skin); update({ skinTags: rest.length ? JSON.stringify(rest) : '' }); } });
-    const wantedTags = readTags(params.get('wantedTags'));
-    if (wantedTags.length) chips.push({ key: 'wantedTags', label: '구하는 래더 ' + (wantedTags.length > 1 ? `${tagName(wantedTags[0])} 외 ${wantedTags.length - 1}` : tagName(wantedTags[0])), clear: () => update({ wantedTags: '' }) });
+    // '구하는 래더 모든 시즌 챔피언 외 1': the first tier and how many other tiers.
+    const wanted = groupLadders(readTags(params.get('wantedTags')), null, latest);
+    if (wanted.length) chips.push({ key: 'wantedTags', label: '구하는 래더 ' + wanted[0].label + (wanted.length > 1 ? ` 외 ${wanted.length - 1}` : ''), clear: () => update({ wantedTags: '' }) });
     add('wantedOwnerCountOfMine', `내 계정 ${params.get('wantedOwnerCountOfMine')}대주`);
     add('wantedNicknameChars', `내 닉 ${params.get('wantedNicknameChars')}글자`);
     add('wantedNicknameRank', `내 닉 ${rankText([params.get('wantedNicknameRank') || ''])}`);
@@ -245,7 +246,7 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
 
 export function Board() {
     const { params } = useLocation();
-    const { me, ready, requireLogin, openApply } = useApp();
+    const { me, ready, config, requireLogin, openApply } = useApp();
     const rawKind = params.get('kind');
     const kind: TradeKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
     const categories = kind === 'all' ? [] : categoriesForKind(kind);
@@ -355,7 +356,7 @@ export function Board() {
         const y = takeScrollRestore();
         if (y !== null) window.scrollTo(0, y);
     }, [loading, cacheKey]);
-    const chips = activeChips(ctx, query, update);
+    const chips = activeChips(ctx, query, update, config.latestSeason);
     // Saved searches of this tab above the list; '이 조건 저장' next to the filter chips.
     const currentKey = searchKey(query);
     const tabSaved = saved.filter(v => (new URLSearchParams(v.query).get('kind') || 'all') === kind);

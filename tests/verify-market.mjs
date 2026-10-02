@@ -394,6 +394,64 @@ try {
         equal((await guest('posts?' + new URLSearchParams(query))).status, 400,
             'invalid search condition rejected: ' + Object.keys(query)[0]);
     }
+
+    // ---- 시즌 비공개 (WP68): hidden emblems of a known tier, seller side only ----
+    const hiddenSale = { ...common, title: `[로컬 QA] ${run}-hidden 18마스터`, tags: [{ tier: 'master', season: 18 }], ladderHidden: { master: 2 }, details: {} };
+    const hiddenId = await create(seller, hiddenSale, 'sale with 18시즌 마스터 and 2 hidden 마스터 emblems');
+    const storedHidden = await read(hiddenId);
+    equal([storedHidden.tags, storedHidden.ladder_hidden], [[{ tier: 'master', season: 18 }], { master: 2 }], 'GET returns the ladder and 시즌 비공개');
+    const hiddenOnlyId = await create(seller, { ...hiddenSale, title: `[로컬 QA] ${run}-hidden only`, tags: [] }, 'sale with only hidden 마스터 emblems');
+    const listed = await search({ kind: 'sell', category: 'account', q: run + '-hidden' });
+    equal([listed.find(p => p.id === hiddenId)?.ladder_hidden, listed.find(p => p.id === hiddenOnlyId)?.ladder_hidden], [{ master: 2 }, { master: 2 }], 'lists carry the 시즌 비공개 map');
+    equal((await read(saleId)).ladder_hidden, {}, 'a post without 시즌 비공개 carries an empty map');
+    const swapId = await create(seller, { ...common, kind: 'exchange', title: `[로컬 QA] ${run}-hidden swap`, price: null, tags: [], ladderHidden: { champion: 1 }, details: { wantedCategory: 'clan' } }, '교환 with 시즌 비공개 on the offered account');
+    equal((await read(swapId)).ladder_hidden, { champion: 1 }, 'the offered side of 교환 keeps 시즌 비공개');
+    for (const [label, payload] of [
+        ['ladderHidden on a 구매 post', { ...common, kind: 'buy', title: `[로컬 QA] ${run}-hidden buy`, tags: [], ladderHidden: { master: 1 } }],
+        ['ladderHidden on a 클랜 sale', { ...hiddenSale, category: 'clan', title: `[로컬 QA] ${run}-hidden clan`, ladderHidden: { master: 1 } }],
+        ['ladderHidden on a 대리 post', { ...common, kind: 'proxy_request', category: 'ladder', title: `[로컬 QA] ${run}-hidden proxy`, ladderHidden: { master: 1 } }],
+        ['hidden count 0', { ...hiddenSale, ladderHidden: { master: 0 } }],
+        ['hidden count 100', { ...hiddenSale, ladderHidden: { master: 100 } }],
+        ['hidden count 1.5', { ...hiddenSale, ladderHidden: { master: 1.5 } }],
+        ['hidden count as text', { ...hiddenSale, ladderHidden: { master: '2' } }],
+        ['unknown hidden tier', { ...hiddenSale, ladderHidden: { grandmaster: 1 } }],
+        ['ladderHidden as a list', { ...hiddenSale, ladderHidden: [{ tier: 'master', count: 2 }] }],
+    ]) {
+        const response = await validator('posts', 'POST', payload);
+        if (response.status === 201) fixturePosts.push({ owner: validator, id: response.data.id });
+        equal(response.status, 400, label + ' is refused');
+    }
+    // Search: '하나라도 맞으면' with every season of a tier also finds hidden emblems of that tier; specific
+    // seasons never do, and 'match=all' ignores them.
+    const latest = (await guest('config')).data.latestSeason;
+    const everyMaster = Array.from({ length: latest - 17 + 1 }, (_, i) => ({ tier: 'master', season: 17 + i }));
+    const hiddenQuery = { kind: 'sell', category: 'account', q: run + '-hidden' };
+    check(await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster) }), 'a buyer filter of every 마스터 season finds the hidden-only post');
+    check(await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify([...everyMaster, { tier: 'champion', season: 20 }]) }), 'every 마스터 season plus another tier still finds it');
+    check(await finds(hiddenId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 18 }]) }), 'a filter of only 18시즌 마스터 finds the post through its visible tag');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 18 }]) }), 'a filter of only 18시즌 마스터 never matches hidden emblems');
+    check(!await finds(hiddenId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 19 }]) }), 'a filter of only 19시즌 마스터 does not find the post');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster.slice(1)) }), 'a filter missing one 마스터 season does not match hidden emblems');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster), match: 'all' }), 'match=all ignores hidden emblems');
+    check(await finds(hiddenOnlyId, { kind: 'sell', author: fixtureUsers[0].id, q: '마스터', size: '40' }), "the bare tier word '마스터' also finds hidden emblems");
+    // Copy to a new post and 다시 올리기 build the new post from GET /posts/:id (the editor's prefill).
+    const source = await read(hiddenOnlyId);
+    const copyId = await create(seller, { ...hiddenSale, title: `[로컬 QA] ${run}-hidden copy`, tags: source.tags, ladderHidden: source.ladder_hidden }, '복사해서 새 글 from the hidden-only post');
+    equal((await read(copyId)).ladder_hidden, { master: 2 }, 'the copy keeps 시즌 비공개');
+    equal((await seller(`posts/${hiddenOnlyId}/status`, 'PATCH', { status: 'closed' })).status, 200, 'the hidden-only post is completed');
+    const closed = await read(hiddenOnlyId);
+    equal([closed.status, closed.ladder_hidden], ['closed', { master: 2 }], 'a completed post keeps 시즌 비공개');
+    const relistId = await create(seller, { ...hiddenSale, title: closed.title, tags: closed.tags, ladderHidden: closed.ladder_hidden }, '다시 올리기 of the completed post');
+    equal((await read(relistId)).ladder_hidden, { master: 2 }, 'the relisted post keeps 시즌 비공개');
+    // Edits: an empty map removes the rows; an edit from a page without the field keeps them while the post
+    // can hold them, and drops them when it cannot (구매).
+    await edit(seller, hiddenId, { ...hiddenSale, ladderHidden: {} }, 'edit with an empty 시즌 비공개');
+    equal((await read(hiddenId)).ladder_hidden, {}, 'the edit removed the hidden row');
+    const { ladderHidden: _omit, ...olderPage } = hiddenSale;
+    await edit(seller, copyId, { ...olderPage, title: `[로컬 QA] ${run}-hidden copy` }, 'edit from a page without ladderHidden');
+    equal((await read(copyId)).ladder_hidden, { master: 2 }, 'an edit without the field keeps 시즌 비공개');
+    await edit(seller, copyId, { ...olderPage, kind: 'buy', title: `[로컬 QA] ${run}-hidden copy`, tags: [] }, 'the copy edited into a 구매 post');
+    equal((await read(copyId)).ladder_hidden, {}, 'a 구매 post drops 시즌 비공개');
 } catch (error) {
     failed = error;
 } finally {

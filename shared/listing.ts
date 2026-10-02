@@ -56,7 +56,12 @@ function list(raw: unknown) {
         return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean))].sort().join(',') : text(raw);
     } catch { return text(raw); }
 }
-const ladderOf = (tags: SeasonTag[] | undefined) => [...new Set((tags || []).map(t => `${t.tier}:${t.season}`))].sort().join(',');
+// The ladder as one value: 'master:18,master:29'. 시즌 비공개 (WP68) adds 'master:h2' (2 hidden 마스터
+// emblems), so a ladder without hidden emblems keeps the value earlier prints stored.
+const ladderOf = (tags: SeasonTag[] | undefined, hidden?: Record<string, number> | null) => [...new Set([
+    ...(tags || []).map(t => `${t.tier}:${t.season}`),
+    ...Object.entries(hidden || {}).filter(([, n]) => Number.isInteger(n) && n > 0).map(([tier, n]) => `${tier}:h${n}`),
+])].sort().join(',');
 // 우대 스킨 as the detail page shows them: the full skeleton set implies its legacy single skin.
 function skinsOf(raw: unknown) {
     const tags = parseList(typeof raw === 'string' ? raw : '', SKIN_TAGS);
@@ -64,8 +69,9 @@ function skinsOf(raw: unknown) {
 }
 const filled = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 
-// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details and season tags say.
-export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = []): ListingFields {
+// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details, season tags and 시즌 비공개
+// (hidden, WP68: 판매 and the offered side of 교환 only) say.
+export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = [], hidden?: Record<string, number> | null): ListingFields {
     const d = details || {};
     if (kind === 'buy' || kind === 'proxy_request') {
         const want: Record<string, string> = { ladder: ladderOf(seasons) };
@@ -78,7 +84,7 @@ export function listingFields(kind: string, category: string, details: Record<st
     if (category === 'account') {
         const nick = [num(d.nicknameChars), parseList(d.nicknameTypes, NICK_TYPES).sort().join(','), text(d.nicknameRank)];
         const dist: Record<string, string> = {
-            ladder: ladderOf(seasons), skins: skinsOf(d.skinTags),
+            ladder: ladderOf(seasons, hidden), skins: skinsOf(d.skinTags),
             ...Object.fromEntries(NUMBERS.map(k => [k, num(d[k])])),
             rides: text(d.rides), emblems: text(d.emblems),
             nick: nick.some(Boolean) ? nick.join('|') : '',

@@ -22,9 +22,10 @@ export { fieldsHash };
 
 // The print of a post being written: details is the stored JSON text, images the upload ids in order,
 // uploads the author's upload rows with their hashes.
-export async function buildPrint(v: { kind: string; category: string; title: string; details: string; tags: SeasonTag[]; wantedTags: SeasonTag[]; images: string },
+// ladderHidden (시즌 비공개, WP68) joins the ladder field.
+export async function buildPrint(v: { kind: string; category: string; title: string; details: string; tags: SeasonTag[]; wantedTags: SeasonTag[]; ladderHidden?: Record<string, number>; images: string },
     uploads: UploadHash[]): Promise<NewPrint> {
-    const fields = listingFields(v.kind, v.category, parse(v.details, {}), v.tags);
+    const fields = listingFields(v.kind, v.category, parse(v.details, {}), v.tags, v.ladderHidden);
     const images: string[] = parse(v.images, []);
     const photos = photoKeys(images, new Map(uploads.map(u => [u.id, u])));
     return { kind: v.kind, category: v.category, title_key: postTitleKey(v.title), fields, photos, fields_hash: await fieldsHash(fields), uploads };

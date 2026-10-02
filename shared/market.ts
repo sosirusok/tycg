@@ -79,6 +79,8 @@ export type Post = {
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];
+    // 시즌 비공개 (WP68): hidden emblems per tier on 판매 and the offered side of 교환 ({ master: 2 }).
+    ladder_hidden?: Record<string, number>;
     category: string;
     price_mode: string;
     accepts_offers: number;

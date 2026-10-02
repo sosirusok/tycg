@@ -3,7 +3,7 @@ import { Bell, BellRing, ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHo
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -21,6 +21,7 @@ import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoShee
 import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
+import { LadderTags, hasLadder } from '../components/LadderTags';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
@@ -53,7 +54,10 @@ function specBlock(rows: Row[]) {
 function tagBlock(title: string, names: string[]) {
     return names.length ? [<h3 key={title + '-h'}>{title}</h3>, <div className="tags" key={title}>{names.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div>] : [];
 }
-const ladderNames = (tags: Post['tags']) => [...tags].sort((a, b) => b.season - a.season).map(tagName);
+// Ladders as one tier-colored pill per tier, highest first ('모든 시즌 챔피언', '마스터 18시즌 · 시즌 비공개 2', WP68).
+function ladderBlock(title: string, tags: Post['tags'], hidden?: Post['ladder_hidden']) {
+    return hasLadder(tags, hidden) ? [<h3 key={title + '-h'}>{title}</h3>, <LadderTags key={title} className="ladder-block" tags={tags} hidden={hidden} />] : [];
+}
 
 function nicknameRange(d: Record<string, string>, prefix = '') {
     const min = d[prefix ? 'wantedNicknameCharsMin' : 'nicknameCharsMin'];
@@ -75,7 +79,7 @@ function offeredBlocks(post: Post): ReactNode[] {
             ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['레벨', num(d.level)], ['연구실', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
         ]),
-        ...tagBlock('래더 기록', ladderNames(post.tags)),
+        ...ladderBlock('래더 기록', post.tags, post.ladder_hidden),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d.skinTags))),
         ...d.rareSkins ? [<h3 key="rare-h">기타 스킨</h3>, <p className="body-text" key="rare">{d.rareSkins}</p>] : [],
     ];
@@ -90,7 +94,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['스킨 수 (팬텀)', d[key('phantomMin')] ? d[key('phantomMin')] + '% 이상' : ''], ['전적', d[key('recordPreference')]],
             ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
-        ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),
+        ...ladderBlock('원하는 래더', prefix ? post.wanted_tags || [] : post.tags),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d[key('skinTags')]))),
     ];
 }
@@ -98,7 +102,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
 function genericBlocks(post: Post, category: string): ReactNode[] {
     return [
         ...specBlock((DETAIL_FIELDS[category] || []).map(f => [f.label, f.type === 'number' ? num(post.details[f.id]) : post.details[f.id]] as Row)),
-        ...category === 'ladder' ? tagBlock('래더 시즌', post.tags.map(tagName)) : [],
+        ...category === 'ladder' ? ladderBlock('래더 시즌', post.tags) : [],
     ];
 }
 

@@ -1,32 +1,55 @@
-import { useId, useRef, useState, type InputHTMLAttributes } from 'react';
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes } from 'react';
 import { X } from 'lucide-react';
-import { NICK_RANKS, NICK_TYPES, SKIN_OPTIONS, TIERS, seasonsOf, tagName, type SeasonTag } from '../../shared/market';
+import { NICK_RANKS, NICK_TYPES, SKIN_OPTIONS, seasonsOf, type SeasonTag } from '../../shared/market';
+import { HIDDEN_MAX, TIERS_DESC, groupLadders, type LadderHidden } from '../../shared/ladder';
 import { useApp } from '../app/state';
 import { useMoreRight } from './ui';
+import { LadderPillText } from './LadderTags';
 
-// One chip row of the nine tiers; the open tier shows its season checkboxes below, e.g. 마스터 → 17 … 32시즌.
-export function SeasonPicker({ value, onChange, showPicked = true }: { value: SeasonTag[]; onChange: (v: SeasonTag[]) => void; showPicked?: boolean }) {
+// The nine tiers as chips, highest first; a tier with picks wears its tier colors and its count. The open
+// tier shows its season checkboxes, newest first (e.g. 마스터 → 32 … 17시즌), with 전체 선택 / 전체 해제.
+// Under them, one row per picked tier in the grouped form ('모든 시즌 챔피언', '챌린저 23~32, 20시즌'): the
+// row opens its tier, ✕ clears it (WP68). hidden and onHiddenChange (판매 and the offered side of 교환 only)
+// add '<티어> 시즌 비공개' with a count to each tier panel.
+export function SeasonPicker({ value, onChange, showPicked = true, hidden, onHiddenChange }: {
+    value: SeasonTag[]; onChange: (v: SeasonTag[]) => void; showPicked?: boolean; hidden?: LadderHidden; onHiddenChange?: (v: LadderHidden) => void;
+}) {
     const { config } = useApp();
-    const [open, setOpen] = useState<string | null>(() => TIERS.find(t => value.some(v => v.tier === t.id))?.id ?? null);
+    const latest = config.latestSeason;
+    const hiddenOf = (tier: string) => (onHiddenChange && hidden?.[tier]) || 0;
+    const [open, setOpen] = useState<string | null>(() => TIERS_DESC.find(t => value.some(v => v.tier === t.id) || hiddenOf(t.id))?.id ?? null);
     const has = (tier: string, season: number) => value.some(t => t.tier === tier && t.season === season);
     const toggle = (tier: string, season: number) => onChange(has(tier, season) ? value.filter(t => !(t.tier === tier && t.season === season)) : [...value, { tier, season }]);
-    const tier = TIERS.find(t => t.id === open);
-    const seasons = tier ? seasonsOf(tier, config.latestSeason) : [];
-    const all = !!tier && value.filter(t => t.tier === tier.id).length === seasons.length;
+    const setHidden = (tier: string, n: number) => {
+        if (!onHiddenChange) return;
+        const next = { ...hidden };
+        if (n > 0) next[tier] = n; else delete next[tier];
+        onHiddenChange(next);
+    };
+    const clearTier = (tier: string) => {
+        if (value.some(t => t.tier === tier)) onChange(value.filter(t => t.tier !== tier));
+        if (hiddenOf(tier)) setHidden(tier, 0);
+    };
+    const tier = TIERS_DESC.find(t => t.id === open);
+    const seasons = tier ? seasonsOf(tier, latest).reverse() : [];
+    const picked = tier ? value.filter(t => t.tier === tier.id).length : 0;
+    const all = !!tier && seasons.length > 0 && seasons.every(season => has(tier.id, season));
+    const groups = showPicked ? groupLadders(value, onHiddenChange ? hidden : null, latest) : [];
     const row = useMoreRight<HTMLDivElement>();
     return <div className="season-picker">
         <div ref={row.ref} className={'chip-scroll tier-chips' + (row.more ? ' has-more' : '')} role="group" aria-label="티어" onScroll={row.measure}>
-            {TIERS.map(t => {
-                const count = value.filter(v => v.tier === t.id).length;
-                return <button type="button" key={t.id} className="chip chip-sm" aria-pressed={open === t.id} onClick={() => setOpen(open === t.id ? null : t.id)}>{t.name}{count ? <b>{count}</b> : null}</button>;
+            {TIERS_DESC.map(t => {
+                const count = value.filter(v => v.tier === t.id).length + hiddenOf(t.id);
+                return <button type="button" key={t.id} className={'chip chip-sm' + (count ? ' has-picks tier-' + t.id : '')} aria-pressed={open === t.id} onClick={() => setOpen(open === t.id ? null : t.id)}>{t.name}{count ? <b>{count}</b> : null}</button>;
             })}
         </div>
         {tier && <div className="season-panel">
             <div className="season-head">
-                <span>{tier.name} · {tier.min}~{config.latestSeason}시즌</span>
-                <button type="button" className="btn btn-text small" onClick={() => onChange(all ? value.filter(t => t.tier !== tier.id) : [...value.filter(t => t.tier !== tier.id), ...seasons.map(season => ({ tier: tier.id, season }))])}>
-                    {all ? '전체 해제' : '전체 선택'}
-                </button>
+                {all ? <strong>모든 시즌 {tier.name}</strong> : <span>{tier.name} · {tier.min}~{latest}시즌</span>}
+                <span className="season-actions">
+                    {!all && <button type="button" className="btn btn-text small" onClick={() => onChange([...value.filter(t => t.tier !== tier.id), ...seasons.map(season => ({ tier: tier.id, season }))])}>전체 선택</button>}
+                    {picked > 0 && <button type="button" className="btn btn-text small" onClick={() => onChange(value.filter(t => t.tier !== tier.id))}>전체 해제</button>}
+                </span>
             </div>
             <div className="season-grid">
                 {seasons.map(season => <label key={season} className="season-box">
@@ -34,10 +57,30 @@ export function SeasonPicker({ value, onChange, showPicked = true }: { value: Se
                     {season}시즌
                 </label>)}
             </div>
+            {onHiddenChange && <div className="season-hidden">
+                <label className="check"><input type="checkbox" checked={hiddenOf(tier.id) > 0} onChange={e => setHidden(tier.id, e.target.checked ? Math.max(1, hiddenOf(tier.id)) : 0)} />{tier.name} 시즌 비공개</label>
+                <HiddenCount key={tier.id} label={`${tier.name} 시즌 비공개 개수`} value={hiddenOf(tier.id)} onChange={n => setHidden(tier.id, n)} />
+            </div>}
         </div>}
-        {showPicked && value.length > 0 && <div className="picked" aria-label="선택한 시즌">
-            {[...value].sort((a, b) => b.season - a.season).map(t => <button type="button" key={t.tier + t.season} onClick={() => toggle(t.tier, t.season)} aria-label={tagName(t) + ' 선택 해제'}>{tagName(t)}<X size={12} /></button>)}
-        </div>}
+        {groups.length > 0 && <ul className="ladder-rows" aria-label="선택한 래더">
+            {groups.map(g => <li key={g.tier} className="ladder-row">
+                <button type="button" className={'ladder-pill tier-' + g.tier} onClick={() => setOpen(g.tier)}><LadderPillText group={g} /></button>
+                <button type="button" className="ladder-clear" aria-label={g.label + ' 선택 해제'} onClick={() => clearTier(g.tier)}><X size={14} /></button>
+            </li>)}
+        </ul>}
+    </div>;
+}
+
+// The 시즌 비공개 count, 1–99 개: typing keeps a draft, and an empty or 0 field goes back to the stored count
+// when it loses focus. Disabled while the tier's checkbox is off.
+function HiddenCount({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
+    const [draft, setDraft] = useState(value ? String(value) : '');
+    useEffect(() => { setDraft(value ? String(value) : ''); }, [value]);
+    return <div className="input-unit">
+        <IntegerInput className="input" aria-label={label} value={draft} min={1} max={HIDDEN_MAX} disabled={!value}
+            onChange={v => { setDraft(v); if (v) onChange(Number(v)); }}
+            onBlur={() => setDraft(value ? String(value) : '')} />
+        <span>개</span>
     </div>;
 }
 
