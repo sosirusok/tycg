@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind, listingPrice, type Post } from '../../shared/market';
 import { api, errorText, imageUrl } from '../lib/api';
 import { navigate } from '../lib/router';
-import { CIcon, Modal } from './ui';
+import { Icon, Modal } from './ui';
 import { kstClock } from './Wallet';
 
 // The 409 of a new post (or an edit) that is the same listing as one of the author's open posts (WP44).
@@ -14,7 +14,7 @@ export type Dup = { id: number; title: string | null; thumb: string | null; pric
 export function SameListingSheet({ dup, onClose }: { dup: Dup | null; onClose: () => void }) {
     const [busy, setBusy] = useState(false);
     if (!dup) return <Modal open={false} onClose={onClose} title="" />;
-    const icon = isTradeKind(dup.kind) ? KIND_ICONS[dup.kind] : 'money-bag';
+    const icon = isTradeKind(dup.kind) ? KIND_ICONS[dup.kind] : 'file-text';
     const waiting = dup.bumpAt && dup.bumpAt > Date.now() ? dup.bumpAt : 0;
     async function bump() {
         if (busy || !dup) return;
@@ -34,7 +34,7 @@ export function SameListingSheet({ dup, onClose }: { dup: Dup | null; onClose: (
         </>}>
         <div className="same-sheet">
             <div className="post-strip">
-                <span className="post-strip-thumb">{dup.thumb ? <img src={imageUrl(dup.thumb)} alt="" /> : <CIcon name={icon} size={28} />}</span>
+                <span className="post-strip-thumb">{dup.thumb ? <img src={imageUrl(dup.thumb)} alt="" /> : <Icon name={icon} size={24} />}</span>
                 <span className="post-strip-text"><strong>{dup.title}</strong><span>{listingPrice({ kind: dup.kind as Post['kind'], price: dup.price, price_mode: dup.price_mode || (dup.price === null ? 'offer' : 'fixed') })}</span></span>
             </div>
             <p className="same-line">같은 점: {dup.same}</p>

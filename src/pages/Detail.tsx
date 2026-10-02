@@ -310,7 +310,7 @@ export function Detail({ id }: { id: string }) {
 
     return <div className="container page detail-page">
         <div className="detail-layout">
-            <article>
+            <article className="panel detail-main">
                 <nav className="crumbs" aria-label="위치">
                     <Link to={withParams('/trade', { kind: post.kind })}>{KIND_NAMES[post.kind]}</Link><ChevronRight size={14} />
                     <Link to={withParams('/trade', { kind: post.kind, category: post.category, wantedCategory: post.kind === 'exchange' ? exchangeWanted : '' })}>{post.kind === 'exchange' ? `${categoryName(post.category)}에서 ${categoryName(exchangeWanted)} 구함` : categoryName(post.category)}</Link>

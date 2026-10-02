@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { CIcon } from '../components/ui';
+import { Icon } from '../components/ui';
 import { useApp } from './state';
 
 // '알림 켜기' (WP64): one line over the page right after the member sends a chat message or turns on an
@@ -12,7 +12,7 @@ export function PushBar({ inRoom = false }: { inRoom?: boolean }) {
     const [busy, setBusy] = useState(false);
     if (!pushBar) return null;
     return <div className={'push-bar' + (inRoom ? ' push-bar-room' : '')} role="status">
-        <CIcon name="bell" size={22} />
+        <Icon name="bell" size={20} className="push-bar-icon" />
         <p>새 채팅과 알림을 이 기기에서 받습니다.</p>
         <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => { setBusy(true); void enablePush().finally(() => setBusy(false)); }}>알림 켜기</button>
         <button type="button" className="icon-btn" aria-label="닫기" onClick={closePushBar}><X size={18} /></button>

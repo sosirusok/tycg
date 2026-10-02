@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind } from '../../shared/market';
 import { AUTO_TEXT } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
-import { CIcon, Modal } from './ui';
+import { Icon, Modal } from './ui';
 import { kstClock } from './Wallet';
 import { offerPush } from '../app/state';
 
@@ -43,7 +43,7 @@ export function useAutoToggle(onChange: (postId: number, on: boolean) => void) {
     const element = <Modal open={!!sheet} onClose={() => { if (!busy) setSheet(null); }} title={sheet ? AUTO_TEXT.sheet(sheet.slots) : ''}>
         {sheet && <ul className="auto-swap">{sheet.listed.map(p => <li key={p.id}>
             <button type="button" className="post-strip auto-swap-row" disabled={busy} onClick={() => void swap(p.id)}>
-                <span className="post-strip-thumb">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" /> : <CIcon name={isTradeKind(p.kind) ? KIND_ICONS[p.kind] : 'money-bag'} size={28} />}</span>
+                <span className="post-strip-thumb">{p.thumb || p.image ? <img src={p.thumb || imageUrl(p.image!)} alt="" /> : <Icon name={isTradeKind(p.kind) ? KIND_ICONS[p.kind] : 'file-text'} size={24} />}</span>
                 <span className="post-strip-text"><strong>{p.title}</strong></span>
                 <span className="auto-swap-out">빼기</span>
             </button>

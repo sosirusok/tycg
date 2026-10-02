@@ -5,7 +5,7 @@ import { celebrationLines, gradeInfo, kstDate, publicRank } from '../../shared/m
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
 import { MODAL_DAY_KEY } from '../app/TrialPopup';
-import { Avatar, CIcon } from './ui';
+import { Avatar, GradeMark } from './ui';
 
 // 등급 축하 창 (WP66 item 14b): when the member's public grade rises (a manager grant; the 무료 체험 never counts),
 // the next page view shows this once: the metal badge, '<등급> 회원이 되었습니다', the strongest benefits the
@@ -51,7 +51,7 @@ export function GradeCelebration() {
             <Dialog.Overlay className="overlay" />
             <Dialog.Content className={'celebrate celebrate-' + tier} aria-describedby={undefined}>
                 <div className="celebrate-hero">
-                    <span className="celebrate-medal"><CIcon name={grade.icon} size={44} /></span>
+                    <span className="celebrate-medal"><GradeMark grade={grade.id} size={48} /></span>
                     <Dialog.Title className="celebrate-title">{grade.name} 회원이 되었습니다</Dialog.Title>
                 </div>
                 <div className="celebrate-body">

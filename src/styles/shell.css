@@ -1,8 +1,8 @@
 /* Header */
 .header { position: sticky; top: 0; z-index: 40; background: var(--white); border-bottom: 1px solid var(--line); }
 .header-inner { display: flex; align-items: center; gap: 28px; height: var(--header-h); }
-.logo { display: inline-flex; align-items: center; gap: 8px; color: var(--brand); font-size: var(--fs-20); font-weight: 700; letter-spacing: -1px; white-space: nowrap; }
-.logo img { width: 28px; height: 28px; }
+.logo { display: inline-flex; align-items: center; gap: 8px; color: var(--brand); font-size: var(--fs-18); font-weight: 700; letter-spacing: -1px; white-space: nowrap; }
+.logo-mark { flex: none; width: 28px; height: 28px; }
 .nav { display: flex; align-items: center; gap: 20px; }
 .nav a { color: var(--ink); font-size: var(--fs-15); font-weight: 600; white-space: nowrap; }
 .nav a:hover, .nav a[aria-current='page'] { color: var(--brand); }
@@ -41,7 +41,7 @@
    desktop keeps '인증/등급 신청하기' on every page. Guests get a short '로그인' button. */
 @media (max-width: 640px) {
   .logo { font-size: var(--fs-18); }
-  .logo img { width: 24px; height: 24px; }
+  .logo-mark { width: 24px; height: 24px; }
   .header-login { display: inline-flex; height: 34px; padding: 0 10px; font-size: var(--fs-14); }
   .header-apply { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: var(--fs-13); }
   .header:not(.show-apply) .header-apply { display: none; }
@@ -82,7 +82,7 @@
 @media (max-width: 960px) {
   .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45; display: grid; grid-template-columns: repeat(5, 1fr); height: calc(60px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--white); border-top: 1px solid var(--line); }
   .bottom-nav a, .bottom-nav button { position: relative; display: grid; place-items: center; align-content: center; gap: 3px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 600; }
-  .bottom-nav [aria-current='page'] { color: var(--ink); }
+  .bottom-nav [aria-current='page'] { color: var(--brand); }
   .bottom-nav .badge-count { top: 6px; left: calc(50% + 4px); }
   body { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
   body.no-bottom-nav { padding-bottom: 0; }
@@ -93,7 +93,7 @@
 #main { flex: 1 0 auto; }
 
 /* Footer */
-.footer { margin-top: 40px; padding: 32px 0 48px; border-top: 1px solid var(--line); background: var(--white); }
+.footer { margin-top: 40px; padding: 32px 0 48px; border-top: 1px solid var(--line); background: transparent; }
 .footer-inner { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px 32px; color: var(--ink-3); font-size: var(--fs-13); }
 .footer strong { display: block; margin-bottom: 6px; color: var(--ink-2); font-size: var(--fs-14); }
 .footer-links { display: flex; gap: 18px; }
@@ -107,7 +107,7 @@
 .modal:focus { outline: none; }
 .modal-wide { width: min(640px, calc(100vw - 32px)); }
 .modal-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 20px 12px 24px; background: var(--white); }
-.modal-head h2 { font-size: var(--fs-20); font-weight: 700; }
+.modal-head h2 { font-size: var(--fs-18); font-weight: 700; }
 .modal-body { padding: 4px 24px 24px; }
 .modal-foot { position: sticky; bottom: 0; display: flex; gap: 8px; padding: 12px 24px 20px; background: var(--white); border-top: 1px solid var(--line); }
 .modal-foot .btn { flex: 1; }
@@ -129,7 +129,7 @@
 /* Member identity: avatar, nickname, grade and verification badges */
 .avatar { display: inline-grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); font-size: var(--fs-16); font-weight: 700; }
 .avatar-sm { width: 28px; height: 28px; font-size: var(--fs-12); }
-.avatar-lg { width: 72px; height: 72px; font-size: var(--fs-28); }
+.avatar-lg { width: 72px; height: 72px; font-size: var(--fs-22); }
 /* 프로필 사진 (WP59): the photo fills the round avatar. */
 .avatar-photo { overflow: hidden; }
 .avatar-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -165,7 +165,7 @@
 .name-line.compact .nick { flex: 1 1 5em; min-width: 0; max-width: max-content; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name-line.compact .v-full { display: none; }
 .name-line:not(.compact) .v-short { display: none; }
-.name-line-lg .nick { font-size: var(--fs-24); font-weight: 700; }
+.name-line-lg .nick { font-size: var(--fs-22); font-weight: 700; }
 .name-line-lg .grade { height: 24px; font-size: var(--fs-13); padding: 0 8px; }
 .name-line-lg .verified { font-size: var(--fs-14); }
 
@@ -197,6 +197,9 @@
 .apply-option:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
 .apply-option.is-owned { cursor: default; background: var(--fill-2); }
 .apply-option-body { display: grid; gap: 4px; min-width: 0; }
+/* 인증 options: the check-shield line icon in a gray square, brand once picked or held. */
+.apply-option-icon { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--r-8); background: var(--fill); color: var(--ink-2); }
+.apply-option:has(input:checked) .apply-option-icon, .apply-option.is-owned .apply-option-icon { color: var(--brand); }
 .apply-option-title { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--fs-16); font-weight: 700; }
 .apply-option-text { color: var(--ink-2); font-size: var(--fs-14); }
 .apply-need { color: var(--ink-3); font-size: var(--fs-13); }
@@ -255,12 +258,14 @@
 .alerts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .alerts-tools { display: flex; align-items: center; gap: 8px; }
 .follow-list .strong-link { text-align: left; }
-.alert-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.alert-list { margin: 0; padding: 0; list-style: none; }
+.alerts-panel { padding-top: 4px; padding-bottom: 4px; }
 .alert-list li { border-bottom: 1px solid var(--line); }
-.alert-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px; text-align: left; }
+.alert-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 16px 0; text-align: left; }
 @media (hover: hover) { .alert-row:hover { background: var(--fill-2); } }
 .alert-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-.alert-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--fill); }
+.alert-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); }
+.alert-row.is-unread .alert-icon { color: var(--brand); }
 .alert-body { display: grid; gap: 2px; min-width: 0; }
 .alert-text { color: var(--ink-3); font-size: var(--fs-15); line-height: 1.45; }
 .alert-row.is-unread .alert-text { color: var(--ink); font-weight: 600; }

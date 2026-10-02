@@ -13,7 +13,7 @@ import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
 import { navigate, setLeaveGuard, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
+import { EmptyState, Icon, Modal, SkeletonRows } from '../components/ui';
 import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
 import { SameListingSheet, type Dup } from '../components/SameListingSheet';
 import { PhotoGrid } from '../components/PhotoGrid';
@@ -689,7 +689,7 @@ export default function Editor({ id }: { id?: string }) {
                             const locked = k === 'proxy_offer' && !proxyAllowed;
                             return <label key={k} className={'kind-card' + (locked ? ' is-locked' : '')}>
                                 <input type="radio" name="kind" checked={kind === k} onChange={() => changeKind(k)} onClick={() => { if (locked) changeKind(k); }} />
-                                <CIcon name={KIND_ICONS[k]} size={36} /><span>{KIND_NAMES[k]}</span>
+                                <Icon name={KIND_ICONS[k]} size={24} /><span>{KIND_NAMES[k]}</span>
                                 {locked && <small><Lock size={11} /><span>대리 인증 필요</span></small>}
                             </label>;
                         })}
