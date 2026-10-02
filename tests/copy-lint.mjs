@@ -20,7 +20,12 @@ const BANNED = [
     // 중개·가측: the site never takes, holds or moves money, so no wording may promise it; the 수익 홍보 (WP66)
     // shows examples ('사례'), never a promise.
     '대금 보관', '안전 결제', '100% 보장', '사기 0건', '수익 보장', '최소 보장',
+    // 등급 혜택 (WP61 owner request 2026-10-01): strong but true; no promise of a sale, speed, price or scarcity
+    // and no unproven popularity ('N배 빨리 팔' is the pattern below).
+    '판매 보장', '빨리 팔림', '100%', '사기 0', '최저가 보장', '한정', '마감 임박', '인기 1위',
 ];
+// Patterns the guide forbids as well: '3배 빨리 팔려요', '10배 빨리 팔림'.
+const BANNED_PATTERNS = [/\d+(?:\.\d+)?\s*배\s*빨리\s*팔/];
 
 // Retired wording (WP40 끌올 지갑): the daily 끌올 count and its midnight reset are gone. WP43 retires
 // 예약중 everywhere (two states), with the accept line that named it and the old 마감 line.
@@ -62,6 +67,8 @@ const REQUIRED = [
     '아직 등록된 중개인이 없습니다.', '아직 등록된 가측인이 없습니다.', '소개에는 링크와 연락처를 넣을 수 없습니다.', '플러스 이상 등급일 때 목록에 보입니다',
     '중개·가측으로 수익 올리기', '플러스부터 중개·가측 인증 신청 가능', '등급이 높을수록 더 크게, 더 위에 노출 (엘리트는 골드 카드 + 광고 팝업)',
     '운영진이 직접 들은 사례이며, 수익은 활동량에 따라 다릅니다.', '가측만으로 매달 10만원씩 버는 회원도 있습니다', ' 회원이 되었습니다',
+    // 등급 혜택 표시 (WP61).
+    '일반 대비', '모든 혜택', '월 환산 ', '카페보다 편한 점', '추천 설정 모두 켜기', '추천 설정은 엘리트부터 가능합니다.', '끌올 버튼 (링크 다시 올리기 없음)',
 ];
 
 async function files(dir, recursive, test) {
@@ -130,6 +137,7 @@ export function lint(file, src) {
     text.split('\n').forEach((content, n) => {
         if (marked.has(n - 1)) return;
         for (const word of [...BANNED, ...RETIRED]) if (content.includes(word)) hits.push({ file, line: n + 1, word, text: content.trim() });
+        for (const re of BANNED_PATTERNS) if (re.test(content)) hits.push({ file, line: n + 1, word: String(re), text: content.trim() });
     });
     return hits;
 }

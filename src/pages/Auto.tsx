@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind, manToWon, priceText, wonToMan } from '../../shared/market';
-import { ALERT_TEXT, AUTO_REPLY_MAX, AUTO_TEXT, CHAT_AUTO_TEXT, DROP_TEXT, TEMPLATE_MAX, dropEveryText, dropStepText, kstDateTime } from '../../shared/membership';
+import { ALERT_TEXT, AUTO_REPLY_MAX, AUTO_TEXT, CHAT_AUTO_TEXT, DROP_TEXT, TEMPLATE_MAX, dropEveryText, dropStepText, gradeInfo, kstDateTime } from '../../shared/membership';
+import { useApp } from '../app/state';
 import { TEMPLATE_VARS } from '../../shared/market';
 import type { ChatAuto } from './Chat';
 import { api, errorText, imageUrl } from '../lib/api';
@@ -42,15 +43,38 @@ function statusLine(s: AutoState) {
 // 내 거래 › 자동화 (플러스 and up, the 체험 and the manager): the 끌올 card with the wallet, the status, the
 // switches and the list of posts with their own switch.
 export function Auto() {
+    const { me } = useApp();
     const [s, setS] = useState<AutoState | null>(null);
     const load = () => api<AutoState>('me/automation').then(setS).catch(e => toast.error(errorText(e)));
     useEffect(() => { void load(); }, []);
     if (!s) return <SkeletonRows count={2} height={120} />;
+    // 엘리트 and up (관리자 = 엘리트) and the manager: '추천 설정 모두 켜기' on top (WP61).
+    const oneTap = me?.role === 'manager' || gradeInfo(me?.grade).rank >= 3;
     return <>
+        {oneTap && <RecommendCard s={s} setS={setS} />}
         <BumpCard s={s} setS={setS} load={load} />
         <div className="mt-16"><DropCard s={s} setS={setS} /></div>
         <div className="mt-16"><ChatCard chat={s.chat} setChat={chat => setS({ ...s, chat })} /></div>
     </>;
+}
+
+// '자동 끌올 켜짐 · 가격 내리기 4개 · 매칭 켜짐' and the one button that turns the recommended set on (자동 끌올 with
+// 새 글 자동 포함, 자동 매칭, 첫 문의 자동 안내, 자리 비움); price drops stay as they are.
+function RecommendCard({ s, setS }: { s: AutoState; setS: (s: AutoState) => void }) {
+    const [busy, setBusy] = useState(false);
+    const match = (s as AutoState & { match?: { on: boolean } }).match;
+    const items = [`자동 끌올 ${s.bumpOn ? '켜짐' : '꺼짐'}`, `가격 내리기 ${s.drop.on}개`, ...match ? [`매칭 ${match.on ? '켜짐' : '꺼짐'}`] : []];
+    async function run() {
+        if (busy) return;
+        setBusy(true);
+        try { setS(await api<AutoState>('me/automation/recommended', 'POST', {})); toast('저장 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    return <section className="card card-pad auto-card auto-recommend" aria-label="추천 설정">
+        <p className="auto-recommend-line">{items.join(' · ')}</p>
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void run()}>추천 설정 모두 켜기</button>
+    </section>;
 }
 
 function BumpCard({ s, setS, load }: { s: AutoState; setS: (s: AutoState) => void; load: () => Promise<unknown> }) {

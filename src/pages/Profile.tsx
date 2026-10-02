@@ -7,11 +7,11 @@ import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { setPageTitle, useApp } from '../app/state';
-import { gradeBenefits } from '../app/ApplyModal';
+import { isPaidGrade, nextBenefit } from '../../shared/benefits';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
-import { WalletGauge, useMinuteClock, type Usage } from '../components/Wallet';
+import { WalletGauge, autoItem, useMinuteClock, type Usage } from '../components/Wallet';
 import { ProviderEditor, type OwnCard } from '../components/ProviderCard';
 
 // "10월 31일" on the Korean calendar.
@@ -231,10 +231,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
                         : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
-                    {/* '끌올 3/5 · 1:20 후 충전'. */}
-                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" />}
+                    {/* '끌올 3/6 · 0:40 후 충전 · 자동 끌올 3/5' (WP61: at most 3 items). */}
+                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" extra={autoItem(usage)} />}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
-                    {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
+                    {mine && nextGrade && isPaidGrade(nextGrade.id) && <p className="grade-next">다음 등급: {nextGrade.name} · {nextBenefit(nextGrade.id)}</p>}
                 </>}
             </div>
         </section>

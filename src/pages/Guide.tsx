@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, PROVIDER_TEXT, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, introShown, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
-import { styleRank } from '../../shared/richtext';
+import { dateText, wonText } from '../../shared/market';
+import { AD_TEXT, AUTO_TEXT, BADGES, DROP_TEXT, PERKS, PROVIDER_TEXT, SITE_RULES, gapText, gradeInfo } from '../../shared/membership';
+import { BENEFIT_ROWS, PAID_GRADES, TABLE_GRADES, gradeExtras, gradeHook, monthly, vsNormal, type PaidGrade } from '../../shared/benefits';
 import { api } from '../lib/api';
 import { Link } from '../lib/router';
 import { useApp } from '../app/state';
@@ -20,62 +20,49 @@ const STEPS = [
     ['거래완료', '거래완료 누르고 거래한 회원 선택. 상대가 확인하면 거래 기록에 남음.'],
 ] as const;
 
-// Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
-// price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
-// A cell may hold two lines (영구 and 6개월 prices), each its own line.
-const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
-// The grade chips and avatar rings in the grade metals (WP66): 플러스 동색, 프리미엄 은색, 엘리트 금색.
-const NAME_STYLE: Record<string, string> = { normal: '-', plus: '동색 테두리', premium: '은색 바탕', elite: '금색 바탕' };
-const RING_STYLE: Record<string, string> = { normal: '회색', plus: '동색', premium: '은색', elite: '금색 (반짝임)' };
-const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
-const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
-    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
-    ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
-    ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
-    ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
-    // 자동 끌올 (WP52): how many posts take turns and how often, from PERKS (copy.md table cells with the
-    // owner's intervals): '-', '글 1개 · 4시간마다 1번', '글 5개 중 1개씩 · 1시간 30분마다', '전체 중 1개씩 · 30분마다'.
-    ['자동 끌올', g => { const k = PERKS[g.id], every = gapText(k.autoEveryMinutes); return !k.autoBumpPosts ? '-' : k.autoBumpPosts === 1 ? `글 1개 · ${every}마다 1번` : Number.isFinite(k.autoBumpPosts) ? `글 ${k.autoBumpPosts}개 중 1개씩 · ${every}마다` : `전체 중 1개씩 · ${every}마다`; }],
-    // 광고 (WP53): where the member's own open posts can show as ads, from PERKS.adSlots.
-    ['광고', g => { const n = PERKS[g.id].adSlots; return n ? [`게시판 상단 ${n}개`, '거래완료 글 하단', ...gradeInfo(g.id).rank >= 3 ? ['홈'] : []].join(' · ') : '-'; }],
-    ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
-    // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
-    ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
-    ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
-    // 글자 꾸미기 (WP49): the tools of each grade, shown on the post detail only.
-    ['글자 꾸미기', g => STYLE_LADDER[styleRank(g.id)]],
-    // 중개/가측 (WP66): who may apply for 중개·가측 인증 (플러스 and up, never the 무료 체험), how the tab shows each
-    // grade (엘리트 gold cards on top, 프리미엄 big profiles, 플러스 small ones), the home popup, and the ring.
-    ['중개·가측 인증 신청', g => gradeInfo(g.id).rank < 1 ? '-' : g.id === 'plus' ? 'O (체험 제외)' : 'O'],
-    ['중개/가측 탭 노출', g => { const r = gradeInfo(g.id).rank; return r >= 3 ? `골드 카드 · 최상단 + 소개 ${introShown(r)}자` : r === 2 ? `큰 프로필 + 소개 ${introShown(r)}자` : r === 1 ? '작은 프로필 · 하단' : '-'; }],
-    ['중개·가측 광고 팝업', g => gradeInfo(g.id).rank >= 3 ? 'O' : '-'],
-    ['프로필 테두리', g => RING_STYLE[g.id] || '-'],
-    // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
-    ['조건 알림', g => filterAlertText(PERKS[g.id])],
-    // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
-    ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
-    // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
-    ['내 빠른 답장', g => { const k = PERKS[g.id]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (gradeInfo(g.id).rank >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; }],
-    [CHAT_AUTO_TEXT.label, g => { const k = PERKS[g.id]; return [...k.firstReply ? [CHAT_AUTO_TEXT.first] : [], ...k.awayReply ? [CHAT_AUTO_TEXT.away] : []].join(' · ') || '-'; }],
-];
-// What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
+// What the free 일반 grade already has (WP61 change 2): every cafe basic, with anti-flood ceilings only.
 const FREE_ITEMS = [
     `사진 글당 ${SITE_RULES.photosPerPost}장`,
-    `거래중 글 ${SITE_RULES.openPosts}개`,
-    `하루 새 글 ${SITE_RULES.postsPerDay}개`,
-    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '댓글·답글',
     '채팅·제시',
-    '기본 빠른 답장',
-    '링크 자동 연결',
     '찜·알림',
-    `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     `키워드·게시판 알림 ${SITE_RULES.keywordAlerts}개`,
     '판매자 구독',
+    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    `하루 새 글 우선 ${SITE_RULES.freshPerDay}개`,
+    '링크 자동 연결',
     '거래 기록·후기',
-    '신고·차단',
     '공유·카톡 미리보기',
+    '모두 끌올 · 일괄 변경',
 ];
+// What the site does better than a cafe board, for every grade.
+const CAFE_ITEMS = ['끌올 버튼 (링크 다시 올리기 없음)', '끌올 가능 알림', '가격 내림 표시', '제시 기록', '상대가 확인한 거래 기록', '인증 표시', '같은 회원 글 접기', '광고는 목록 순서와 별개'];
+
+// A table cell: 'O' as a check mark (the letter stays for screen readers), '무제한' in bold.
+function Cell({ v }: { v: string }) {
+    if (v === 'O' || v.startsWith('O ')) return <><Check size={16} className="cell-check" aria-hidden="true" /><span className="sr-only">O</span>{v.slice(1)}</>;
+    if (v.includes('무제한')) { const [a, b] = v.split('무제한'); return <>{a}<b>무제한</b>{b}</>; }
+    return <>{v}</>;
+}
+const metalOf = (g: PaidGrade) => g === 'elite' ? 'gold' : g === 'premium' ? 'silver' : 'bronze';
+
+// The paid grade cards (owner requests 2026-10-01 and 2026-10-02): the metal accent (엘리트 gold with the
+// shimmer and '모든 혜택'), the price with 월 환산 for 6개월, the hook in big type, at most 3 '일반 대비' lines and
+// '혜택 N가지' (the table rows where the grade beats 일반), all from PERKS and GRADES.
+function GradeCards({ onApply }: { onApply: (g: PaidGrade) => void }) {
+    return <div className="grade-cards">{PAID_GRADES.map(g => {
+        const info = gradeInfo(g), vs = vsNormal(g);
+        return <article key={g} className={'grade-card grade-card-' + metalOf(g)}>
+            <div className="grade-card-head"><CIcon name={info.icon} size={28} /><h3>{info.name}</h3>{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</div>
+            <ul className="grade-card-price">{info.plans.map(p => <li key={p.id}><b>{p.label} {wonText(p.price)}</b>{p.months ? <span> · 월 환산 {monthly(p.price, p.months)}</span> : null}</li>)}</ul>
+            <p className="grade-card-hook">{gradeHook(g)}</p>
+            {vs.length > 0 && <><p className="grade-card-vs-title">일반 대비</p>
+                <ul className="grade-card-vs">{vs.map(line => <li key={line}><Check size={15} aria-hidden="true" />{line}</li>)}</ul></>}
+            <div className="grade-card-foot"><a href="#grade-table" className="grade-card-count">혜택 {gradeExtras(g).length}가지</a>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => onApply(g)}>{info.name} 신청</button></div>
+        </article>;
+    })}</div>;
+}
 
 export default function Guide() {
     const { openApply, config } = useApp();
@@ -120,12 +107,13 @@ export default function Guide() {
 
         <section className="section" id="grade">
             <div className="section-head"><h2 className="section-title">등급</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>등급 신청하기</button></div>
-            <div className="table-scroll">
+            <GradeCards onApply={g => openApply({ kind: 'grade', target: g, plan: 'permanent' })} />
+            <div className="table-scroll" id="grade-table">
                 <table className="grade-benefits">
-                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
-                    <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
-                        <th scope="row">{label}</th>
-                        {TABLE_GRADES.map(g => { const v = cell(g); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
+                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g}>{gradeInfo(g).name}{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</th>)}</tr></thead>
+                    <tbody>{BENEFIT_ROWS.map(row => <tr key={row.label}>
+                        <th scope="row">{row.label}</th>
+                        {TABLE_GRADES.map(g => { const v = row.cell(g); return <td key={g} className={g === 'elite' ? 'is-elite' : undefined}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : <Cell v={v} />}</td>; })}
                     </tr>)}</tbody>
                 </table>
             </div>
@@ -134,8 +122,14 @@ export default function Guide() {
                 <h3>일반 (무료)</h3>
                 <ul>{FREE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
             </div>
+            <div className="grade-free">
+                <h3>카페보다 편한 점</h3>
+                <ul>{CAFE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
+            </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
+                <li>거래중 글 {SITE_RULES.openPosts}개, 하루 새 글 {SITE_RULES.postsPerDay}개는 도배 방지 상한이며 모든 등급이 같습니다.</li>
+                <li>자동 기능은 {PERKS.plus.pauseDays}일 동안 접속이 없으면 멈추고 접속하면 다시 시작됩니다. (엘리트 {PERKS.elite.pauseDays}일)</li>
                 <li>{AD_TEXT.sortNote}</li>
                 <li>{AD_TEXT.orderNote}</li>
                 <li>{AUTO_TEXT.reserve}</li>

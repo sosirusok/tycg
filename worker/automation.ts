@@ -661,12 +661,29 @@ export function dropJson(p: { kind: string; price: number | null; price_mode?: s
     return { on, floor, nextAt: on ? p.drop_next_at ?? null : null, nextPrice: on && p.price > floor ? nextDropPrice(p.price, floor, step, pct) : null, count: Number(p.drop_count) || 0 };
 }
 
+// POST me/automation/recommended '추천 설정 모두 켜기' (WP61, round-3 WP36 change 5): 엘리트 and up (관리자 = 엘리트)
+// and the manager. One batch turns on 자동 끌올 with 새 글 자동 포함 (every open post listed), 자동 매칭,
+// '첫 문의 자동 안내' (the member's own text kept, else the prefilled one) and '자리 비움' (02:00-10:00 unless the
+// member chose hours; their text kept). Price drops are never touched. Other grades: 403.
+async function recommended(u: User, now: number) {
+    if (!isManager(u) && gradeInfo(u.grade).rank < 3) fail(403, '추천 설정은 엘리트부터 가능합니다.');
+    requireActive(u);
+    const grade: GradeId = isManager(u) || u.grade === 'admin' ? 'admin' : 'elite';
+    await db().batch([
+        ...enrolStatements(u.id, grade, now, '1', [], true),
+        db().prepare(`UPDATE automation SET bump_on=1,bump_new=1,match_on=1,first_on=1,away_on=1,away_from=COALESCE(away_from,?),away_to=COALESCE(away_to,?),updated_at=? WHERE user_id=?`)
+            .bind(AWAY_FROM, AWAY_TO, now, u.id),
+    ]);
+    return json(await automationState(u));
+}
+
 // me/automation routes. GET the state; PUT {bumpOn?, bumpNew?}; POST me/automation/continue ('모두 계속':
 // every listed open post untouched for 7 days counts as touched now).
 export async function automationHandler(req: Request, p: string[]): Promise<Response | null> {
     if (p[1] !== 'automation') return null;
     const u = await requireUser(req), method = req.method, now = Date.now();
     if (p[2] === 'chat' && !p[3] && method === 'GET') return json(await chatState(u));
+    if (p[2] === 'recommended' && !p[3] && method === 'POST') return recommended(u, now);
     // The chat fields (WP57) are checked first, so a member without a grade hears which grade they need.
     const put = !p[2] && method === 'PUT' ? await body(req) : null;
     const chat = put ? chatSets(put, perksOf(u), now) : null;

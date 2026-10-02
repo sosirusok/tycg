@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, canProvide, gapText, gradeInfo, isProviderType, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, canProvide, gradeInfo, isProviderType, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { gradeExtras, gradeHook, gradeLine, isPaidGrade, monthly } from '../../shared/benefits';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
-import { CIcon, DataItems, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
+import { CIcon, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
 import { EarnBlock } from '../components/ProviderCard';
 import { useApp } from './state';
 
@@ -15,17 +16,6 @@ export const chatDraftKey = (chatId: string) => 'chat-draft:' + chatId;
 export const CHAT_DRAFT_EVENT = 'zg:chat-draft';
 
 const won = (n: number) => n.toLocaleString('ko-KR') + '원';
-
-// What each paid grade adds, most notable first, from PERKS (the limits the Worker enforces), as
-// WP40 lists them (WP61 finalises the display). The apply modal lists them; the profile's next grade line shows the first one.
-// 중개/가측 (WP66): '중개·가측 인증 신청 가능', '중개/가측 탭 큰 프로필 + 소개', '중개/가측 골드 카드 최상단' with '광고 팝업'.
-export function gradeBenefits(id: string): string[] {
-    const wallet = (g: 'plus' | 'premium' | 'elite') => `끌올 ${PERKS[g].bumpMax}개 · ${gapText(PERKS[g].bumpRefillMinutes)}마다 충전`;
-    if (id === 'plus') return [wallet('plus'), `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다`, '중개·가측 인증 신청 가능'];
-    if (id === 'premium') return [wallet('premium'), '중개/가측 탭 큰 프로필 + 소개'];
-    if (id === 'elite') return ['중개/가측 골드 카드 최상단', '광고 팝업', wallet('elite')];
-    return [];
-}
 
 export function ApplyModal() {
     const { apply, closeApply, me, config, requireLogin, refreshUnread } = useApp();
@@ -137,12 +127,17 @@ export function ApplyModal() {
             }}>혜택 보기</Link></p>
             <div className="grade-table" role="radiogroup" aria-label="등급과 기간">
                 {GRADES.map(g => {
-                    const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id, benefits = gradeBenefits(g.id);
-                    return <div key={g.id} className={'grade-row' + (current ? ' is-current' : '')}>
+                    const pending = pendingFor('grade', g.id), current = (me?.grade || 'normal') === g.id, paid = isPaidGrade(g.id) ? g.id : null;
+                    // 등급 혜택 (WP61): the hook from real numbers first, then the grade's line and '혜택 N가지', all from
+                    // PERKS; the metal accent of the grade (엘리트 gold with '모든 혜택').
+                    const metal = paid === 'elite' ? ' metal-gold' : paid === 'premium' ? ' metal-silver' : paid === 'plus' ? ' metal-bronze' : '';
+                    return <div key={g.id} className={'grade-row' + metal + (current ? ' is-current' : '')}>
                         <CIcon name={g.icon} size={32} />
                         <div className="grade-row-name">
-                            <span className="grade-row-title"><strong>{g.name}</strong>{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
-                            {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
+                            <span className="grade-row-title"><strong>{g.name}</strong>{paid === 'elite' && <span className="grade-card-all">모든 혜택</span>}{current && <span className="apply-state on">{me?.grade_trial ? '체험 중' : '현재'}</span>}{pending && <span className="apply-state">{APPLICATION_STATUS_NAMES.pending}</span>}</span>
+                            {paid && <span className="grade-row-hook">{gradeHook(paid)}</span>}
+                            {paid && <span className="grade-row-perks">{gradeLine(paid)}</span>}
+                            {paid && <span className="grade-row-count">혜택 {gradeExtras(paid).length}가지</span>}
                             {/* 중개·가측 인증 needs a paid 플러스 (WP66), though the 플러스 row lists it. */}
                             {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">중개·가측 인증은 유료 플러스부터</span>}
                             {/* 광고 (WP53) needs 본인 인증 too; a member who has it is not reminded. */}
@@ -156,7 +151,7 @@ export function ApplyModal() {
                                 return <label key={p.id} className={'plan' + (owned ? ' is-owned' : disabled ? ' is-disabled' : '')}>
                                     <input type="radio" name="apply-grade" aria-label={`${g.name} ${label}${owned ? ' 보유 중' : ''}`} disabled={disabled} checked={choice?.kind === 'grade' && choice.target === g.id && choice.plan === p.id} onChange={() => choose({ kind: 'grade', target: g.id, plan: p.id })} />
                                     {!owned && <span className="radio-dot" aria-hidden="true" />}
-                                    <span>{label}</span>{owned ? <span className="apply-state on">보유 중</span> : <b>{won(p.price)}</b>}
+                                    <span>{label}</span>{owned ? <span className="apply-state on">보유 중</span> : <b>{won(p.price)}{p.months ? <span className="plan-month">월 환산 {monthly(p.price, p.months)}</span> : null}</b>}
                                 </label>;
                             }) : <span className="muted small">{g.note}</span>}
                         </div>

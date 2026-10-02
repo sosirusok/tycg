@@ -9,6 +9,8 @@ export type Usage = Wallet & {
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
     // The member's photo space in the current store (WP45); limit null for the manager.
     photos?: { storage: 'r2' | 'kv' | 'd1'; used: number; limit: number | null };
+    // 자동 끌올 (WP61): the member's listed open posts and the grade's count (null: every post); none below 플러스.
+    autoBump?: { on: number; max: number | null; enabled: boolean } | null;
 };
 
 // The wallet now, from the values the server sent: each refill interval that passed since
@@ -77,3 +79,11 @@ export function WalletGauge({ usage, now, className, extra }: { usage: Usage; no
     </p>;
 }
 
+
+// The profile's third item (WP61): '자동 끌올 3/5', '자동 끌올 12개' (every post) or '자동 끌올 꺼짐'.
+export function autoItem(usage: Usage | null) {
+    const a = usage?.autoBump;
+    if (!a) return undefined;
+    if (!a.enabled) return '자동 끌올 꺼짐';
+    return a.max === null ? `자동 끌올 ${a.on}개` : `자동 끌올 ${a.on}/${a.max}`;
+}

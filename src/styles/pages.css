@@ -1009,3 +1009,49 @@
 .apply-lock .apply-link { margin-left: 4px; }
 .guide-link { color: var(--brand); font-weight: 600; }
 .guide-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 등급 혜택 카드 (WP61, owner requests 2026-10-01/02): bronze, silver and gold accents (the 엘리트 card shimmers;
+   static with reduced motion), the price with 월 환산, the hook in big type, '일반 대비' lines and '혜택 N가지'. */
+.grade-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 4px 0 24px; }
+@media (max-width: 960px) { .grade-cards { grid-template-columns: minmax(0, 1fr); } }
+.grade-card { position: relative; display: grid; align-content: start; gap: 10px; overflow: hidden; padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: var(--r-16); background: var(--white); box-shadow: var(--shadow-card); }
+.grade-card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 6px; background: var(--metal); }
+.grade-card-bronze { --metal: var(--metal-bronze); border-color: var(--bronze-1); }
+.grade-card-silver { --metal: var(--metal-silver); border-color: var(--silver-2); }
+.grade-card-gold { --metal: var(--metal-gold); border-color: var(--gold-edge); box-shadow: var(--gold-shadow); }
+.grade-card-gold::after { content: ''; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 38%, var(--gold-gloss) 50%, transparent 62%); transform: translateX(-120%); animation: pv-sweep 6s ease-in-out infinite; pointer-events: none; }
+.grade-card-head { display: flex; align-items: center; gap: 8px; }
+.grade-card-head h3 { color: var(--ink); font-size: var(--fs-20); font-weight: 800; }
+.grade-card-all { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: var(--r-4); background: var(--metal-gold); color: var(--gold-ink); font-size: var(--fs-12); font-weight: 700; }
+.grade-card-price { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; color: var(--ink-3); font-size: var(--fs-13); }
+.grade-card-price b { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.grade-card-hook { color: var(--ink); font-size: var(--fs-18); font-weight: 800; line-height: 1.45; letter-spacing: -0.4px; }
+.grade-card-gold .grade-card-hook { color: var(--gold-ink); }
+.grade-card-vs-title { color: var(--ink-3); font-size: var(--fs-12); font-weight: 700; }
+.grade-card-vs { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.grade-card-vs li { display: flex; align-items: flex-start; gap: 6px; color: var(--ink-2); font-size: var(--fs-14); line-height: 1.45; }
+.grade-card-vs svg { flex: none; margin-top: 3px; color: var(--brand); }
+.grade-card-foot { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.grade-card-count { color: var(--ink); font-size: var(--fs-16); font-weight: 800; }
+.grade-card-count:hover { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .grade-card-gold::after { display: none; } }
+/* The table: check marks for O cells, '무제한' in bold, the 엘리트 column with its gold label. */
+.cell-check { display: inline-block; color: var(--brand); vertical-align: -3px; }
+.grade-benefits td b { font-weight: 800; }
+.grade-benefits thead th .grade-card-all { margin-left: 6px; height: 20px; padding: 0 6px; vertical-align: 1px; }
+.grade-free + .grade-free { margin-top: 12px; }
+/* The apply modal's grade rows: the same metal accents on the left edge, the hook over the line. */
+.grade-row { position: relative; }
+.grade-row.metal-bronze, .grade-row.metal-silver, .grade-row.metal-gold { padding-left: 20px; }
+.grade-row.metal-bronze::before, .grade-row.metal-silver::before, .grade-row.metal-gold::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--metal); }
+.grade-row.metal-bronze { --metal: var(--metal-bronze); }
+.grade-row.metal-silver { --metal: var(--metal-silver); }
+.grade-row.metal-gold { --metal: var(--metal-gold); }
+.grade-row-hook { color: var(--ink); font-size: var(--fs-15); font-weight: 800; line-height: 1.45; }
+.grade-row-count { color: var(--ink-2); font-size: var(--fs-12); font-weight: 700; }
+.plan-month { display: block; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+/* '추천 설정 모두 켜기' (WP61) for 엘리트 and up: the state line and one button. */
+.auto-recommend { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 16px; }
+.auto-recommend-line { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.plan:has(.plan-month) { height: auto; min-height: 40px; padding-block: 5px; }
+.plan b:has(.plan-month) { display: grid; line-height: 1.25; }

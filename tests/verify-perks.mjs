@@ -425,7 +425,7 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
 equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, filterAlerts: 0, filterAlertEvents: 'new',
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: null, pauseDays: 0, adSlots: 0, filterAlerts: 0, filterAlertEvents: 'new',
     autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false, replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false }, '일반 perks');
 equal(usage.freshToday, 3, 'usage counts today\'s free new posts (3 of the 4)');
 equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
@@ -435,6 +435,19 @@ equal([premiumUsage.grade, premiumUsage.perks.adSlots, premiumUsage.bumpMax, pre
 const managerUsage = (await manager('me/usage')).data;
 equal([managerUsage.perks.bumpMax, managerUsage.bumpTokens, managerUsage.nextRefillAt, managerUsage.rules.openPosts, managerUsage.rules.photosPerPost], [null, null, null, null, 100], 'the manager has no wallet and no open-post ceiling (null)');
 equal((await guest('me/usage')).status, 401, 'usage needs a login');
+
+// 7a. The usage API's final shape (WP61, with the owner's wallet numbers of 2026-10-01): bumpMax, refill, gap,
+// 자동 끌올 (posts and interval, null without it) and ad slots per grade; autoBump for the profile line.
+const shape = async c => { const d = (await c('me/usage')).data, k = d.perks; return [k.bumpMax, k.bumpRefillMinutes, k.bumpGapMinutes, k.autoBumpPosts, k.autoEveryMinutes, k.adSlots]; };
+equal(await shape(daily), [3, 360, 360, 0, null, 0], 'usage perks for 일반');
+equal(await shape(plus), [5, 240, 180, 1, 240, 0], 'usage perks for 플러스');
+equal(await shape(premium), [10, 90, 60, 5, 90, 1], 'usage perks for 프리미엄');
+equal(await shape(elite), [20, 30, 20, null, 30, 3], 'usage perks for 엘리트');
+equal([usage.autoBump, 'bumpsToday' in usage], [null, false], '일반: no 자동 끌올 item and no bumpsToday');
+const eliteAuto = (await elite('me/usage')).data.autoBump;
+equal([eliteAuto.max, eliteAuto.enabled, eliteAuto.on >= 3], [null, true, true], '엘리트: every post (max null), listed open posts counted');
+const plusAuto = (await plus('me/usage')).data.autoBump;
+equal([plusAuto.max, plusAuto.enabled], [1, true], '플러스: 자동 끌올 n/1');
 
 // 7b. The elite permanent price is 150,000원 (the grade application line reads GRADES on the server). The
 // WP65 무료 중개·가측 coupons are gone (WP66): usage carries no coupons.
