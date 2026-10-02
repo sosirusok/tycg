@@ -430,7 +430,8 @@ export function Board() {
     const totalText = data ? (data.capped ? COUNT_CAP + '+' : data.total.toLocaleString()) : '';
     // Boards list the last 30 days; after the last page the member can go on into older posts, on the
     // same page number so the posts already seen stay on top. A search already covers every post.
-    const showOld = !!data && !data.error && query.get('old') !== '1' && !query.get('q') && page >= totalPages;
+    // 인기순 lists only the last 7 days, so it never offers older posts.
+    const showOld = !!data && !data.error && query.get('old') !== '1' && !query.get('q') && query.get('sort') !== 'popular' && page >= totalPages;
     const openOld = () => { const next = new URLSearchParams(query); next.set('old', '1'); void navigate('/trade?' + next.toString()); };
     const title = kind === 'all' ? (params.get('q') ? '검색 결과' : '전체') : KIND_NAMES[kind];
     const highlight = readTags(query.get('tags'));
@@ -492,8 +493,10 @@ export function Board() {
                     <p aria-live="polite">{loading ? '불러오는 중' : <><b>{totalText}</b>건</>}</p>
                     <div className="list-tools">
                         <label className="switch"><input type="checkbox" checked={closed} onChange={e => update({ closed: e.target.checked ? '1' : '' })} />거래완료 포함</label>
-                        {kind !== 'all' && kind !== 'exchange' && <select className="select" aria-label="정렬" value={query.get('sort') || 'latest'} onChange={e => update({ sort: e.target.value === 'latest' ? '' : e.target.value })}>
-                            <option value="latest">최신순</option><option value="price-low">낮은 가격순</option><option value="price-high">높은 가격순</option>
+                        {/* 인기순 (WP63, every grade): 찜 first, views only break ties; exchange posts have no price sorts. */}
+                        {kind !== 'all' && <select className="select" aria-label="정렬" value={query.get('sort') || 'latest'} onChange={e => update({ sort: e.target.value === 'latest' ? '' : e.target.value })}>
+                            <option value="latest">최신순</option><option value="popular">인기순</option>
+                            {kind !== 'exchange' && <><option value="price-low">낮은 가격순</option><option value="price-high">높은 가격순</option></>}
                         </select>}
                     </div>
                 </div>

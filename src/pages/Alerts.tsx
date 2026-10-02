@@ -21,6 +21,8 @@ const ICONS: Record<string, string> = {
     fav_price: 'money-with-wings', fav_closed: 'handshake', application: 'clipboard', grade_end: 'alarm-clock', hidden: 'warning', same_listing: 'police-car-light',
     // 자동 끌올 (WP52).
     auto_paused: 'warning', auto_stale: 'memo', bump_ready: 'megaphone',
+    // 엘리트 주간 요약 (WP63).
+    weekly: 'crown',
     // 새 글 알림 (WP54).
     keyword: 'bell', board: 'spiral-notepad', follow: 'bookmark', condition: 'gem-stone',
     // 댓글·답글 (WP55).
@@ -153,6 +155,8 @@ export default function Alerts() {
         // the posts to look at ('모두 계속').
         else if (a.type === 'auto_paused') void navigate(a.ref === 'reply' ? '/chat' : '/me/auto');
         else if (a.type === 'auto_stale') void navigate('/me/posts?stale=1');
+        // 엘리트 주간 요약 (WP63): 내 글, where each row opens its 통계.
+        else if (a.type === 'weekly') void navigate('/me/posts');
         // 새 글 알림 (WP54): the saved search on the board in 최신순, a 구독 row the member's profile.
         else if (a.type === 'follow') void navigate('/profile/' + a.ref);
         else if ((a.type === 'keyword' || a.type === 'board' || a.type === 'condition') && a.query) {

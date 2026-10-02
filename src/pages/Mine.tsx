@@ -3,7 +3,7 @@ import { MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, matchQuery, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
-import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, PIN_TEXT, STATS_RANK, STATS_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
@@ -13,6 +13,7 @@ import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 import { remindText, setBumpRemind } from '../components/AutoSheet';
 import { Auto } from './Auto';
+import { StatsSheet } from '../components/StatsSheet';
 
 // '자동화' (WP52) shows for 플러스 and up (the 체험 too) and the manager.
 const TABS = [
@@ -75,9 +76,11 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
 // '다시 올리기' (WP58); the 더보기 menu holds 광고 (WP53), the '맞는 구매 글' link and '복사해서 새 글'.
 // In 선택 mode (WP58) the row is a checkbox and the actions move to the 선택 bar; a post the last bulk
 // change skipped shows why under it.
-function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete, onAd, selecting, selected, onSelect, skip }: {
+// 판매 통계 (WP63): for 프리미엄 and up the counts line is the '통계' button (StatsSheet); 대표 글 shows its tag,
+// and the 더보기 menu pins or unpins it (플러스 and up; '대표 글 해제' also on a pin a lower grade hides).
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete, onAd, onStats, onPin, selecting, selected, onSelect, skip }: {
     post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onRemind: () => void; onComplete: () => void; onAd: (pin: boolean) => void;
-    selecting: boolean; selected: boolean; onSelect: (on: boolean) => void; skip?: string;
+    onStats: () => void; onPin: (pin: boolean) => void; selecting: boolean; selected: boolean; onSelect: (on: boolean) => void; skip?: string;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
@@ -89,7 +92,11 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
     const recordable = closed && post.traded === false && post.askable !== false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
     // 맞는 글 (WP58): an open 판매 or 구매 post links to the other side's board with its own fields.
     const match = !closed && !post.hidden ? matchQuery(post) : null, write = !closeOnly && !suspended;
-    const menu = adMenu || !!match || write;
+    const stored = post.profile_pin_at !== null && post.profile_pin_at !== undefined;
+    const pinMenu = stored || (!!usage?.perks.profilePins && !post.hidden);
+    const statsOn = STATS_RANK[usage?.perks.stats || 'basic'] >= STATS_RANK.trend;
+    const menu = adMenu || !!match || write || pinMenu;
+    const counts = <>조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</>;
     if (selecting) return <li className={'seller-row is-selecting' + (closed ? ' is-closed' : '')}>
         <label className="check seller-check"><input type="checkbox" checked={selected} onChange={e => onSelect(e.target.checked)} aria-label={`${post.title} 선택`} /></label>
         <span className="seller-thumb" aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</span>
@@ -113,9 +120,11 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {post.auto && !closed && <span className="tag tag-auto">자동</span>}
                 {post.featured && !closed && !post.hidden && adSlots > 0 && <span className="tag tag-line">{AD_TEXT.label}</span>}
+                {post.pinned && <span className="tag tag-line">{PIN_TEXT.tag}</span>}
                 <b>{price}</b>
             </div>
-            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</span>
+            {statsOn ? <button type="button" className="seller-stats stats-open" onClick={onStats}><span>{counts}</span><b>{STATS_TEXT.button}</b></button>
+                : <span className="seller-stats">{counts}</span>}
             {skip && <p className="seller-skip">{skip}</p>}
         </div>
         <div className="seller-actions">
@@ -131,6 +140,7 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
                         {write && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/write?from=' + post.id)}>복사해서 새 글</DropdownMenu.Item>}
                         {adMenu && post.featured_pin !== 1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(true)}>{AD_TEXT.pin}</DropdownMenu.Item>}
                         {adMenu && post.featured_pin !== -1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(false)}>{AD_TEXT.unpin}</DropdownMenu.Item>}
+                        {pinMenu && <DropdownMenu.Item className="menu-item" onSelect={() => onPin(!stored)}>{stored ? PIN_TEXT.unpin : PIN_TEXT.pin}</DropdownMenu.Item>}
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
             </DropdownMenu.Root>}
@@ -157,6 +167,8 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [clock] = useMinuteClock();
     // The 완료 sheet for a row, as on the detail page (WP43).
     const [tradePost, setTradePost] = useState<SheetPost | null>(null);
+    // 판매 통계 (WP63): the post whose StatsSheet is open.
+    const [statsPost, setStatsPost] = useState<{ id: number; title: string } | null>(null);
     // 선택 mode (WP58): the checked rows (at most BULK_MAX), the bulk change waiting for its confirm, and why
     // the last bulk change skipped some rows (shown under them).
     const [selecting, setSelecting] = useState(false), [picked, setPicked] = useState<number[]>([]), [skips, setSkips] = useState<Record<number, string>>({});
@@ -246,6 +258,14 @@ export default function Mine({ tab: raw }: { tab?: string }) {
             void loadUsage();
         } catch (e) { toast.error(errorText(e)); }
     }
+    // 대표 글 (WP63): PUT posts/:id/pin.
+    async function setPin(post: OwnPost, pin: boolean) {
+        try {
+            await api(`posts/${post.id}/pin`, 'PUT', { active: pin });
+            toast(pin ? PIN_TEXT.pinned : PIN_TEXT.unpinned);
+            setRev(n => n + 1);
+        } catch (e) { toast.error(errorText(e)); }
+    }
     async function keepAll() {
         try { await api('me/automation/continue', 'POST', {}); void navigate('/me/posts', { replace: true }); }
         catch (e) { toast.error(errorText(e)); }
@@ -319,7 +339,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     </div>
                     {!suspended && !!usage?.perks.adSlots && <p className="wallet-gauge mine-ad">{AD_TEXT.header(usage.featured.length, usage.perks.adSlots)}</p>}
                     {items.length ? <><ul className={'seller-list' + (selecting ? ' is-selecting' : '')}>{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id || bulkBusy}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)}
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)} onStats={() => setStatsPost({ id: p.id, title: p.title })} onPin={pin => void setPin(p, pin)}
                         onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })}
                         selecting={selecting} selected={picked.includes(p.id)} onSelect={on => pick(p.id, on)} skip={skips[p.id]} />)}</ul>
                     {moreButton}
@@ -360,6 +380,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
             description={ask === 'delete' ? BULK_TEXT.deleteAsk(picked.length) : BULK_TEXT.closeAsk(picked.length)}
             footer={<><button type="button" className="btn btn-line" onClick={() => setAsk(null)}>취소</button>
                 <button type="button" className={ask === 'delete' ? 'btn btn-danger-solid' : 'btn btn-primary'} disabled={bulkBusy} onClick={() => ask && void runSelected(ask)}>{ask === 'delete' ? '삭제' : '거래완료'}</button></>} />
+        <StatsSheet post={statsPost} onClose={() => setStatsPost(null)} showAds={!!usage?.perks.adSlots} />
         <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={chatId => {
             if (tradePost?.status === 'closed') { if (chatId) patchPost(tradePost.id, { traded: true }); }
             else if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now(), traded: !!chatId });

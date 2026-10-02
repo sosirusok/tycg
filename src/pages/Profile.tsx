@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, Bell, BellRing, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
-import { ALERT_TEXT, BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
+import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, gradeInfo, trialStatus } from '../../shared/membership';
 import { ApiError, api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -210,7 +210,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'trades', label: '거래 기록' }, { id: 'reviews', label: '후기' }]} />
             <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} /> : tab === 'trades' ? <TradeList userId={user.id} />
-                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
+                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor flag={p.pinned ? <span className="tag tag-line">{PIN_TEXT.tag}</span> : undefined} />)}</div>
                 {(posts.length < total || (capped.on && capped.full)) && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>

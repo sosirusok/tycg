@@ -5,7 +5,7 @@ import {
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName, matchQuery,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
-import { AD_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, SITE_RULES, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
+import { AD_TEXT, BULK_MAX, BULK_TEXT, GRADES, MANAGER_PERKS, MATCH_TEXT, PERKS, PIN_TEXT, SITE_RULES, STATS_RANK, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
@@ -23,6 +23,8 @@ const DAY = 24 * HOUR;
 export const LIST_WINDOW = 30 * DAY;
 // Counts stop at 301 rows: the board shows '300+' and pages up to the last full page.
 export const COUNT_CAP = 300;
+// 인기순 (WP63): open posts bumped in the last 7 days, the newest 400 of them, pages 1-5.
+const POPULAR_DAYS = 7, POPULAR_CANDIDATES = 400, POPULAR_PAGES = 5;
 
 // "15:40" on the Korean clock, rounded up to the minute so the time shown is never early.
 export function clock(t: number) {
@@ -117,6 +119,10 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         delete p.featured_at;
         // 광고 (WP53): '광고 고정/빼기' and '광고 유입 12' are the author's (and the manager's) only.
         if (p.author_id !== viewer?.id && viewer?.role !== 'manager') { delete p.featured_pin; delete p.promo_views; }
+        // 대표 글 (WP63): a member's list says which posts show as 대표 (pinned); when the author pinned one
+        // (also a pin a lower grade no longer shows, for '대표 글 해제') is the author's own.
+        if ('pinned' in p) p.pinned = !!p.pinned;
+        if (p.author_id !== viewer?.id) delete p.profile_pin_at;
         delete p.ad_rank;
         delete p.title_key;
         // 링크 미리보기 (WP48): lists carry neither field; GET /posts/:id adds the cards it may show
@@ -616,12 +622,25 @@ async function listPosts(req: Request, url: URL) {
     if (!q && !author && !scope && s.get('old') !== '1') { where.push('p.bumped_at>?'); values.push(now - LIST_WINDOW); }
     // 최신순 follows 끌올; created_at stays the time the post was written.
     const sort = s.get('sort');
+    // 인기순 (WP63, every grade, boards and search): the open posts bumped in the last 7 days, the newest
+    // POPULAR_CANDIDATES of them by 끌올, ordered by 찜 count, then views (cheap to inflate, so only a tie
+    // breaker), then the latest 끌올; pages 1-5 only.
+    const popular = sort === 'popular' && !author && !scope;
+    if (popular) { where.push("p.status!='closed'", 'p.bumped_at>?'); values.push(now - POPULAR_DAYS * DAY); }
     let order = sort === 'price-low' ? 'p.price IS NULL,p.price ASC' : sort === 'price-high' ? 'p.price IS NULL,p.price DESC' : 'p.bumped_at DESC';
     if (scope === 'recent') order = '(SELECT created_at FROM history WHERE post_id=p.id AND user_id=?) DESC';
+    // A member's list (profile, 내 글) says which posts are shown 대표 글 (WP63); the profile in 최신순 lists
+    // them first, the newest pin first.
+    const pinRows = !!author && !scope;
+    if (pinRows && !q && (!sort || sort === 'latest') && s.get('counts') !== '1') order = 'pinned DESC,CASE WHEN pinned THEN p.profile_pin_at END DESC,p.bumped_at DESC';
     const size = Math.max(1, Math.min(40, Math.floor(Number(s.get('size')) || 16)));
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
     // 내 글 (counts=1) also reads each row's 자동 끌올 state (WP52), one primary-key lookup per row.
     const ownCounts = !!u && author === u.id && !scope && s.get('counts') === '1';
+    const select = (ownCounts ? ownSelect : postSelect).replace(' FROM posts p ', `${pinRows ? `,${pinnedSql()} AS pinned` : ''} FROM posts p `);
+    const listSql = popular
+        ? `SELECT * FROM (${select}${clause} ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${POPULAR_CANDIDATES}) c ORDER BY (SELECT COUNT(*) FROM favorites f WHERE f.post_id=c.id) DESC,c.view_count DESC,c.bumped_at DESC,c.id DESC LIMIT ? OFFSET ?`
+        : `${select}${clause} ORDER BY ${order},p.id DESC LIMIT ? OFFSET ?`;
     // Board '광고 매물' box (WP53): page 1 of a tab in 최신순, in the 진행중 view (the board's default; with
     // 거래완료 included there is no box), with the page's own filters, when the tab holds more than 16
     // 진행중 posts (the list's own count). The list below keeps its order, counts and paging; the box leaves
@@ -638,12 +657,12 @@ async function listPosts(req: Request, url: URL) {
     const r = (await db().batch([
         ...backfill,
         db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
-        db().prepare((ownCounts ? ownSelect : postSelect) + clause + ' ORDER BY ' + order + ',p.id DESC LIMIT ? OFFSET ?').bind(...values, ...(scope === 'recent' ? [u!.id] : []), size, (page - 1) * size),
+        db().prepare(listSql).bind(...values, ...(scope === 'recent' ? [u!.id] : []), popular && page > POPULAR_PAGES ? 0 : size, (page - 1) * size),
         ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
         ...adBase ? [db().prepare(`${adSelect()} WHERE ${ad.sql} AND ${adBase.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...ad.args, ...adBase.values)] : [],
     ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
-    const total = Number((r[0].results[0] as any).count) || 0;
+    const counted = Number((r[0].results[0] as any).count) || 0, total = popular ? Math.min(counted, POPULAR_PAGES * size) : counted;
     let ads: any[] | undefined;
     if (withAds) {
         const top = new Set((r[1].results as any[]).slice(0, 5).map(p => p.id));
@@ -766,6 +785,35 @@ export function walletJson(stored: { bump_tokens: number; bump_at: number } | un
     return { bumpTokens: w.tokens, bumpMax: perks.bumpMax, bumpRefillMin: perks.bumpRefillMinutes, nextRefillAt: w.nextRefillAt };
 }
 
+// 대표 글 (WP63): the author's allowance now, perks.profilePins of the current grade (the 체험 counts as 플러스,
+// the manager as 엘리트), as SQL on the author id expression. Only the newest pins up to it show (pinnedSql),
+// so a lower grade hides the older pins and deletes nothing.
+const NOW_SQL = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
+const pinAllowanceSql = (author: string) => `(SELECT CASE WHEN pu.role='manager' THEN ${MANAGER_PERKS.profilePins} ELSE CASE COALESCE((SELECT MAX(g.rank) FROM user_grades g
+    WHERE g.user_id=pu.id AND (g.expires_at IS NULL OR g.expires_at>${NOW_SQL})),0) ${GRADES.map(g => `WHEN ${g.rank} THEN ${PERKS[g.id].profilePins}`).join(' ')} ELSE 0 END END FROM users pu WHERE pu.id=${author})`;
+// Whether row p is one of its author's shown 대표 글: pinned, visible, and fewer newer visible pins than
+// the allowance (posts_profile_pin). The CASE reads nothing more for a post that is not pinned.
+export const pinnedSql = (p = 'p') => `(CASE WHEN ${p}.profile_pin_at IS NULL OR ${p}.hidden!=0 THEN 0 ELSE (SELECT COUNT(*) FROM posts pq WHERE pq.author_id=${p}.author_id
+    AND pq.profile_pin_at>${p}.profile_pin_at AND pq.hidden=0)<${pinAllowanceSql(`${p}.author_id`)} END)`;
+// PUT /posts/:id/pin {active} (WP63): 대표 글 on the profile, 플러스 1, 프리미엄 3, 엘리트 and up 5. The count
+// (the member's other visible pins, shown or not) is checked inside the UPDATE, so parallel taps cannot pass
+// it; '대표 글 해제' always works, also on a pin a lower grade no longer shows.
+async function pinPost(req: Request, u: User, post: any) {
+    const b = await body(req);
+    if (typeof b.active !== 'boolean') fail(400, '설정을 확인해 주세요.');
+    if (!b.active) {
+        await db().prepare('UPDATE posts SET profile_pin_at=NULL WHERE id=? AND author_id=?').bind(post.id, u.id).run();
+        return json({ pinned: false });
+    }
+    const max = perksOf(u).profilePins;
+    if (!max) fail(403, PIN_TEXT.off);
+    if (post.hidden) fail(409, '숨김 처리된 글은 대표 글로 고정할 수 없습니다.');
+    const r = await db().prepare(`UPDATE posts SET profile_pin_at=? WHERE id=? AND author_id=? AND hidden=0
+        AND (SELECT COUNT(*) FROM posts q WHERE q.author_id=? AND q.profile_pin_at IS NOT NULL AND q.hidden=0 AND q.id!=?)<?`).bind(Date.now(), post.id, u.id, u.id, post.id, max).run();
+    if (!r.meta.changes) fail(403, PIN_TEXT.full(max));
+    return json({ pinned: true });
+}
+
 // The member's ad posts now (me/usage '광고 2/3 · 자동'): the slot posts that are open and visible.
 export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND featured_pin>=0 AND status='open' AND hidden=0";
 // PUT /posts/:id/feature (WP53): {active:true} '광고 고정' keeps the post in a slot (a pin beyond the
@@ -869,15 +917,26 @@ async function completePost(req: Request, u: User, post: any) {
 const guestViews = new Map<string, number>();
 const GUEST_VIEWS_MAX = 5000;
 
+// 판매 통계 (WP63): whether the post's author keeps views by the hour ('trend' and up: 프리미엄, 엘리트,
+// 관리자 and the manager; never the 체험), from the author columns of postSelect.
+export const keepsViews = (post: { role?: string | null; author_grade_info?: string | null }) =>
+    STATS_RANK[perksOf({ role: post.role, grade: parse(post.author_grade_info ?? 'null', null)?.grade }).stats] >= STATS_RANK.trend;
+
 // One 조회: a member counts once per 6 hours per post (the 최근 본 글 row it also refreshes, which
 // moved here from POST /view; the 100-row trim runs on 1 view in 10), a guest once per address, post
 // and KST day in this isolate. Returns 1 when the view counted. A counted view that came from an ad
-// (?from=ad, WP53) also counts as '광고 유입'.
-async function countView(req: Request, u: User | null, postId: number, fromAd = false): Promise<number> {
+// (?from=ad, WP53) also counts as '광고 유입'. With `hourly` (keepsViews) the counted view is also added
+// to post_views for the hour (WP63); other posts cost no extra write.
+async function countView(req: Request, u: User | null, postId: number, fromAd = false, hourly = false): Promise<number> {
     const now = Date.now(), promo = fromAd ? 1 : 0;
+    const viewRow = (guard: string, args: unknown[]) => db().prepare(`INSERT INTO post_views(post_id,hour,n) SELECT ?,?,1 WHERE ${guard}
+        ON CONFLICT(post_id,hour) DO UPDATE SET n=n+1`).bind(postId, Math.floor(now / HOUR), ...args);
     if (u) {
+        // The 6-hour test reads history before this batch refreshes it.
+        const fresh = 'NOT EXISTS(SELECT 1 FROM history WHERE user_id=? AND post_id=? AND created_at>?)', freshArgs = [u.id, postId, now - 6 * HOUR];
         const r = await db().batch([
-            db().prepare('UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=? AND NOT EXISTS(SELECT 1 FROM history WHERE user_id=? AND post_id=? AND created_at>?)').bind(promo, postId, u.id, postId, now - 6 * HOUR),
+            db().prepare(`UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=? AND ${fresh}`).bind(promo, postId, ...freshArgs),
+            ...hourly ? [viewRow(fresh, freshArgs)] : [],
             db().prepare('INSERT INTO history(user_id,post_id,created_at) VALUES(?,?,?) ON CONFLICT(user_id,post_id) DO UPDATE SET created_at=excluded.created_at').bind(u.id, postId, now),
             ...Math.random() < 0.1 ? [db().prepare('DELETE FROM history WHERE user_id=? AND post_id NOT IN(SELECT post_id FROM history WHERE user_id=? ORDER BY created_at DESC LIMIT 100)').bind(u.id, u.id)] : [],
         ]);
@@ -888,7 +947,10 @@ async function countView(req: Request, u: User | null, postId: number, fromAd = 
     guestViews.delete(key);
     guestViews.set(key, day);
     while (guestViews.size > GUEST_VIEWS_MAX) guestViews.delete(guestViews.keys().next().value!);
-    await db().prepare('UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=?').bind(promo, postId).run();
+    await db().batch([
+        db().prepare('UPDATE posts SET view_count=view_count+1,promo_views=promo_views+? WHERE id=?').bind(promo, postId),
+        ...hourly ? [viewRow('EXISTS(SELECT 1 FROM posts WHERE id=?)', [postId])] : [],
+    ]);
     return 1;
 }
 
@@ -899,7 +961,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         const u = await currentUser(req), post = await visiblePost(p[1], u);
         // 조회수 (WP45): the detail page asks with view=1 once per post and KST day; the author never counts.
         if (url.searchParams.get('view') === '1' && post.author_id !== u?.id) {
-            post.view_count = (Number(post.view_count) || 0) + await countView(req, u, post.id, url.searchParams.get('from') === 'ad');
+            post.view_count = (Number(post.view_count) || 0) + await countView(req, u, post.id, url.searchParams.get('from') === 'ad', keepsViews(post));
         }
         // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43) for the author box (none for a withdrawn author),
         // and under a completed post '비슷한 매물' (WP53): other advertisers' open posts of the same tab, in
@@ -941,7 +1003,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     // The pre-WP45 view call, kept for one release (pages loaded before the deploy); the detail page now
     // sends GET posts/:id?view=1.
     if (p[2] === 'view' && method === 'POST') {
-        if (existing.author_id !== u.id) await countView(req, u, existing.id);
+        if (existing.author_id !== u.id) await countView(req, u, existing.id, false, keepsViews(existing));
         return json({ ok: true });
     }
     if (existing && existing.author_id !== u.id && (u.role !== 'manager' || method !== 'DELETE')) fail(403, '권한이 없습니다.');
@@ -958,6 +1020,8 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
     if (p[2] === 'price' && method === 'PATCH') return patchPrice(req, u, existing);
     if (p[2] === 'status' && method === 'PATCH') return completePost(req, u, existing);
     if (p[2] === 'auto' && method === 'PUT') return postAutoHandler(req, u, existing);
+    // 대표 글 (WP63).
+    if (p[2] === 'pin' && !p[3] && method === 'PUT') return pinPost(req, u, existing);
     if (!['POST', 'PUT'].includes(method) || p[2]) fail(405, '지원하지 않는 요청입니다.');
     if (method === 'POST' && p[1] || method === 'PUT' && !existing) fail(400, '게시글 번호를 확인해 주세요.');
     // A completed post is read-only (WP43): delete, 다시 올리기 and 복사해서 새 글 stay.

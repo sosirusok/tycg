@@ -141,6 +141,9 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // {제목} {즉거가} {현젯}, firstReply '첫 문의 자동 안내' and awayReply '자리 비움' (both off by default).
 // 자동 매칭 (WP58): matchPosts own 판매·구매 posts get 'match' 알림 for new posts of the other side
 // (0: none, Infinity: every open post), and matchChats '채팅 보내기' a day from a match (엘리트 and up).
+// 판매 통계 (WP63): stats 'basic' (the counts on 내 글 rows), 'trend' (+ the per-post 통계 sheet, and counted
+// views kept by the hour) or 'full' (+ views by hour of day, 시세 and the 주간 요약); profilePins 대표 글.
+export type StatsLevel = 'basic' | 'trend' | 'full';
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
@@ -148,22 +151,23 @@ export type Perks = {
     autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
     replyTemplates: number; templateVars: boolean; firstReply: boolean; awayReply: boolean;
     matchPosts: number; matchChats: number;
+    stats: StatsLevel; profilePins: number;
 };
 
 const PRICE_PERIODS = [12, 24, 48, 72];
 const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all',
     autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true,
-    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true, matchPosts: Infinity, matchChats: 20 };
+    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true, matchPosts: Infinity, matchChats: 20, stats: 'full', profilePins: 5 };
 export const PERKS: Record<GradeId, Perks> = {
     normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
         autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false,
-        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0 },
+        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0, stats: 'basic', profilePins: 0 },
     plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new',
         autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false,
-        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0 },
+        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0, stats: 'basic', profilePins: 1 },
     premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all',
         autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false,
-        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false, matchPosts: 3, matchChats: 0 },
+        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false, matchPosts: 3, matchChats: 0, stats: 'trend', profilePins: 3 },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -461,6 +465,44 @@ export function matchGuideText(perks: Perks) {
     const posts = Number.isFinite(perks.matchPosts) ? `내 글 ${perks.matchPosts}개` : MATCH_TEXT.all;
     return perks.matchChats ? `${posts} · ${MATCH_TEXT.chat} 하루 ${perks.matchChats}번` : posts;
 }
+
+// 판매 통계 and 대표 글 (WP63, round-3 WP38 copy). STATS_RANK orders the levels ('trend' and up keep views by hour).
+export const STATS_RANK: Record<StatsLevel, number> = { basic: 0, trend: 1, full: 2 };
+export const STATS_TEXT = {
+    button: '통계',
+    title: '판매 통계',
+    off: '판매 통계는 프리미엄부터 가능합니다.',
+    days: '최근 7일',
+    views: '조회',
+    favorites: '찜',
+    chats: '채팅',
+    effect: '끌올 효과',
+    // The placements '끌올 효과' compares (views in the 2 hours before and after).
+    manual: '직접 끌올',
+    auto: '자동 끌올',
+    relist: '다시 올리기',
+    before: '전 2시간',
+    after: '후 2시간',
+    times: (n: number) => `${n}번`,
+    average: '조회 평균',
+    noEffect: '최근 14일 끌올이 없습니다.',
+    hours: '시간대별 조회 (14일)',
+    market: '시세',
+    marketLine: (n: number, price: string) => `확인 거래 기준 · ${n}건 · 중간값 ${price}`,
+    // The 엘리트 주간 요약 알림 (tick B, Monday 10:00 KST).
+    weekly: (views: number, chats: number, bumps: number) => `지난주 조회 ${views} · 채팅 ${chats} · 끌올 ${bumps}`,
+};
+export const PIN_TEXT = {
+    tag: '대표',
+    pin: '대표 글 고정',
+    unpin: '대표 글 해제',
+    pinned: '대표 글 고정 완료',
+    unpinned: '대표 글 해제',
+    off: '대표 글은 플러스부터 가능합니다.',
+    full: (n: number) => `대표 글은 ${n}개까지입니다.`,
+};
+// The Guide cells: '내 글 줄 수치', '+ 글별 통계 창', '+ 시간대별 조회 · 시세 · 주간 요약'; '-', '1개', '5개'.
+export const STATS_GUIDE: Record<StatsLevel, string> = { basic: '내 글 줄 수치', trend: '+ 글별 통계 창', full: '+ 시간대별 조회 · 시세 · 주간 요약' };
 
 // 내 글 일괄 변경 (WP58): every grade, at most BULK_MAX posts a request.
 export const BULK_MAX = 30;

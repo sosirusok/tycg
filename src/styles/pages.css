@@ -595,6 +595,10 @@
 .seller-meta b { color: var(--ink); font-weight: 700; }
 .seller-meta .status-open { border: 1px solid var(--line-2); color: var(--ink-2); }
 .seller-stats { color: var(--ink-3); font-size: var(--fs-13); }
+/* 판매 통계 (WP63): for 프리미엄 and up the counts line is the button that opens the 통계 sheet. */
+.seller-stats.stats-open { display: inline-flex; flex-wrap: wrap; align-items: center; justify-self: start; gap: 2px 8px; padding: 0; text-align: left; }
+.stats-open b { color: var(--brand); font-weight: 700; }
+.stats-open:hover b { text-decoration: underline; text-underline-offset: 3px; }
 .seller-actions { display: flex; align-items: center; gap: 6px; }
 .seller-bump { flex-direction: column; gap: 0; min-width: 96px; height: 44px; line-height: 1.2; }
 .seller-bump .bump-hint { font-size: var(--fs-12); }

@@ -25,7 +25,9 @@ const BANNED = [
 // 예약중 everywhere (two states), with the accept line that named it and the old 마감 line.
 // 광고 (WP53) replaces the round-2 '프리미엄 매물' box and its 게시판 상단 노출 switch.
 const RETIRED = ['자정에 초기화', '오늘 끌올', '거래중·예약중 글은', '예약중', '글 상태가 바뀌어 제시가 마감되었습니다.', '예약 걸어둘게요',
-    '프리미엄 매물', '상단 고정', '상단 노출 빼기', '게시판 상단 노출'];
+    '프리미엄 매물', '상단 고정', '상단 노출 빼기', '게시판 상단 노출',
+    // 프로필 배너 was dropped (WP63, decisions item 7).
+    '프로필 배너는 프리미엄부터 가능합니다.', '배너 변경'];
 // Wallet wording that must stay in the source (copy.md, style guide §6). Each entry is a literal
 // fragment; templated strings are split at their variables.
 const REQUIRED = [
@@ -62,6 +64,9 @@ const REQUIRED = [
     // 신고 처리 순서 (WP60, copy.md 신고).
     "'신고 처리 순서'", "'처리 완료'", "'기각'", "'되돌리기'", '`대기 ${n}`', ' 대기`', '`신고 30일 ${n} · 기각 ${dismissed}`',
     '사기·먹튀, 회수·해킹 계정 신고는 등급과 관계없이 먼저 확인합니다.', '기각된 신고가 30일에 ', '건 이상이면 신고 우선 순위가 적용되지 않습니다.',
+    // 판매 통계, 대표 글, 인기순 and the 엘리트 주간 요약 (WP63, round-3 WP38 copy).
+    '판매 통계는 프리미엄부터 가능합니다.', "'통계'", "'끌올 효과'", '`확인 거래 기준 · ${n}건 · 중간값 ${price}`', '`지난주 조회 ${views} · 채팅 ${chats} · 끌올 ${bumps}`',
+    "'대표 글 고정'", "'대표 글 해제'", '대표 글은 플러스부터 가능합니다.', '`대표 글은 ${n}개까지입니다.`', '>인기순<',
 ];
 
 async function files(dir, recursive, test) {

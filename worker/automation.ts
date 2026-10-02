@@ -1,3 +1,4 @@
+import { MARKET_SQL, marketOf, marketSince, weeklyDone, weeklyStatements, type MarketTrade } from './stats';
 import { db, fail, requireUser, requireActive, json, body, isManager, isSuspended } from './http';
 import { notifyStatement } from './notifications';
 import { amount, walletJson } from './posts';
@@ -323,11 +324,14 @@ function countStatement(list: string, now: number, day: string, delayed: number)
 // Tick B: '‘제목’ 글 끌올 가능' for the posts whose reminder time came, once the post can really be bumped
 // (its gap, 새 글 우선 and 1 끌올 in the wallet). Not yet: the reminder moves to the new time. A post that
 // was completed, hidden or deleted drops its reminder. Two calls, at most 100 rows.
+// The 엘리트 주간 요약 (WP63, stats.ts) rides the first call while the week is not known to be done.
 export async function remindJob(now: number) {
-    const rows = (await db().prepare(`SELECT pa.post_id,p.title,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
+    const weekly = weeklyStatements(now);
+    const [read, ...weeklyR] = await db().batch([db().prepare(`SELECT pa.post_id,p.title,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
         FROM post_auto pa INDEXED BY post_auto_remind JOIN posts p ON p.id=pa.post_id JOIN users u ON u.id=pa.user_id
-        WHERE pa.bump_remind>0 AND pa.bump_remind<=? ORDER BY pa.bump_remind LIMIT ${REMINDS_PER_TICK}`).bind(now, now).all<any>()).results;
-    if (!rows.length) return { reminded: 0 };
+        WHERE pa.bump_remind>0 AND pa.bump_remind<=? ORDER BY pa.bump_remind LIMIT ${REMINDS_PER_TICK}`).bind(now, now), ...weekly]);
+    const rows = read.results as any[], weeklySent = weeklyDone(weeklyR, now);
+    if (!rows.length) return { reminded: 0, ...weekly.length ? { weekly: weeklySent } : {} };
     const send: { u: string; p: number; t: string }[] = [], next: { p: number; t: number }[] = [];
     for (const r of rows) {
         if (r.status !== 'open' || r.hidden) { next.push({ p: r.post_id, t: 0 }); continue; }
@@ -340,7 +344,7 @@ export async function remindJob(now: number) {
         ...send.length ? [notifyStatement('bump_ready', "SELECT json_extract(value,'$.u') AS user_id,CAST(json_extract(value,'$.p') AS TEXT) AS ref,json_extract(value,'$.p') AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(send)], now)] : [],
         db().prepare(`UPDATE post_auto SET bump_remind=j.t FROM (SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.t') AS t FROM json_each(?)) j WHERE post_auto.post_id=j.p`).bind(JSON.stringify(next)),
     ]);
-    return { reminded: send.length };
+    return { reminded: send.length, ...weekly.length ? { weekly: weeklySent } : {} };
 }
 
 // When a post can be bumped: the latest of its gap, 새 글 우선 (bumped_at ahead of now) and, with an
@@ -751,13 +755,28 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
         const perks = perksOf(u);
         if (Number.isFinite(perks.autoPricePosts)) fail(403, '판매 글 전체는 엘리트부터 가능합니다.');
         requireActive(u);
-        const a = await db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id).first<{ drop_every_h: number | null }>();
-        const every = dropEvery(a?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every), floor = '(p.price*4/5)/10000*10000';
+        // The 최저가: 90% of the post's 시세 (WP63, the median of comparable confirmed trades) rounded down to
+        // 만원 where there is one, else 80% of the 즉거가 rounded down to 만원.
+        const mine = "p.author_id=? AND p.kind='sell' AND p.status='open' AND p.hidden=0 AND p.price IS NOT NULL AND p.price_mode!='offer'";
+        const [a, own, market] = await db().batch([
+            db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id),
+            db().prepare(`SELECT p.id,p.category,p.price,(SELECT json_group_array(json_object('tier',s.tier,'season',s.season)) FROM post_seasons s WHERE s.post_id=p.id) AS tags FROM posts p WHERE ${mine}`).bind(u.id),
+            db().prepare(`${MARKET_SQL} AND t.category IN (SELECT DISTINCT p.category FROM posts p WHERE ${mine})`).bind(marketSince(now), u.id),
+        ]);
+        const trades = market.results as (MarketTrade & { category: string })[];
+        // A 시세 floor at or above the 즉거가 (or under 1,000원) falls back to the 80% one.
+        const floors = (own.results as { id: number; category: string; price: number; tags: string }[]).flatMap(p => {
+            const m = marketOf(trades.filter(t => t.category === p.category), JSON.parse(p.tags || '[]'));
+            const f = m ? Math.floor(m.median * 0.9 / 10000) * 10000 : 0;
+            return f >= 1000 && f < p.price ? [{ p: p.id, f }] : [];
+        });
+        const every = dropEvery((a.results[0] as { drop_every_h: number | null } | undefined)?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every);
         const r = await db().prepare(`INSERT INTO post_auto(post_id,user_id,drop_on,drop_floor,drop_next_at,drop_count,drop_set_at,drop_checked_at)
-            SELECT p.id,p.author_id,1,${floor},?,0,?,? FROM posts p WHERE p.author_id=? AND p.kind='sell' AND p.status='open' AND p.hidden=0 AND p.price IS NOT NULL AND p.price_mode!='offer'
-                AND ${floor}>=1000 AND ${floor}<p.price
+            SELECT x.id,x.author_id,1,x.floor,?,0,?,? FROM (SELECT p.id,p.author_id,p.price,COALESCE(m.f,(p.price*4/5)/10000*10000) AS floor FROM posts p
+                LEFT JOIN (SELECT json_extract(value,'$.p') AS pid,json_extract(value,'$.f') AS f FROM json_each(?)) m ON m.pid=p.id WHERE ${mine}) x
+            WHERE x.floor>=1000 AND x.floor<x.price
             ON CONFLICT(post_id) DO UPDATE SET drop_on=1,drop_floor=excluded.drop_floor,drop_next_at=excluded.drop_next_at,drop_count=0,drop_set_at=excluded.drop_set_at,drop_checked_at=excluded.drop_checked_at
-            WHERE post_auto.drop_on=0`).bind(next, now, now, u.id).run();
+            WHERE post_auto.drop_on=0`).bind(next, now, now, JSON.stringify(floors), u.id).run();
         return json({ ok: true, count: r.meta.changes, ...await automationState(u) });
     }
     if (p[2] === 'continue' && !p[3] && method === 'POST') {

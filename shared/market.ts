@@ -72,6 +72,10 @@ export type Post = {
     comment_count?: number;
     // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
     appraised?: { price: number; at: number } | null;
+    // 대표 글 (WP63): in a member's lists, whether the post shows as 대표; profile_pin_at (the author's
+    // own lists only) also keeps a pin a lower grade no longer shows.
+    pinned?: boolean;
+    profile_pin_at?: number | null;
     // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of
     // the trade and the manager also get a pending one, with deal_state ('확인 대기' / '확인 완료').
     deal_price?: number;

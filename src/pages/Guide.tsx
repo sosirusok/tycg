@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, MATCH_TEXT, PERKS, REPORT_TEXT, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, linkPreviewAllowed, matchGuideText, priorityCell, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, MATCH_TEXT, PERKS, REPORT_TEXT, SITE_RULES, STATS_GUIDE, STATS_TEXT, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, linkPreviewAllowed, matchGuideText, priorityCell, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -59,6 +59,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
     ['내 빠른 답장', g => { const k = PERKS[g.id]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (gradeInfo(g.id).rank >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; }],
     [CHAT_AUTO_TEXT.label, g => { const k = PERKS[g.id]; return [...k.firstReply ? [CHAT_AUTO_TEXT.first] : [], ...k.awayReply ? [CHAT_AUTO_TEXT.away] : []].join(' · ') || '-'; }],
+    // 판매 통계 and 대표 글 (WP63): '내 글 줄 수치', '+ 글별 통계 창', '+ 시간대별 조회 · 시세 · 주간 요약'; '-', '1개', '3개', '5개'.
+    [STATS_TEXT.title, g => STATS_GUIDE[PERKS[g.id].stats]],
+    ['대표 글 고정', g => PERKS[g.id].profilePins ? `${PERKS[g.id].profilePins}개` : '-'],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -78,6 +81,7 @@ const FREE_ITEMS = [
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     `키워드·게시판 알림 ${SITE_RULES.keywordAlerts}개`,
     '판매자 구독',
+    '인기순 정렬',
     '거래 기록·후기',
     '신고·차단',
 ];

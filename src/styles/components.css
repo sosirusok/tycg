@@ -279,3 +279,27 @@
   .home-ad-x::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--fill); }
   .home-ad-x svg { position: relative; }
 }
+
+/* 판매 통계 (WP63): CSS bars in the brand color on white, no chart library. */
+.stats-sheet { display: grid; gap: 24px; }
+.stats-block h3 { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.stats-block h3 > span { color: var(--ink-3); font-size: var(--fs-13); font-weight: 400; }
+/* A label column, then 7 KST days: 조회 bars with their value, the day, then 찜 and 채팅 under them. */
+.stats-grid { display: grid; grid-template-columns: 36px repeat(7, minmax(0, 1fr)); align-items: end; gap: 6px 6px; }
+.stats-row-label { color: var(--ink-3); font-size: var(--fs-12); white-space: nowrap; }
+.stats-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 112px; }
+.stats-val { color: var(--ink-2); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+.stats-bar { display: block; width: min(24px, 100%); border-radius: var(--r-4) var(--r-4) 0 0; background: var(--brand); }
+.stats-day { padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: var(--fs-12); text-align: center; }
+.stats-num { color: var(--ink); font-size: var(--fs-13); text-align: center; font-variant-numeric: tabular-nums; }
+.stats-effect { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.stats-effect li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--ink); font-size: var(--fs-14); }
+.stats-effect-nums { color: var(--ink-3); }
+.stats-effect-nums b { color: var(--ink); font-weight: 700; }
+.stats-note { margin-top: 10px; color: var(--ink-2); font-size: var(--fs-13); }
+/* 24 hours of the day (엘리트 and up). */
+.stats-hours { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); align-items: end; gap: 2px; height: 80px; border-bottom: 1px solid var(--line); }
+.stats-hour { display: flex; align-items: flex-end; height: 100%; }
+.stats-hour-bar { display: block; width: 100%; border-radius: 2px 2px 0 0; background: var(--brand); }
+.stats-hours-axis { display: grid; grid-template-columns: repeat(4, 1fr); padding-top: 6px; color: var(--ink-3); font-size: var(--fs-12); }
+.stats-market p { color: var(--ink); font-size: var(--fs-15); font-weight: 600; }
