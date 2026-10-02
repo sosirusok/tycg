@@ -1,9 +1,9 @@
-import { db, fail, requireUser, json, body, isManager, isSuspended } from './http';
+import { db, fail, requireUser, requireActive, json, body, isManager, isSuspended } from './http';
 import { notifyStatement } from './notifications';
-import { walletJson } from './posts';
+import { amount, walletJson } from './posts';
 import { adTrimManyStatement } from './ads';
-import { TRADE_KINDS, categoriesForKind, type User } from '../shared/market';
-import { AUTO_RESERVE, AUTO_TEXT, MANAGER_PERKS, PERKS, gradeInfo, kstDate, kstDayStart, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
+import { TRADE_KINDS, categoriesForKind, priceText, type User } from '../shared/market';
+import { AUTO_RESERVE, AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
 // 자동 끌올 (WP52). Two cron ticks share the work:
 // - tick A (every 10 minutes, ':00') moves at most one post per due member, only 09:00-02:00 KST;
@@ -240,16 +240,16 @@ export async function bumpJob(now: number) {
     return { window: true, bumped: bumps.length, delayed, members: due.length };
 }
 
-// Call 3. The posts move only while the post still qualifies and the wallet still holds 3 (2 stay for
-// manual use); the wallet, the event (auto=1), auto_today and the counter follow only where the post
-// moved at exactly this time. A bump that did not land is looked at again in 10 minutes. A moved post
-// of a member with 광고 slots (WP53) becomes their newest slot, and the slots are trimmed after.
-function writeStatements(bumps: Bump[], plans: Plan[], notices: { u: string; f: string; t: string }[], now: number, day: string, delayed: number) {
+const moved = (col: string) => `EXISTS(SELECT 1 FROM posts mp WHERE mp.id=${col} AND mp.bumped_at=?)`;
+// The guarded auto 끌올 writes (tick A and the bump on a price drop): the posts move only while the post
+// still qualifies and the wallet still holds 3 (2 stay for manual use); the wallet, the event (auto=1)
+// follow only where the post moved at exactly this time. A moved post of a member with 광고 slots (WP53)
+// becomes their newest slot, and the slots are trimmed after.
+function bumpStatements(bumps: Bump[], now: number): D1PreparedStatement[] {
+    if (!bumps.length) return [];
     const j = `(SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.u') AS u,json_extract(value,'$.g') AS g,json_extract(value,'$.m') AS m,json_extract(value,'$.r') AS r,json_extract(value,'$.a') AS a FROM json_each(?))`;
-    const list = JSON.stringify(bumps), moved = (col: string) => `EXISTS(SELECT 1 FROM posts mp WHERE mp.id=${col} AND mp.bumped_at=?)`;
-    const steps = 'CAST((?-bump_at)/j.r AS INTEGER)';
-    const out: D1PreparedStatement[] = [];
-    if (bumps.length) out.push(
+    const list = JSON.stringify(bumps), steps = 'CAST((?-bump_at)/j.r AS INTEGER)';
+    return [
         db().prepare(`UPDATE posts SET bumped_at=?,bump_count=bump_count+1,featured_at=CASE WHEN j.a>0 AND posts.featured_pin>=0 THEN ? ELSE posts.featured_at END
             FROM ${j} j WHERE posts.id=j.p AND posts.author_id=j.u AND posts.status='open' AND posts.hidden=0 AND posts.bumped_at<=?
             AND (CASE WHEN posts.bump_count=0 THEN posts.created_at ELSE posts.bumped_at END)<=?-j.g
@@ -257,8 +257,15 @@ function writeStatements(bumps: Bump[], plans: Plan[], notices: { u: string; f: 
         db().prepare(`UPDATE users SET bump_tokens=MIN(j.m,bump_tokens+${steps})-1,bump_at=CASE WHEN bump_tokens+${steps}>=j.m THEN ? ELSE bump_at+${steps}*j.r END
             FROM ${j} j WHERE users.id=j.u AND j.m>0 AND ${moved('j.p')}`).bind(now, now, now, now, list, now),
         db().prepare(`INSERT INTO post_events(user_id,post_id,kind,created_at,auto) SELECT j.u,j.p,'bump',?,1 FROM ${j} j WHERE ${moved('j.p')}`).bind(now, list, now),
-    );
-    if (bumps.some(b => b.a > 0)) out.push(adTrimManyStatement(JSON.stringify(bumps.filter(b => b.a > 0).map(b => ({ u: b.u, a: b.a })))));
+        ...bumps.some(b => b.a > 0) ? [adTrimManyStatement(JSON.stringify(bumps.filter(b => b.a > 0).map(b => ({ u: b.u, a: b.a }))))] : [],
+    ];
+}
+
+// Call 3: the bumps (bumpStatements), then auto_today and the counter, which follow only where the post
+// moved at exactly this time. A bump that did not land is looked at again in 10 minutes.
+function writeStatements(bumps: Bump[], plans: Plan[], notices: { u: string; f: string; t: string }[], now: number, day: string, delayed: number) {
+    const list = JSON.stringify(bumps);
+    const out: D1PreparedStatement[] = bumpStatements(bumps, now);
     if (plans.length) out.push(db().prepare(`UPDATE automation SET bump_next_at=CASE WHEN j.b IS NOT NULL AND NOT ${moved('j.b')} THEN ? ELSE j.n END,
             pause_reason=j.s,paused_at=j.pa,auto_today=auto_today+(j.b IS NOT NULL AND ${moved('j.b')}),updated_at=?
         FROM (SELECT json_extract(value,'$.u') AS u,json_extract(value,'$.n') AS n,json_extract(value,'$.s') AS s,json_extract(value,'$.pa') AS pa,json_extract(value,'$.b') AS b FROM json_each(?)) j
@@ -317,6 +324,136 @@ export function autoDailyStatements(now: number) {
     ];
 }
 
+// ---- 자동 가격 내리기 (WP56) ------------------------------------------------------------------------
+
+// Due setups per tick (tick A, after 자동 끌올), earliest first.
+export const DROP_TICK = 30;
+// A tick that comes a little late still lands the next drop on the next slot, not the one after.
+const DROP_SLACK = 30 * MIN;
+
+// The member's period: the stored one while the grade allows it, else a day (or the grade's only one).
+export function dropEvery(stored: unknown, perks: Perks) {
+    const h = num(stored, 24);
+    if (perks.priceEveryHours.includes(h)) return h;
+    return perks.priceEveryHours.includes(24) || !perks.priceEveryHours.length ? 24 : perks.priceEveryHours[0];
+}
+// The step as the grade allows it: 5% only for 프리미엄 and up.
+export function dropStepOf(a: { drop_step?: number | null; drop_pct?: number | null } | null | undefined, perks: Perks) {
+    const pct = perks.pricePct && a?.drop_pct && DROP_PCTS.includes(a.drop_pct) ? a.drop_pct : null;
+    const step = a?.drop_step && DROP_STEPS.includes(a.drop_step) ? a.drop_step : DROP_STEPS[0];
+    return { step, pct };
+}
+
+type DropRow = {
+    id: number; u: string; floor: number | null; due: number; cnt: number; title: string; price: number | null; status: string; hidden: number; kind: string;
+    cur: number | null; bumped_at: number; bump_count: number; created_at: number; role: string; suspended_until: number | null; deleted_at: number | null;
+    bump_tokens: number; bump_at: number; seen: number; rank: number; step: number | null; pct: number | null; every: number | null; pos: number; accepted: number; asked: number;
+};
+// One looked-at setup: on (0 ends it), the next time, whether the look counts (k: drop_checked_at=now)
+// and, for a drop, the old and new price (o, n).
+type DropPlan = { p: number; on: number; n: number; k: number; o: number | null; np: number | null };
+
+// The due setups with everything the tick decides on: the post, the owner (rank, wallet, last visit),
+// their settings, the setup's place among the owner's running ones (newest switch first, for a lower
+// grade's allowance), an accepted 제시, and whether another member sent a 제시 or wrote in a chat about
+// the post since the last look (an auto-declined 제시 does not count). Bind now ×2.
+function dropDueSelect(now: number) {
+    const since = 'COALESCE(pa.drop_checked_at,pa.drop_set_at,0)';
+    return db().prepare(`SELECT pa.post_id AS id,pa.user_id AS u,pa.drop_floor AS floor,pa.drop_next_at AS due,pa.drop_count AS cnt,
+            p.title,p.price,p.status,p.hidden,p.kind,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS cur,p.bumped_at,p.bump_count,p.created_at,
+            u.role,u.suspended_until,u.deleted_at,u.bump_tokens,u.bump_at,COALESCE(u.last_seen_at,u.created_at) AS seen,${RANK('pa.user_id')} AS rank,
+            a.drop_step AS step,a.drop_pct AS pct,a.drop_every_h AS every,
+            (SELECT COUNT(*) FROM post_auto x WHERE x.user_id=pa.user_id AND x.drop_on=1 AND (x.drop_set_at>pa.drop_set_at OR (x.drop_set_at=pa.drop_set_at AND x.post_id>pa.post_id))) AS pos,
+            EXISTS(SELECT 1 FROM offers o WHERE o.post_id=pa.post_id AND o.status='accepted') AS accepted,
+            (EXISTS(SELECT 1 FROM offers o WHERE o.post_id=pa.post_id AND o.sender_id!=pa.user_id AND o.created_at>${since} AND NOT (o.status='declined' AND o.updated_at=o.created_at))
+                OR EXISTS(SELECT 1 FROM messages l JOIN conversations c ON c.id=l.conversation_id
+                    WHERE l.reference_id=CAST(pa.post_id AS TEXT) AND l.type='listing' AND c.updated_at>${since}
+                    AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=l.conversation_id AND m.sender_id!=pa.user_id AND m.type!='system' AND m.created_at>${since}))) AS asked
+        FROM post_auto pa INDEXED BY post_auto_drop_due JOIN posts p ON p.id=pa.post_id JOIN users u ON u.id=pa.user_id LEFT JOIN automation a ON a.user_id=pa.user_id
+        WHERE pa.drop_on=1 AND pa.drop_next_at<=? ORDER BY pa.drop_next_at LIMIT ${DROP_TICK}`).bind(now, now);
+}
+
+// Tick A, after 자동 끌올. Call 1: the due setups and the last hour per tab. Call 2: every write,
+// set-based. For each due setup:
+// - the post was completed or deleted, or is no longer a priced 판매 post: the setup ends;
+// - the owner has no grade, is under 이용 정지, has not visited for 3 (엘리트 7) days, or the setup is
+//   beyond a lower grade's allowance, or the post is hidden: skipped, looked at again one period later;
+// - an accepted 제시: held until 수락 취소; a 제시 or a chat message from another member since the last
+//   look: held one period (every grade);
+// - 10 drops done, the price at the floor, or a 현젯 at or above the next price: the setup ends with an 알림;
+// - else the price drops (history, 찜 가격 내림 알림 and 조건 알림 via the history) and, while the wallet
+//   holds 3 and the tab's hourly cap allows, the post is bumped with 1 끌올 (an auto=1 event).
+export async function dropJob(now: number) {
+    const [dueR, capR] = await db().batch([dropDueSelect(now), capStatement(now)]);
+    const rows = dueR.results as DropRow[];
+    if (!rows.length) return { dropped: 0, held: 0, ended: 0, bumped: 0 };
+    const a60 = new Map<string, number>(), o60 = new Map<string, number>();
+    for (const row of capR.results as { kind: string; a60: number; o60: number }[]) { a60.set(row.kind, num(row.a60)); o60.set(row.kind, num(row.o60)); }
+    const plans: DropPlan[] = [], notices: { u: string; ty: string; p: number; t: string }[] = [], drops: { p: number; u: string; o: number; n: number; t: string }[] = [];
+    const bumps: Bump[] = [], bumpedBy = new Set<string>(), perTab = new Map<string, number>();
+    let held = 0, ended = 0;
+    for (const r of rows) {
+        const manager = r.role === 'manager', rank = num(r.rank), perks = perksFor(rank, manager);
+        const every = dropEvery(r.every, perks), next = dropSlotAt(now + every * HOUR - DROP_SLACK, every);
+        const later = (k: number) => plans.push({ p: r.id, on: 1, n: next, k, o: null, np: null });
+        const end = (ty?: string, t?: string) => { plans.push({ p: r.id, on: 0, n: next, k: 1, o: null, np: null }); ended++; if (ty && t) notices.push({ u: r.u, ty, p: r.id, t }); };
+        if (r.deleted_at || r.status === 'closed' || r.kind !== 'sell' || r.price === null) { end(); continue; }
+        const away = !manager && num(r.seen) < now - pauseDays(rank) * DAY;
+        if (!manager && (rank < 1 || isSuspended(r.suspended_until, now) || away || num(r.pos) >= perks.autoPricePosts)) { later(0); continue; }
+        if (r.hidden) { later(0); continue; }
+        if (r.accepted || r.asked) { held++; later(1); continue; }
+        if (num(r.cnt) >= DROP_MAX) { end('drop_done', DROP_TEXT.maxed(r.title)); continue; }
+        const floor = Math.max(1000, num(r.floor, 1000));
+        if (r.price <= floor) { end('drop_done', DROP_TEXT.done(r.title)); continue; }
+        const { step, pct } = dropStepOf({ drop_step: r.step, drop_pct: r.pct }, perks);
+        const np = nextDropPrice(r.price, floor, step, pct);
+        if (r.cur && np <= num(r.cur)) { end('drop_stopped', DROP_TEXT.stopped(r.title)); continue; }
+        plans.push({ p: r.id, on: 1, n: next, k: 1, o: r.price, np });
+        drops.push({ p: r.id, u: r.u, o: r.price, n: np, t: `가격 내림 · ${r.title} ${priceText(np)}` });
+        // The bump: one per member per tick, inside 09:00-02:00, past the same-post gap and 새 글 우선,
+        // with 3 끌올 in the wallet, one per tab per tick under the tab's hourly cap.
+        const w = walletArgs(perks), kind = r.kind;
+        const wallet = w.m ? walletOf(num(r.bump_tokens), num(r.bump_at), perks, now).tokens : Infinity;
+        const gapOk = r.bumped_at <= now && (r.bump_count ? r.bumped_at : r.created_at) <= now - w.g;
+        if (!bumpedBy.has(r.u) && inAutoWindow(now) && gapOk && wallet > AUTO_RESERVE
+            && (perTab.get(kind) || 0) < PER_TAB && (a60.get(kind) || 0) < tabLimit(o60.get(kind) || 0) && bumps.length < PER_TICK) {
+            bumpedBy.add(r.u);
+            perTab.set(kind, (perTab.get(kind) || 0) + 1);
+            a60.set(kind, (a60.get(kind) || 0) + 1);
+            bumps.push({ p: r.id, u: r.u, ...w, a: perks.adSlots });
+        }
+    }
+    await db().batch(dropWrites(plans, drops, notices, bumps, now));
+    return { dropped: drops.length, held, ended, bumped: bumps.length };
+}
+
+// Call 2 of dropJob. The history row and the 찜 알림 go before the price UPDATE (they read the price it
+// replaces) and are written only while the post still holds the price the tick read (a manual edit in
+// between wins). drop_count grows only where this very drop landed. The UPDATE's '+' terms keep the
+// planner on the posts primary key (with the json bound, it otherwise scanned every 판매 post by kind).
+function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number; n: number; t: string }[], notices: { u: string; ty: string; p: number; t: string }[], bumps: Bump[], now: number) {
+    const out: D1PreparedStatement[] = [];
+    if (drops.length) {
+        const list = JSON.stringify(drops);
+        const j = `(SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.u') AS u,json_extract(value,'$.o') AS o,json_extract(value,'$.n') AS n,json_extract(value,'$.t') AS t FROM json_each(?))`;
+        out.push(
+            db().prepare(`INSERT INTO post_price_history(post_id,price,changed_at) SELECT j.p,j.o,? FROM ${j} j
+                WHERE EXISTS(SELECT 1 FROM posts hp WHERE hp.id=j.p AND hp.price=j.o AND hp.status='open' AND hp.kind='sell' AND hp.hidden=0)`).bind(now, list),
+            notifyStatement('fav_price', `SELECT f.user_id,CAST(f.post_id AS TEXT) AS ref,f.post_id,j.u AS actor_id,j.t AS text FROM ${j} j JOIN favorites f ON f.post_id=j.p
+                JOIN posts fp ON fp.id=j.p AND fp.price=j.o AND fp.status='open' AND fp.kind='sell' AND fp.hidden=0`, [list], now),
+            db().prepare(`UPDATE posts SET price=j.n,price_mode='fixed',updated_at=? FROM ${j} j
+                WHERE posts.id=j.p AND posts.price=j.o AND +posts.status='open' AND +posts.kind='sell' AND +posts.hidden=0`).bind(now, list),
+        );
+    }
+    out.push(db().prepare(`UPDATE post_auto SET drop_on=j.on_,drop_next_at=j.n,drop_checked_at=CASE WHEN j.k=1 THEN ? ELSE drop_checked_at END,
+            drop_count=drop_count+(j.np IS NOT NULL AND EXISTS(SELECT 1 FROM posts mp WHERE mp.id=j.p AND mp.price=j.np AND mp.updated_at=?))
+        FROM (SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.on') AS on_,json_extract(value,'$.n') AS n,json_extract(value,'$.k') AS k,json_extract(value,'$.np') AS np FROM json_each(?)) j
+        WHERE post_auto.post_id=j.p AND post_auto.drop_on=1`).bind(now, now, JSON.stringify(plans)));
+    if (notices.length) out.push(notifyStatement(null, "SELECT json_extract(value,'$.u') AS user_id,json_extract(value,'$.ty') AS type,CAST(json_extract(value,'$.p') AS TEXT) AS ref,json_extract(value,'$.p') AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(notices)], now));
+    out.push(...bumpStatements(bumps, now));
+    return out;
+}
+
 // ---- Enrolment -------------------------------------------------------------------------------------
 
 // How many posts a grade lists (Infinity: all of them).
@@ -364,15 +501,20 @@ async function automationState(u: User) {
     const now = Date.now(), manager = isManager(u), perks = perksOf(u);
     const r = await db().batch([
         db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, manager ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now),
-        db().prepare('SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at FROM automation WHERE user_id=?').bind(u.id),
+        db().prepare('SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at,drop_step,drop_pct,drop_every_h,decline_on FROM automation WHERE user_id=?').bind(u.id),
         db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
         db().prepare(`SELECT p.id,p.title,p.kind,p.category,p.thumb,CASE WHEN json_valid(p.images) THEN json_extract(p.images,'$[0]') END AS image,p.bumped_at,p.hidden,COALESCE(pa.bump,0) AS auto,
-                COALESCE(p.touched_at,p.updated_at)<=? AS stale
+                COALESCE(p.touched_at,p.updated_at)<=? AS stale,p.price,p.price_mode,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS current_offer,
+                COALESCE(pa.drop_on,0) AS drop_on,pa.drop_floor,pa.drop_next_at,COALESCE(pa.drop_count,0) AS drop_count
             FROM posts p LEFT JOIN post_auto pa ON pa.post_id=p.id WHERE p.author_id=? AND p.status!='closed' ORDER BY COALESCE(pa.bump,0) DESC,p.bumped_at DESC LIMIT 100`).bind(now - STALE_MS, u.id),
         db().prepare(`SELECT ${PAYING('?')} AS paying`).bind(u.id, now),
     ]);
-    const a = r[1].results[0] as { bump_on: number; bump_new: number; bump_next_at: number | null; pause_reason: string; paused_at: number | null };
-    const posts = (r[3].results as any[]).map(p => ({ ...p, auto: !!p.auto, stale: !!p.stale, hidden: !!p.hidden }));
+    const a = r[1].results[0] as { bump_on: number; bump_new: number; bump_next_at: number | null; pause_reason: string; paused_at: number | null; drop_step: number | null; drop_pct: number | null; drop_every_h: number | null; decline_on: number };
+    const { step, pct } = dropStepOf(a, perks);
+    const posts = (r[3].results as any[]).map(p => {
+        const { drop_on, drop_floor, drop_next_at, drop_count, ...rest } = p;
+        return { ...rest, auto: !!p.auto, stale: !!p.stale, hidden: !!p.hidden, drop: dropJson(p, step, pct) };
+    });
     const listed = posts.filter(p => p.auto && !p.hidden);
     // The tick that will look: the first ':00, :10, …' at or after the stored time, inside the window.
     const next = a.bump_next_at === null ? null : windowNext(Math.ceil(Math.max(a.bump_next_at, now) / (10 * MIN)) * 10 * MIN);
@@ -383,7 +525,21 @@ async function automationState(u: User) {
         trial: !!u.grade_trial && !(r[4].results[0] as any)?.paying,
         listed: listed.length, stale: listed.filter(p => p.stale).length, posts,
         ...walletJson(r[2].results[0] as any, perks, now),
+        // 가격 내리기 (WP56): the card's settings; slots null = every 판매 post.
+        drop: {
+            slots: Number.isFinite(perks.autoPricePosts) ? perks.autoPricePosts : null, step, pct, everyH: dropEvery(a.drop_every_h, perks),
+            everyOptions: perks.priceEveryHours, canPct: perks.pricePct, canDecline: perks.autoDecline, declineOn: perks.autoDecline && !!a.decline_on,
+            on: posts.filter(p => p.drop?.on && !p.hidden).length,
+        },
     };
+}
+
+// A post's 가격 내리기 for its author: on, 최저가, the next drop time and price, and how many drops so far.
+// null for a post that cannot have one (not a priced 판매 post).
+export function dropJson(p: { kind: string; price: number | null; price_mode?: string; drop_on?: number | null; drop_floor?: number | null; drop_next_at?: number | null; drop_count?: number | null }, step: number, pct: number | null) {
+    if (p.kind !== 'sell' || p.price === null || p.price === undefined) return null;
+    const on = !!p.drop_on, floor = on && p.drop_floor ? p.drop_floor : defaultDropFloor(p.price);
+    return { on, floor, nextAt: on ? p.drop_next_at ?? null : null, nextPrice: on && p.price > floor ? nextDropPrice(p.price, floor, step, pct) : null, count: Number(p.drop_count) || 0 };
 }
 
 // me/automation routes. GET the state; PUT {bumpOn?, bumpNew?}; POST me/automation/continue ('모두 계속':
@@ -400,10 +556,45 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
             if (!isManager(u) && gradeInfo(u.grade).rank < 3) fail(403, '새 글 자동 포함은 엘리트부터 가능합니다.');
             sets.push('bump_new=?'); args.push(b.bumpNew ? 1 : 0);
         }
+        // 가격 내리기 (WP56): the step (1만원, or 5% for 프리미엄 and up), the period the grade offers and,
+        // for 엘리트 and up, '최저가 미만 제시 자동 거절'.
+        const perks = perksOf(u);
+        if (b.dropStep !== undefined) {
+            if (!DROP_STEPS.includes(b.dropStep)) fail(400, DROP_TEXT.step);
+            sets.push('drop_step=?', 'drop_pct=NULL'); args.push(b.dropStep);
+        }
+        if (b.dropPct !== undefined && b.dropStep === undefined) {
+            if (b.dropPct !== null && (!perks.pricePct || !DROP_PCTS.includes(b.dropPct))) fail(400, DROP_TEXT.step);
+            sets.push('drop_pct=?'); args.push(b.dropPct);
+        }
+        if (b.dropEveryH !== undefined) {
+            if (!perks.priceEveryHours.includes(b.dropEveryH)) fail(400, DROP_TEXT.period);
+            sets.push('drop_every_h=?'); args.push(b.dropEveryH);
+        }
+        if (b.declineOn !== undefined) {
+            if (typeof b.declineOn !== 'boolean') fail(400, '설정을 확인해 주세요.');
+            if (!perks.autoDecline) fail(403, DROP_TEXT.declineOff);
+            sets.push('decline_on=?'); args.push(b.declineOn ? 1 : 0);
+        }
         if (!sets.length) fail(400, '설정을 확인해 주세요.');
         await automationState(u);
         await db().prepare(`UPDATE automation SET ${sets.join(',')},updated_at=? WHERE user_id=?`).bind(...args, now, u.id).run();
         return json(await automationState(u));
+    }
+    // '판매 글 전체' (엘리트 and up, the manager): every open priced 판매 post without a running setup gets
+    // one, 최저가 80% of the 즉거가 rounded down to 만원 (posts where that is under 1,000원 are left out).
+    if (p[2] === 'drop-all' && !p[3] && method === 'POST') {
+        const perks = perksOf(u);
+        if (Number.isFinite(perks.autoPricePosts)) fail(403, '판매 글 전체는 엘리트부터 가능합니다.');
+        requireActive(u);
+        const a = await db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id).first<{ drop_every_h: number | null }>();
+        const every = dropEvery(a?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every), floor = '(p.price*4/5)/10000*10000';
+        const r = await db().prepare(`INSERT INTO post_auto(post_id,user_id,drop_on,drop_floor,drop_next_at,drop_count,drop_set_at,drop_checked_at)
+            SELECT p.id,p.author_id,1,${floor},?,0,?,? FROM posts p WHERE p.author_id=? AND p.kind='sell' AND p.status='open' AND p.hidden=0 AND p.price IS NOT NULL AND p.price_mode!='offer'
+                AND ${floor}>=1000 AND ${floor}<p.price
+            ON CONFLICT(post_id) DO UPDATE SET drop_on=1,drop_floor=excluded.drop_floor,drop_next_at=excluded.drop_next_at,drop_count=0,drop_set_at=excluded.drop_set_at,drop_checked_at=excluded.drop_checked_at
+            WHERE post_auto.drop_on=0`).bind(next, now, now, u.id).run();
+        return json({ ok: true, count: r.meta.changes, ...await automationState(u) });
     }
     if (p[2] === 'continue' && !p[3] && method === 'POST') {
         const r = await db().batch([
@@ -420,6 +611,7 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
 // listed posts, for the '뺄 글 선택' sheet.
 export async function postAutoHandler(req: Request, u: User, post: any) {
     const b = await body(req), now = Date.now(), perks = perksOf(u);
+    if (b.drop !== undefined) return dropSwitch(u, post, b.drop, now);
     if (typeof b.remind === 'boolean') {
         let at = 0;
         if (b.remind) {
@@ -463,8 +655,55 @@ export async function postAutoHandler(req: Request, u: User, post: any) {
     return json({ bump: true, moved: false });
 }
 
-// The post's own automation for its author (GET posts/:id): the switch and a pending reminder.
-export async function postAutoOf(postId: number) {
-    const r = await db().prepare('SELECT bump,bump_remind FROM post_auto WHERE post_id=?').bind(postId).first<{ bump: number; bump_remind: number }>();
-    return { bump: !!r?.bump, remindAt: r?.bump_remind || null };
+// The post's own automation for its author (GET posts/:id): the switch, a pending reminder and the
+// 가격 내리기 status ('다음 내림 10월 2일 20:00 · 27만원', WP56).
+export async function postAutoOf(post: { id: number; kind: string; price: number | null; author_id: string }, u: User) {
+    const r = await db().prepare(`SELECT pa.bump,pa.bump_remind,pa.drop_on,pa.drop_floor,pa.drop_next_at,pa.drop_count,a.drop_step,a.drop_pct
+        FROM (SELECT ? AS id) x LEFT JOIN post_auto pa ON pa.post_id=x.id LEFT JOIN automation a ON a.user_id=?`).bind(post.id, post.author_id).first<any>();
+    const { step, pct } = dropStepOf(r, perksOf(u));
+    return { bump: !!r?.bump, remindAt: r?.bump_remind || null, drop: dropJson({ ...post, ...r ?? {} }, step, pct) };
+}
+
+// 최저가 미만 제시 자동 거절 (WP56): true when the post (alias `post`) has a running 가격 내리기 whose 최저가
+// is above the amount, and its author is 엘리트 or above (or the manager) with the switch on. args(amount, now).
+export function autoDeclineSql(post: string) {
+    return {
+        sql: `EXISTS(SELECT 1 FROM post_auto da JOIN automation dz ON dz.user_id=da.user_id JOIN users du ON du.id=da.user_id
+            WHERE da.post_id=${post}.id AND da.user_id=${post}.author_id AND da.drop_on=1 AND dz.decline_on=1 AND ?<da.drop_floor AND (du.role='manager' OR ${RANK('da.user_id')}>=3))`,
+        args: (amount: number, now: number) => [amount, now],
+    };
+}
+
+// PUT posts/:id/auto {drop: {on, floor}}: the post's 가격 내리기 (WP56), for 플러스 and up on an open
+// priced 판매 post, within the grade's posts (플러스 1, 프리미엄 5, 엘리트 all). Switching on starts the
+// schedule (the first drop one period later, at 20:00 KST); a new 최저가 on a running setup keeps it.
+// floor null takes 80% of the 즉거가 rounded down to 만원.
+async function dropSwitch(u: User, post: any, d: any, now: number) {
+    if (!d || typeof d !== 'object' || typeof d.on !== 'boolean') fail(400, '설정을 확인해 주세요.');
+    const perks = perksOf(u);
+    if (!d.on) {
+        await db().prepare('UPDATE post_auto SET drop_on=0 WHERE post_id=?').bind(post.id).run();
+        return json({ drop: (await postAutoOf(post, u)).drop });
+    }
+    if (!perks.autoPricePosts) fail(403, DROP_TEXT.off);
+    if (post.kind !== 'sell' || post.price === null || post.price_mode === 'offer') fail(400, DROP_TEXT.priced);
+    if (post.status === 'closed' || post.hidden) fail(409, '거래중인 글만 가격 내리기를 할 수 있습니다.');
+    requireActive(u);
+    const floor = d.floor === null || d.floor === undefined || d.floor === '' ? defaultDropFloor(post.price) : amount(d.floor, false)!;
+    if (floor < 1000 || floor >= post.price) fail(400, DROP_TEXT.floor);
+    const a = await db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id).first<{ drop_every_h: number | null }>();
+    const every = dropEvery(a?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every), slots = perks.autoPricePosts;
+    // The other running setups on open posts stay under the grade's count.
+    const room = Number.isFinite(slots)
+        ? "(SELECT COUNT(*) FROM post_auto x JOIN posts q ON q.id=x.post_id WHERE x.user_id=? AND x.drop_on=1 AND q.status!='closed' AND q.id!=?)<?" : '1';
+    const roomArgs = Number.isFinite(slots) ? [u.id, post.id, slots] : [];
+    const keep = (col: string) => `${col}=CASE WHEN post_auto.drop_on=1 THEN post_auto.${col} ELSE excluded.${col} END`;
+    const r = await db().batch([
+        db().prepare(`INSERT INTO post_auto(post_id,user_id,drop_on,drop_floor,drop_next_at,drop_count,drop_set_at,drop_checked_at) SELECT ?,?,1,?,?,0,?,? WHERE ${room}
+            ON CONFLICT(post_id) DO UPDATE SET drop_floor=excluded.drop_floor,${keep('drop_next_at')},${keep('drop_count')},${keep('drop_set_at')},${keep('drop_checked_at')},drop_on=1 WHERE ${room}`)
+            .bind(post.id, u.id, floor, next, now, now, ...roomArgs, ...roomArgs),
+        db().prepare('SELECT drop_on FROM post_auto WHERE post_id=?').bind(post.id),
+    ]);
+    if (!(r[1].results[0] as any)?.drop_on) fail(409, DROP_TEXT.full(slots));
+    return json({ drop: (await postAutoOf(post, u)).drop });
 }

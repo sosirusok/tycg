@@ -134,17 +134,26 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // (Infinity = 무제한). A 플러스 무료 체험 gets none (serviceCouponsOf).
 // 조건 알림 (WP54): filterAlerts saved searches with any filter can send 알림 (0: none), and
 // filterAlertEvents says what they tell: 'new' 새 글 only, 'all' 새 글 and 가격 내림.
+// 자동 가격 내리기 (WP56): autoPricePosts 판매 posts (Infinity: all), the periods a member can pick
+// (priceEveryHours; 플러스 is fixed at a day), pricePct whether '5%' can be the step, and autoDecline
+// whether '최저가 미만 제시 자동 거절' is available.
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
     serviceCoupons: number; filterAlerts: number; filterAlertEvents: 'new' | 'all';
+    autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
 };
 
-const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all' };
+const PRICE_PERIODS = [12, 24, 48, 72];
+const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all',
+    autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true };
 export const PERKS: Record<GradeId, Perks> = {
-    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new' },
-    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new' },
-    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all' },
+    normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
+        autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false },
+    plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new',
+        autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false },
+    premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all',
+        autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -244,6 +253,56 @@ export const AUTO_TEXT = {
     reserve: '자동 끌올은 한 번에 글 1개씩 · 2개는 직접 끌올용으로 남김',
     capped: '자동 끌올은 게시판 활동량에 맞춰 제한됩니다.',
 };
+
+// 자동 가격 내리기 (WP56, copy.md). The step is 1만원 (or 5% for 프리미엄 and up, cut to 1,000원), the drops
+// happen at 20:00 KST (and 08:00 with the 12시간 period), at most DROP_MAX times per setup. A 제시 or a
+// chat message from another member since the last look holds the next drop, for every grade.
+export const DROP_STEPS = [10000];
+export const DROP_PCTS = [5];
+export const DROP_MAX = 10;
+export const DROP_HOUR = 20;
+export const DROP_TEXT = {
+    title: '가격 내리기',
+    off: '가격 내리기는 플러스부터 가능합니다.',
+    full: (n: number) => `가격 내리기는 글 ${n}개까지입니다.`,
+    priced: '즉거가가 있는 판매 글만 가격 내리기를 할 수 있습니다.',
+    floor: '최저가는 즉거가보다 낮게 입력해 주세요.',
+    period: '내림 주기를 확인해 주세요.',
+    step: '내림 폭을 확인해 주세요.',
+    declineOff: '최저가 미만 제시 자동 거절은 엘리트부터 가능합니다.',
+    stopped: (title: string) => `‘${title}’ 글 현젯이 다음 가격 이상이라 가격 내리기를 멈췄습니다.`,
+    done: (title: string) => `‘${title}’ 글이 최저가에 닿아 가격 내리기를 마쳤습니다.`,
+    maxed: (title: string) => `‘${title}’ 글 가격 내리기를 ${DROP_MAX}번 해서 마쳤습니다.`,
+    declined: (price: string) => `제시 자동 거절 · ${price}`,
+    hold: '문의나 제시가 오면 내리지 않고 기다립니다.',
+    all: '판매 글 전체',
+    decline: '최저가 미만 제시 자동 거절',
+    floorLabel: '최저가',
+    next: (when: string, price: string) => `다음 내림 ${when} · ${price}`,
+    allDone: (n: number) => `가격 내리기 ${n}개 설정 완료`,
+};
+// '1만원', '5%'.
+export const dropStepText = (step: number | null, pct: number | null) => pct ? `${pct}%` : `${(step || DROP_STEPS[0]) / 10000}만원`;
+// '12시간', '하루', '2일', '3일'.
+export const dropEveryText = (h: number) => h === 24 ? '하루' : h % 24 === 0 ? `${h / 24}일` : `${h}시간`;
+// The next price: the step (or pct, cut to 1,000원 and at least 1,000원) below the price, never under the floor.
+export function nextDropPrice(price: number, floor: number, step: number | null, pct: number | null) {
+    const cut = pct ? Math.max(1000, Math.floor(price * pct / 100 / 1000) * 1000) : (step || DROP_STEPS[0]);
+    return Math.max(floor, price - cut);
+}
+// The 최저가 prefilled (and used by '판매 글 전체'): 80% of the price, rounded down to 만원.
+export const defaultDropFloor = (price: number) => Math.floor(price * 0.8 / 10000) * 10000;
+// The first drop time at or after t: 20:00 KST, or 08:00 and 20:00 KST with the 12-hour period.
+export function dropSlotAt(t: number, everyH: number) {
+    const slot = everyH === 12 ? 12 * 3600000 : 86400000, off = ((DROP_HOUR - 9) * 3600000) % slot;
+    return Math.ceil((t - off) / slot) * slot + off;
+}
+// The Guide cell: '-', '판매 글 1개 · 하루 1번', '5개', '전체'.
+export function dropGuideText(perks: Perks) {
+    if (!perks.autoPricePosts) return '-';
+    if (!Number.isFinite(perks.autoPricePosts)) return '전체';
+    return perks.priceEveryHours.length === 1 ? `판매 글 ${perks.autoPricePosts}개 · ${dropEveryText(perks.priceEveryHours[0])} 1번` : `${perks.autoPricePosts}개`;
+}
 
 // 새 글 알림 (WP54): 키워드·게시판 알림 and 판매자 구독 for every grade, 조건 알림 for 플러스 and up.
 export const ALERT_TEXT = {

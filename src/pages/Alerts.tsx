@@ -23,6 +23,8 @@ const ICONS: Record<string, string> = {
     keyword: 'bell', board: 'spiral-notepad', follow: 'bookmark', condition: 'gem-stone',
     // 댓글·답글 (WP55).
     comment: 'memo', reply: 'memo',
+    // 자동 가격 내리기 (WP56).
+    drop_stopped: 'warning', drop_done: 'money-with-wings',
 };
 
 // 구독 관리 (WP54): the members this member follows, newest first, each with '구독 해제'.

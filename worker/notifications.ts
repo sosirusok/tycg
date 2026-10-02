@@ -7,8 +7,10 @@ import { alertCounts } from './alerts';
 // auto_paused, auto_stale and bump_ready come from the 자동 끌올 ticks (WP52).
 // keyword, board, follow and condition are the 새 글 알림 of tick B (WP54, worker/alerts.ts).
 // comment (ref: the post) and reply (ref: the parent 댓글) come from 댓글·답글 (WP55, worker/comments.ts).
+// drop_stopped and drop_done (ref: the post) end a 자동 가격 내리기 setup (WP56, worker/automation.ts dropJob),
+// which also writes fav_price for every drop.
 export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing' | 'auto_paused' | 'auto_stale' | 'bump_ready'
-    | 'keyword' | 'board' | 'follow' | 'condition' | 'comment' | 'reply';
+    | 'keyword' | 'board' | 'follow' | 'condition' | 'comment' | 'reply' | 'drop_stopped' | 'drop_done';
 
 // At most this many 알림 per member per KST day; the check reads at most this many index entries.
 export const NOTIFY_PER_DAY = 100;

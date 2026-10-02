@@ -854,6 +854,8 @@ async function completePost(req: Request, u: User, post: any) {
         favoritesNotify('fav_closed', post.id, post.author_id, `${statusName(post.kind, 'closed')} · ${post.title}`, now, 'EXISTS(SELECT 1 FROM posts WHERE id=? AND closed_at=? AND hidden=0) AND x.user_id IS NOT ?', [...guardArgs, typeof b.partnerId === 'string' && b.partnerId ? b.partnerId : null]),
         // 광고 (WP53): the freed slot takes the member's newest automatic open post.
         ...perksOf(u).adSlots ? [adFillStatement(u.id, perksOf(u).adSlots, now, guard, guardArgs)] : [],
+        // 자동 가격 내리기 (WP56) ends with 완료 (a delete removes the row with the post).
+        db().prepare(`UPDATE post_auto SET drop_on=0 WHERE post_id=? AND drop_on=1 AND ${guard}`).bind(post.id, ...guardArgs),
     ]);
     if (!r[0].meta.changes) fail(409, '이미 완료된 글입니다.');
     // r[0] is the post, then the three statements that end the 제시, then the plan's DELETE and INSERT.
@@ -919,7 +921,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         if (closed) out.ads = all.slice(1).map(a => ({ ...a, images: a.images.slice(0, 1), link_preview: undefined, body_style: undefined }));
         out.link_cards = await shownCards(req, post, out.author_grade, out.role);
         // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
-        if (u && u.id === post.author_id) out.auto = await postAutoOf(post.id);
+        if (u && u.id === post.author_id) out.auto = await postAutoOf(post, u);
         if (follow) { out.author_followed = !!follow.f; out.author_follow_allowed = !!follow.a; }
         return json({ post: out });
     }

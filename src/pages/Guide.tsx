@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { AD_TEXT, BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, BADGES, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -45,6 +45,8 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['운영진 가측가 표시', () => 'O'],
     // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
     ['조건 알림', g => filterAlertText(PERKS[g.id])],
+    // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
+    ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -122,6 +124,7 @@ export default function Guide() {
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
                 <li>{AD_TEXT.sortNote}</li>
                 <li>{AD_TEXT.orderNote}</li>
+                <li>{DROP_TEXT.hold}</li>
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>

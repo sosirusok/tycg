@@ -18,7 +18,7 @@ import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { AD_TEXT, ALERT_TEXT, gradeInfo } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
 
@@ -28,7 +28,8 @@ type Row = [string, ReactNode];
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
     author_created_at?: number; author_prev_nickname?: string;
     // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
-    auto?: { bump: boolean; remindAt: number | null };
+    // and its 가격 내리기 (WP56; drop null: not a priced 판매 post).
+    auto?: { bump: boolean; remindAt: number | null; drop?: { on: boolean; floor: number; nextAt: number | null; nextPrice: number | null } | null };
     // 판매자 구독 (WP54): whether the viewer follows the author, and the author's '구독 허용'.
     author_followed?: boolean; author_follow_allowed?: boolean;
     // '비슷한 매물' (WP53): other members' ads under a completed post only.
@@ -144,7 +145,7 @@ export function Detail({ id }: { id: string }) {
     // 가측 신청 (WP65) from the owner's 더보기 menu.
     const [appraise, setAppraise] = useState(false);
     // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
-    const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
+    const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { ...p.auto, bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
     // A view that came from an ad (?from=ad) counts as '광고 유입' too (WP53).
     const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' + (new URLSearchParams(location.search).get('from') === 'ad' ? '&from=ad' : '') : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
@@ -232,7 +233,7 @@ export function Detail({ id }: { id: string }) {
         if (bump.remind) {
             setBusy(true);
             const at = await setBumpRemind(post!.id);
-            if (at) setPost({ ...post!, auto: { bump: !!post!.auto?.bump, remindAt: at } });
+            if (at) setPost({ ...post!, auto: { ...post!.auto, bump: !!post!.auto?.bump, remindAt: at } });
             setBusy(false);
             return;
         }
@@ -337,6 +338,9 @@ export function Detail({ id }: { id: string }) {
                     <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
                     <Link to="/me/auto" className="owner-hint">설정</Link>
                 </div>}
+                {/* 가격 내리기 (WP56): '다음 내림 10월 2일 20:00 · 27만원' while a setup runs. */}
+                {mine && openNow && post.auto?.drop?.on && post.auto.drop.nextAt && post.auto.drop.nextPrice
+                    && <p className="owner-drop">{DROP_TEXT.next(kstDateTime(post.auto.drop.nextAt), priceText(post.auto.drop.nextPrice))}</p>}
                 {autoSheet}
                 {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
                 <AuthorBox post={post} own={mine} className="author-box-side" onFollow={follow} followBusy={followBusy} />
@@ -368,7 +372,7 @@ export function Detail({ id }: { id: string }) {
 
         <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
-        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(prev => ({ ...p, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count }))} />}
+        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => { setPost(prev => ({ ...p, auto: prev?.auto, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count })); if (p.auto?.drop?.on || post.auto?.drop?.on) void load(); }} />}
         <ReportModal open={report} onClose={() => setReport(false)} target={{ postId: post.id }} />
         <ReportModal open={commentReport !== null} onClose={() => setCommentReport(null)} target={{ commentId: commentReport }} title="댓글 신고" />
         {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}

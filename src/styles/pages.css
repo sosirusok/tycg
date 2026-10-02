@@ -762,6 +762,24 @@
 @media (max-width: 640px) {
   .auto-stale { align-items: flex-start; flex-direction: column; }
 }
+/* 가격 내리기 (WP56): two settings (or 플러스's fixed text) and '판매 글 전체' above the list; each row has
+   the 즉거가, a compact 최저가 field and, once on, the next drop. */
+.drop-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; padding: 14px 0 2px; border-top: 1px solid var(--line); }
+.drop-setting { display: grid; gap: 6px; min-width: 112px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
+.drop-setting .select { height: 40px; font-size: var(--fs-14); }
+.drop-setting strong { color: var(--ink); font-size: var(--fs-15); font-weight: 600; line-height: 24px; }
+.drop-all { margin-left: auto; height: 40px; }
+.drop-list li { align-items: start; }
+.drop-list .auto-post-switch { padding-top: 8px; }
+.drop-floor { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.drop-floor-label { color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; }
+.drop-floor .input-unit { width: 112px; }
+.drop-floor .input { height: 36px; padding: 0 44px 0 12px; font-size: var(--fs-14); }
+.drop-floor .input-unit > span { right: 12px; font-size: var(--fs-13); }
+.drop-status { margin-top: 4px; color: var(--ink); font-size: var(--fs-13); font-weight: 600; }
+.drop-decline { color: var(--ink); font-weight: 600; }
+.owner-drop { margin: 0; color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; }
+
 
 /* 댓글·답글 (WP55): rows under the post body, 답글 indented one level, the composer last. */
 .comments > h2 { margin-bottom: 4px; }
