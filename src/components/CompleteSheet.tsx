@@ -92,7 +92,7 @@ export function CompleteSheet({ post, preselect, suspended: restricted = false, 
                 {partners === null ? <div className="skeleton" style={{ height: 56 }} /> : <div className="apply-options" role="radiogroup" aria-label="거래한 회원">
                     {shown.map(p => <label key={p.id} className="apply-option partner-option">
                         <input type="radio" name="complete-partner" value={p.id} checked={pick === p.id} onChange={() => choose(p.id)} />
-                        <Avatar name={p.nickname} size="sm" />
+                        <Avatar name={p.nickname} size="sm" grade={p.grade} trial={p.grade_trial} role={p.role} />
                         <span className="apply-option-body">
                             <NameLine nickname={p.nickname} grade={p.grade} trial={p.grade_trial} role={p.role} badges={p.badges} compact />
                             <span className="partner-sub">{p.accepted_amount !== null ? `제시 수락 · ${priceText(p.accepted_amount)}` : `채팅 · ${dayText(p.chat_at)}`}</span>

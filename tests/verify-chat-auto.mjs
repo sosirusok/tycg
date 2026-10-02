@@ -185,4 +185,24 @@ const jChat = await ask(J, S, '아직 판매중인가요?', PP.id);
 equal((await autos(J.call, jChat)).length, 0, 'the grade ended → no 첫 문의 자동 안내');
 equal((await S.call('me/automation/chat')).data.templates, [], 'the grade ended → no own replies offered');
 
+// 6. '추천 설정 모두 켜기' (WP61, round-3 WP36 change 5): 엘리트 and up (관리자 = 엘리트) turn on 자동 끌올 with 새 글
+// 자동 포함, 자동 매칭, 첫 문의 자동 안내 (own text kept) and 자리 비움 (own hours kept) in one call; price drops stay.
+const RE = await member('re'), RA = await member('ra'), RP = await member('rp');
+await grant(RE, 'elite'); await grant(RA, 'admin'); await grant(RP, 'premium');
+const drop = await post(RE, sale('추천 가격 내리기'));
+equal((await RE.call(`posts/${drop.id}/auto`, 'PUT', { drop: { on: true, floor: 200000 } })).status, 200, 'the 엘리트 member sets one price drop');
+equal((await RE.call('me/automation', 'PUT', { firstText: '내 안내 문구입니다', awayFrom: 1, awayTo: 9, bumpOn: false })).status, 200, 'own 첫 문의 text and 자리 비움 hours, 자동 끌올 off');
+const dropBefore = sql(`SELECT drop_on,drop_floor,drop_next_at,drop_count FROM post_auto WHERE post_id=${drop.id}`)[0];
+const settingsBefore = sql(`SELECT drop_step,drop_pct,drop_every_h,decline_on FROM automation WHERE user_id='${RE.user.id}'`)[0];
+const rec = await RE.call('me/automation/recommended', 'POST', {});
+equal([rec.status, rec.data.bumpOn, rec.data.bumpNew, rec.data.chat.firstOn, rec.data.chat.awayOn], [200, true, true, true, true], '엘리트: 추천 설정 모두 켜기 turns everything on');
+equal(sql(`SELECT bump_on,bump_new,match_on,first_on,away_on,away_from,away_to,first_text FROM automation WHERE user_id='${RE.user.id}'`)[0],
+    { bump_on: 1, bump_new: 1, match_on: 1, first_on: 1, away_on: 1, away_from: 1, away_to: 9, first_text: '내 안내 문구입니다' }, 'match_on, first_on and away_on are 1; the own text and hours stay');
+equal(sql(`SELECT drop_on,drop_floor,drop_next_at,drop_count FROM post_auto WHERE post_id=${drop.id}`)[0], dropBefore, 'the price drop of the post is unchanged');
+equal(sql(`SELECT drop_step,drop_pct,drop_every_h,decline_on FROM automation WHERE user_id='${RE.user.id}'`)[0], settingsBefore, 'the price drop settings are unchanged');
+equal((await RA.call('me/automation/recommended', 'POST', {})).status, 200, '관리자 (= 엘리트) may use it');
+equal(sql(`SELECT away_from,away_to FROM automation WHERE user_id='${RA.user.id}'`)[0], { away_from: 2, away_to: 10 }, 'without own hours 자리 비움 is 02:00-10:00');
+refused(await RP.call('me/automation/recommended', 'POST', {}), 403, '추천 설정은 엘리트부터 가능합니다.', '프리미엄 → 403');
+refused(await N.call('me/automation/recommended', 'POST', {}), 403, '추천 설정은 엘리트부터 가능합니다.', '일반 → 403');
+
 console.log(`verify-chat-auto: ${checks} checks passed`);

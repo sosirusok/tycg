@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from '../../shared/market';
 import { LATEST_SEASON } from '../../shared/market';
-import type { ApplicationKind, PlanId, TrialState } from '../../shared/membership';
+import type { ApplicationKind, Earn, PlanId, TrialState } from '../../shared/membership';
 import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
 
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[] };
+// earn: the 수익 홍보 texts (WP66), from manage 설정 or their defaults.
+export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -38,7 +39,7 @@ type AppState = {
 };
 
 const Ctx = createContext<AppState>(null!);
-const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.grade_trial, u.badges, u.suspended_until]);
+const memberKey = (u: User) => JSON.stringify([u.id, u.nickname, u.bio, u.role, u.grade, u.grade_expires_at, u.grade_trial, u.badges, u.suspended_until, u.celebrated_rank]);
 export const useApp = () => useContext(Ctx);
 
 // The tab title: '(2) 판매 · 좀비고 거래소' while two chats and 알림 together are unread.
@@ -66,8 +67,9 @@ if (typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) markActive(); });
 }
 
-// Calls `poll` on that schedule while `enabled`; the first call is up to the caller.
-export function useAdaptivePoll(poll: () => void, enabled: boolean) {
+// Calls `poll` on that schedule while `enabled`; the first call is up to the caller. `every` stretches both
+// intervals to at least that many ms (the '중개/가측' tab asks every 2 minutes).
+export function useAdaptivePoll(poll: () => void, enabled: boolean, every = 0) {
     const ref = useRef(poll);
     ref.current = poll;
     useEffect(() => {
@@ -75,7 +77,7 @@ export function useAdaptivePoll(poll: () => void, enabled: boolean) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const schedule = () => {
             const idle = Date.now() - lastActive;
-            timer = setTimeout(tick, idle < ACTIVE_FOR ? POLL_ACTIVE : POLL_IDLE);
+            timer = setTimeout(tick, Math.max(every, idle < ACTIVE_FOR ? POLL_ACTIVE : POLL_IDLE));
         };
         const tick = () => {
             timer = undefined;
@@ -90,7 +92,7 @@ export function useAdaptivePoll(poll: () => void, enabled: boolean) {
         };
         schedule();
         return () => { if (timer !== undefined) clearTimeout(timer); sleepers.delete(wake); };
-    }, [enabled]);
+    }, [enabled, every]);
 }
 
 const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };

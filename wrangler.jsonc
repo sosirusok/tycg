@@ -11,9 +11,11 @@
   "triggers": { "crons": ["*/10 * * * *", "5-59/10 * * * *", "17 18 * * *"] },
   "assets": {
     // The React app is a single-page app; unknown paths fall back to index.html.
-    // Only /api/* requests invoke the Worker, so static files never cost CPU time.
+    // Only /api/* and the share address /p/* (the post's og: tags for link previews, WP59) invoke the
+    // Worker, so static files never cost CPU time. The share address reads index.html through ASSETS.
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/p/*"]
   },
   "d1_databases": [
     {

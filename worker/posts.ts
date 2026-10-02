@@ -57,8 +57,8 @@ export async function latestSeason() {
 // One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out);
 // GET /posts/:id adds the trade counts (tradeStats).
 // It also carries the join date and the nickname change (WP51); decorate keeps the earlier nickname
-// only while the change is under 90 days old.
-const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,u.created_at AS author_created_at,u.prev_nickname AS author_prev_nickname,u.nickname_changed_at AS author_nickname_changed_at FROM posts p `);
+// only while the change is under 90 days old. The author box shows the 64px 프로필 사진 inline (WP59).
+const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS author_last_seen_at,u.created_at AS author_created_at,u.prev_nickname AS author_prev_nickname,u.nickname_changed_at AS author_nickname_changed_at,u.avatar_thumb AS author_avatar_thumb FROM posts p `);
 async function rawPost(id: string | number) { return db().prepare(onePostSelect + ' WHERE p.id=?').bind(id).first<any>(); }
 
 // Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
@@ -131,7 +131,8 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         // A withdrawn author is shown as plain 탈퇴회원 (the stored nickname has a random suffix).
         const authorDeleted = !!p.author_deleted_at;
         delete p.author_deleted_at;
-        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; delete p.author_created_at; }
+        if (authorDeleted) { p.nickname = WITHDRAWN_NAME; delete p.author_last_seen_at; delete p.author_trade_count; delete p.author_deal_sum; delete p.author_good_count; delete p.author_created_at; delete p.author_avatar_thumb; }
+        else if ('author_avatar_thumb' in p && !p.author_avatar_thumb) delete p.author_avatar_thumb;
         // '이전 닉네임: {닉}' (WP51): only while the nickname changed within 90 days, as on the profile.
         if ('author_nickname_changed_at' in p) {
             if (authorDeleted || !p.author_prev_nickname || !(p.author_nickname_changed_at > now - NICKNAME_SHOWN_MS)) delete p.author_prev_nickname;
@@ -151,12 +152,8 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
         }
         // A legacy 예약중 reads as 진행중 (WP43: two states).
         if (p.status !== 'closed') p.status = 'open';
-        // 운영진 가측가 (WP65): shown while the post was not edited after the appraisal (updated_at is the
-        // last edit; completing the post does not touch it, so a completed post keeps its 가측가). The
-        // columns are never cleared, so the manager also gets the last appraisal itself.
-        const appraised = p.appraised_price !== null && p.appraised_price !== undefined && p.appraised_at !== null && p.appraised_at !== undefined && p.updated_at <= p.appraised_at
-            ? { price: p.appraised_price, at: p.appraised_at } : null;
-        if (viewer?.role !== 'manager') { delete p.appraised_price; delete p.appraised_at; }
+        // The WP65 운영진 가측가 columns stay in the table (additive migrations) but are never shown (WP66).
+        delete p.appraised_price; delete p.appraised_at;
         const parsed = parse(p.images, []), images: string[] = Array.isArray(parsed) ? parsed : [];
         return {
             ...p, ...normalizeTrade(p.kind, p.category),
@@ -166,7 +163,7 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
-            featured, appraised,
+            featured,
             author_deleted: authorDeleted,
         };
     });
@@ -845,7 +842,7 @@ async function completePost(req: Request, u: User, post: any) {
     const plan = withPartner ? await planTrade({ ...post, status: 'closed', closed_at: now }, u, b.partnerId, b.amount, now, tradeGuard, guardArgs) : null;
     const keep = plan ? b.partnerId : null;
     const r = await db().batch([
-        // updated_at stays the last edit of the listing (the 운영진 가측가 rule reads it); closed_at is the completion.
+        // updated_at stays the last edit of the listing; closed_at is the completion.
         db().prepare("UPDATE posts SET status='closed',closed_at=?,featured_at=NULL WHERE id=? AND status!='closed'").bind(now, post.id),
         ...endOffersStatements(post.id, post.author_id, `${COMPLETE_ENDS_OFFERS} AND ${guard}`, [keep, ...guardArgs], now),
         ...plan ? plan.statements : [],
@@ -904,11 +901,14 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // and under a completed post '비슷한 매물' (WP53): other advertisers' open posts of the same tab, in
         // the same batch. An open post never carries ads (its seller keeps the buyer).
         const now = Date.now(), closed = post.status === 'closed';
-        // The viewer's 구독 of the author (WP54) rides the same batch.
+        // The viewer's 구독 of the author (WP54) rides the same batch, and so does '찜 12' (WP59: every
+        // favorite of the post, on the favorites_post index), read last.
         const followRead = !!u && u.id !== post.author_id && !post.author_deleted_at;
         const reads = [...!post.author_deleted_at ? [tradeStatsStatement(post.author_id)] : [], ...closed ? [similarStatement(post, u, now)] : [],
-            ...followRead ? [db().prepare('SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND target_id=?) AS f,follow_allowed AS a FROM users WHERE id=?').bind(u!.id, post.author_id, post.author_id)] : []];
-        const got = reads.length ? await db().batch(reads) : [];
+            ...followRead ? [db().prepare('SELECT EXISTS(SELECT 1 FROM follows WHERE user_id=? AND target_id=?) AS f,follow_allowed AS a FROM users WHERE id=?').bind(u!.id, post.author_id, post.author_id)] : [],
+            db().prepare('SELECT COUNT(*) AS n FROM favorites WHERE post_id=?').bind(post.id)];
+        const got = await db().batch(reads);
+        const favCount = Number((got.pop()!.results[0] as { n: number } | undefined)?.n) || 0;
         const follow = followRead ? got.pop()!.results[0] as { f: number; a: number } | undefined : undefined;
         if (!post.author_deleted_at) {
             const stats = tradeStatsOf(got[0].results as any[]);
@@ -923,6 +923,7 @@ export async function postsHandler(req: Request, p: string[], url: URL): Promise
         // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
         if (u && u.id === post.author_id) out.auto = await postAutoOf(post, u);
         if (follow) { out.author_followed = !!follow.f; out.author_follow_allowed = !!follow.a; }
+        out.fav_count = favCount;
         return json({ post: out });
     }
     const u = await requireUser(req);

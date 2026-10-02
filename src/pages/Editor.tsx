@@ -6,7 +6,7 @@ import {
     categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
+import { SITE_RULES, kstDateTime, linkPreviewAllowed } from '../../shared/membership';
 import { findLinks } from '../../shared/links';
 import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
@@ -143,6 +143,11 @@ function kstClock(t: number) {
 }
 
 type Draft = Partial<Form> & { savedAt?: number };
+// One row of the 임시글 sheet (GET /api/drafts, WP59): 'new-<kind>' for a new post of that board, the post id
+// for an edit, 'new' for the single slot of earlier versions.
+type DraftInfo = { key: string; title: string; kind: string; updated_at: number };
+const isNewKey = (key: string) => key === 'new' || key.startsWith('new-');
+const draftLabel = (d: DraftInfo) => isNewKey(d.key) ? (isTradeKind(d.kind) ? KIND_NAMES[d.kind] : '글쓰기') : '글 수정';
 // Photos per post (the same for every member; SITE_RULES.photosPerPost) until GET me/usage answers.
 const PHOTO_CAP = SITE_RULES.photosPerPost;
 const EXCHANGE_SIDES = ['account', 'clan'] as const;
@@ -163,8 +168,14 @@ export default function Editor({ id }: { id?: string }) {
     }));
     const [form, setForm] = useState<Form>(initial);
     const [loaded, setLoaded] = useState(false), [loadError, setLoadError] = useState('');
-    // 'loaded': a draft is on screen ('새로 쓰기' starts over). 'offer': a draft of another kind waits ('불러오기').
-    const [banner, setBanner] = useState<null | { mode: 'loaded' } | { mode: 'offer'; draft: Draft }>(null);
+    // 'loaded': a draft is on screen ('새로 쓰기' starts over).
+    const [banner, setBanner] = useState<null | { mode: 'loaded' }>(null);
+    // 임시글 (WP59): the member's drafts (the '임시글 2' sheet), and the key whose stored draft is this form
+    // (loaded from it or saved to it; null: none yet).
+    const [drafts, setDrafts] = useState<DraftInfo[]>([]), [draftSheet, setDraftSheet] = useState(false);
+    const ownKey = useRef<string | null>(null);
+    // A waiting draft the member chose to replace (the notice's X): the next save may write over it.
+    const [overwrite, setOverwrite] = useState<string | null>(null);
     // Bumped when the whole form is replaced, so folds and pickers open again for the new values.
     const [version, setVersion] = useState(0);
     const [pendingKind, setPendingKind] = useState<TradeKind | null>(null);
@@ -181,11 +192,16 @@ export default function Editor({ id }: { id?: string }) {
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
     formRef.current = form;
-    // New posts share one draft slot, so the waiting draft of another kind is not overwritten
-    // until the member loads it or closes the banner.
+    // A new post saves to its board's key ('new-sell' …), so drafts of different boards never replace each
+    // other. When the form moves to a board whose key holds another draft (a kind change), that draft
+    // waits ('임시저장된 글이 있습니다 · 불러오기') and nothing is auto-saved over it until the member loads
+    // it or closes the notice.
+    const draftKey = id || 'new-' + form.kind;
+    const keyRef = useRef(draftKey);
+    keyRef.current = draftKey;
+    const waiting = !id && draftKey !== ownKey.current && draftKey !== overwrite && drafts.some(d => d.key === draftKey) ? draftKey : null;
     const holding = useRef(false);
-    holding.current = banner?.mode === 'offer';
-    const draftKey = id || 'new';
+    holding.current = !!waiting;
     const unsaved = () => dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current;
     // This form is not auto-saved while that draft waits, so moving to another page in the app asks
     // first: stay, leave without it, or save it over the waiting draft. Holds the answer's resolver.
@@ -224,10 +240,21 @@ export default function Editor({ id }: { id?: string }) {
         let alive = true;
         Promise.all([
             id ? api<{ post: Post }>('posts/' + id) : Promise.resolve(null),
-            api<{ draft: Draft | null }>('drafts/' + draftKey),
+            api<{ drafts?: DraftInfo[] }>('drafts'),
             api<Usage>('me/usage').catch(() => null),
-        ]).then(([p, dr, usage]) => {
+        ]).then(async ([p, list, usage]) => {
             if (!alive) return;
+            // The draft that opens with the form: the post's own (an edit), the one the 임시글 sheet named
+            // (?draft=), the board's ('new-sell', or the earlier single slot holding that board's draft),
+            // or with no board the newest new-post draft.
+            const all = Array.isArray(list.drafts) ? list.drafts : [], named = params.get('draft');
+            const pick = id ? all.find(d => d.key === id)
+                : named && isNewKey(named) ? all.find(d => d.key === named)
+                : urlKind ? all.find(d => d.key === 'new-' + initial.kind) || all.find(d => d.key === 'new' && d.kind === initial.kind)
+                : all.find(d => isNewKey(d.key));
+            const dr = pick ? await api<{ draft: Draft | null }>('drafts/' + pick.key) : { draft: null };
+            if (!alive) return;
+            setDrafts(all);
             if (p && p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
             // A completed post is read-only (WP43).
             if (p && p.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
@@ -237,17 +264,12 @@ export default function Editor({ id }: { id?: string }) {
             setPhotoCap(Math.max(usage?.rules.photosPerPost ?? PHOTO_CAP, p?.post.images.length || 0));
             setUsage(usage);
             const draft = dr.draft && typeof dr.draft.kind === 'string' && 'offer' in dr.draft ? dr.draft : null;
-            if (!draft) replaceForm(base, false);
+            if (!draft || !pick) replaceForm(base, false);
             else if (p) {
                 // An edit draft counts only when it is newer than the post itself.
-                if ((draft.savedAt || 0) > p.post.updated_at) { replaceForm(fromDraft(draft), true); setBanner({ mode: 'loaded' }); }
-                else { replaceForm(base, false); api('drafts/' + draftKey, 'DELETE').catch(() => {}); }
-            } else if (!urlKind || fromDraft(draft).kind === initial.kind) {
-                replaceForm(fromDraft(draft), true); setBanner({ mode: 'loaded' });
-            } else {
-                // '구매 글쓰기' from the 구매 board keeps 구매; the draft of another kind waits for 불러오기.
-                replaceForm(base, false); setBanner({ mode: 'offer', draft });
-            }
+                if ((draft.savedAt || 0) > p.post.updated_at) { replaceForm(fromDraft(draft), true); ownKey.current = pick.key; setBanner({ mode: 'loaded' }); }
+                else { replaceForm(base, false); api('drafts/' + pick.key, 'DELETE').catch(() => {}); setDrafts(all.filter(d => d.key !== pick.key)); }
+            } else { replaceForm(fromDraft(draft), true); ownKey.current = pick.key; setBanner({ mode: 'loaded' }); }
             setLoaded(true);
         }).catch(e => { if (alive) setLoadError(errorText(e)); });
         return () => { alive = false; };
@@ -255,20 +277,26 @@ export default function Editor({ id }: { id?: string }) {
 
     const persist = async (manual = false) => {
         if (!loaded || done.current || (!dirty.current && !manual) || (holding.current && !manual)) return true;
-        const snapshot = JSON.stringify(formRef.current);
-        if (snapshot === lastSaved.current && !manual) return true;
+        const key = keyRef.current, snapshot = JSON.stringify(formRef.current);
+        if (snapshot === lastSaved.current && key === ownKey.current && !manual) return true;
         try {
-            await api('drafts/' + draftKey, 'PUT', JSON.parse(snapshot));
+            await api('drafts/' + key, 'PUT', JSON.parse(snapshot));
+            // The form moved to another key (a kind change, or a draft of the earlier single slot): the
+            // copy under the old key goes, so the 임시글 list holds it once.
+            const moved = ownKey.current && ownKey.current !== key ? ownKey.current : null;
+            ownKey.current = key;
             lastSaved.current = snapshot;
-            setSavedAt(kstClock(Date.now()));
-            // The waiting draft has just been replaced by this form.
-            setBanner(b => b?.mode === 'offer' ? null : b);
+            if (moved) api('drafts/' + moved, 'DELETE').catch(() => {});
+            const f = formRef.current, now = Date.now();
+            setDrafts(list => [{ key, title: f.title, kind: f.kind, updated_at: now }, ...list.filter(d => d.key !== key && d.key !== moved)]);
+            setOverwrite(null);
+            setSavedAt(kstClock(now));
             if (manual) toast('임시저장 완료');
             return true;
         } catch (e) { if (manual) toast.error(errorText(e)); return false; }
     };
     // Auto-save shortly after edits, and before leaving the page.
-    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, banner]);
+    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, waiting]);
     useEffect(() => {
         if (!loaded) return;
         setLeaveGuard(async () => {
@@ -280,8 +308,13 @@ export default function Editor({ id }: { id?: string }) {
         return () => {
             setLeaveGuard(null);
             window.removeEventListener('beforeunload', warn);
-            // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out.
-            if (unsaved() && !holding.current) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
+            // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out
+            // (and a copy under the form's old key goes once they are stored).
+            if (unsaved() && !holding.current) {
+                const key = keyRef.current, moved = ownKey.current && ownKey.current !== key ? ownKey.current : null;
+                void fetch('/api/drafts/' + key, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) })
+                    .then(r => { if (r.ok && moved) return fetch('/api/drafts/' + moved, { method: 'DELETE', keepalive: true, credentials: 'same-origin' }); }).catch(() => {});
+            }
         };
     }, [loaded]);
 
@@ -295,14 +328,34 @@ export default function Editor({ id }: { id?: string }) {
     }
 
     function startOver() {
+        const own = ownKey.current;
         replaceForm(post.current ? fromPost(post.current) : initial, false);
         setSavedAt('');
         setBanner(null);
-        api('drafts/' + draftKey, 'DELETE').catch(() => {});
+        ownKey.current = null;
+        if (own) { api('drafts/' + own, 'DELETE').catch(() => {}); setDrafts(list => list.filter(d => d.key !== own)); }
     }
-    function loadDraft(draft: Draft) {
-        replaceForm(fromDraft(draft), true);
+    // Opens a stored draft in this form (the waiting notice's or the 임시글 sheet's '불러오기'). The form on
+    // screen is saved first under its own key; an edit draft opens on its post's edit page, and a new-post
+    // draft chosen while editing a post opens on the write page.
+    async function loadKey(key: string) {
+        if (!isNewKey(key)) { setDraftSheet(false); if (key !== id) void navigate('/edit/' + key); return; }
+        if (id) { setDraftSheet(false); void navigate('/write?draft=' + encodeURIComponent(key)); return; }
+        if (holding.current && unsaved()) { if (!await new Promise<boolean>(resolve => setLeaveAsk(() => resolve))) return; }
+        else if (!await persist()) return;
+        let d: { draft: Draft | null };
+        try { d = await api<{ draft: Draft | null }>('drafts/' + key); }
+        catch (e) { toast.error(errorText(e)); return; }
+        if (!d.draft || typeof d.draft.kind !== 'string') { setDrafts(list => list.filter(x => x.key !== key)); return; }
+        replaceForm(fromDraft(d.draft), true);
+        ownKey.current = key;
+        setOverwrite(null);
         setBanner({ mode: 'loaded' });
+        setDraftSheet(false);
+    }
+    async function removeDraft(key: string) {
+        try { await api('drafts/' + key, 'DELETE'); setDrafts(list => list.filter(d => d.key !== key)); toast('삭제 완료'); }
+        catch (e) { toast.error(errorText(e)); }
     }
 
     const patch = (v: Partial<Form>) => { dirty.current = true; setForm(f => ({ ...f, ...v })); };
@@ -424,7 +477,8 @@ export default function Editor({ id }: { id?: string }) {
             const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
-            if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
+            // The form's own draft goes; a waiting draft of the same board stays for later.
+            if (ownKey.current) api('drafts/' + ownKey.current, 'DELETE').catch(() => {});
             setLeaveGuard(null);
             toast(id ? d.notice || '수정 완료'
                 : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용'
@@ -564,16 +618,21 @@ export default function Editor({ id }: { id?: string }) {
     return <div className="container page editor">
         <div className="ed-top">
             <h1 className="page-title">{id ? '글 수정' : '글쓰기'}</h1>
-            <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
+            <span className="ed-top-side">
+                <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
+                <button type="button" className="btn btn-line btn-sm" onClick={() => setDraftSheet(true)}>{drafts.length ? `임시글 ${drafts.length}` : '임시글'}</button>
+            </span>
         </div>
         {suspendedUntil && <p className="alert" role="status">이용 정지 중입니다. ({suspendUntilText(suspendedUntil)})</p>}
-        {banner && <div className="restore" role="status">
-            <span>{banner.mode === 'loaded' ? '임시저장된 글을 불러왔습니다' : '임시저장된 글이 있습니다'}</span>
+        {waiting ? <div className="restore" role="status">
+            <span>임시저장된 글이 있습니다</span>
             <span aria-hidden="true">·</span>
-            {banner.mode === 'loaded'
-                ? <button type="button" className="restore-action" onClick={startOver}>새로 쓰기</button>
-                : <button type="button" className="restore-action" onClick={() => loadDraft(banner.draft)}>불러오기</button>}
-            {banner.mode === 'offer' && <button type="button" className="icon-btn restore-close" aria-label="닫기" onClick={() => setBanner(null)}><X size={16} /></button>}
+            <button type="button" className="restore-action" onClick={() => void loadKey(waiting)}>불러오기</button>
+            <button type="button" className="icon-btn restore-close" aria-label="닫기" onClick={() => setOverwrite(waiting)}><X size={16} /></button>
+        </div> : banner && <div className="restore" role="status">
+            <span>임시저장된 글을 불러왔습니다</span>
+            <span aria-hidden="true">·</span>
+            <button type="button" className="restore-action" onClick={startOver}>새로 쓰기</button>
         </div>}
         <form className="ed-form" onSubmit={submit} key={version}>
             <fieldset disabled={busy}>
@@ -666,6 +725,18 @@ export default function Editor({ id }: { id?: string }) {
         <SameListingSheet dup={dup} onClose={() => setDup(null)} />
         <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분 변경" description="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => setPendingKind(null)}>취소</button><button type="button" className="btn btn-danger-solid" onClick={() => { if (pendingKind) applyKind(pendingKind); }}>바꾸기</button></>} />
+        <Modal open={draftSheet} onClose={() => setDraftSheet(false)} title="임시글">
+            {drafts.length ? <ul className="draft-list">{drafts.map(d => <li key={d.key}>
+                <span className="grow">
+                    <strong className="draft-title">{d.title.trim() || '제목 없음'}</strong>
+                    <span className="muted small">{draftLabel(d)} · {kstDateTime(d.updated_at)}</span>
+                </span>
+                {d.key === ownKey.current ? <span className="tag">작성 중</span> : <span className="draft-actions">
+                    <button type="button" className="btn btn-line btn-sm" onClick={() => void loadKey(d.key)}>불러오기</button>
+                    <button type="button" className="btn btn-text small" onClick={() => void removeDraft(d.key)}>삭제</button>
+                </span>}
+            </li>)}</ul> : <EmptyState title="임시글이 없습니다." />}
+        </Modal>
         <Modal open={!!leaveAsk} onClose={() => void answerLeave('stay')} title="저장되지 않은 글" description="이 글을 임시저장하면 이전에 임시저장된 글은 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => void answerLeave('stay')}>취소</button><button type="button" className="btn btn-danger" onClick={() => void answerLeave('leave')}>나가기</button><button type="button" className="btn btn-primary" onClick={() => void answerLeave('save')}>임시저장</button></>} />
     </div>;

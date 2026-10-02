@@ -16,6 +16,27 @@
   --fill-2: #f7f8fa;
   /* 빨강 for errors and the 글자색 빨강 (WP49): 4.86:1 on white (AA). */
   --danger: #d92b22;
+  /* 등급 금속 (WP66, owner override of the one-brand-color rule for grade frames, grade chips, the
+     중개/가측 엘리트 card, the profile band, the 등급 축하 창 and the 수익 홍보 block only). Dark text on gold:
+     --gold-ink, at least 5.9:1 on --gold-3. */
+  --gold-1: #f7e7a1;
+  --gold-2: #e2c15a;
+  --gold-3: #c9a227;
+  --gold-edge: #b8901f;
+  --gold-ink: #3a2a00;
+  --silver-1: #e9ecf1;
+  --silver-2: #a7aeb9;
+  --bronze-1: #e7b98a;
+  --bronze-2: #b87333;
+  --ring-basic: #d1d6dd;
+  --metal-gold: linear-gradient(135deg, var(--gold-1), var(--gold-2) 55%, var(--gold-3));
+  --metal-silver: linear-gradient(135deg, var(--silver-1), var(--silver-2));
+  --metal-bronze: linear-gradient(135deg, var(--bronze-1), var(--bronze-2));
+  /* '접속 중' dot on the 중개/가측 tab (WP66). */
+  --online: #16a34a;
+  /* Gloss and glow on the metals: a soft white highlight and a warm gold shadow. */
+  --gold-gloss: rgba(255, 255, 255, 0.55);
+  --gold-shadow: 0 6px 18px rgba(184, 144, 31, 0.28);
   /* Type scale */
   --fs-12: 12px;
   --fs-13: 13px;

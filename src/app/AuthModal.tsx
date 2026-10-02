@@ -12,10 +12,36 @@ export function AuthModal() {
     const [username, setUsername] = useState(''), [password, setPassword] = useState(''), [nickname, setNickname] = useState('');
     const [confirm, setConfirm] = useState('');
     const [error, setError] = useState(''), [busy, setBusy] = useState(false);
+    // 비밀번호 찾기 (WP59): from the login view, a guest form ('form') and its answer ('sent').
+    const [reset, setReset] = useState<'' | 'form' | 'sent'>(''), [contact, setContact] = useState('');
     const register = authMode === 'register';
     // Sign-up asks for the password twice; a typo would otherwise lock the new member out.
     const mismatch = register && confirm !== '' && confirm !== password;
-    useEffect(() => { setError(''); setPassword(''); setConfirm(''); }, [authMode]);
+    useEffect(() => { setError(''); setPassword(''); setConfirm(''); setReset(''); }, [authMode]);
+    const showReset = (view: '' | 'form' | 'sent') => { setError(''); setReset(view); };
+
+    async function requestReset(e: FormEvent) {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true); setError('');
+        try { await api('auth/reset-request', 'POST', { username, contact }); setContact(''); setReset('sent'); toast('요청 완료'); }
+        catch (err) { setError(errorText(err)); }
+        finally { setBusy(false); }
+    }
+
+    if (reset) return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title="비밀번호 찾기">
+        {reset === 'sent' ? <p className="reset-done" role="status">매니저가 확인 후 연락합니다.</p>
+            : <form className="form-stack" onSubmit={requestReset}>
+                <label className="field"><span className="field-label">아이디</span>
+                    <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} minLength={4} maxLength={24} required autoFocus /></label>
+                <div className="field"><label className="field-label" htmlFor="reset-contact">연락받을 곳</label>
+                    <input id="reset-contact" className="input" autoComplete="off" value={contact} onChange={e => setContact(e.target.value)} maxLength={100} required aria-describedby="reset-contact-hint" />
+                    <span id="reset-contact-hint" className="field-hint">오픈채팅 링크 또는 연락처</span></div>
+                {error && <p className="field-error" role="alert">{error}</p>}
+                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username.trim() || !contact.trim()}>{busy ? <LoaderCircle size={20} className="spin" /> : '요청'}</button>
+            </form>}
+        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => showReset('')}>로그인</button></p>
+    </Modal>;
 
     async function submit(e: FormEvent) {
         e.preventDefault();
@@ -46,6 +72,7 @@ export function AuthModal() {
             {error && <p className="field-error" role="alert">{error}</p>}
             <button className="btn btn-primary btn-lg btn-block" disabled={busy || mismatch}>{busy ? <LoaderCircle size={20} className="spin" /> : register ? '가입하기' : '로그인'}</button>
         </form>
-        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => openAuth(register ? 'login' : 'register')}>{register ? '로그인' : '회원가입'}</button></p>
+        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => openAuth(register ? 'login' : 'register')}>{register ? '로그인' : '회원가입'}</button>
+            {!register && <button type="button" disabled={busy} onClick={() => showReset('form')}>비밀번호 찾기</button>}</p>
     </Modal>;
 }

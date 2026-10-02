@@ -1,6 +1,7 @@
 // Bindings configured in wrangler.jsonc plus secrets set at deploy time.
 interface Env {
-    ASSETS: Fetcher;
+    // Static assets (wrangler.jsonc assets.binding); missing on the local test servers without assets.
+    ASSETS?: Fetcher;
     DB: D1Database;
     // Optional: when absent, uploaded photos are stored in D1 instead.
     BUCKET?: R2Bucket;

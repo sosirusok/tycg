@@ -80,7 +80,7 @@ function CommentRow({ c, reply, canReply, canEdit, canDelete, canReport, onReply
     }
     const name = <NameLine nickname={c.nickname || ''} grade={c.author_grade} trial={c.author_grade_trial} role={c.role} badges={c.author_badges} compact />;
     return <li className={'comment' + (reply ? ' is-reply' : '')} id={'c-' + c.id}>
-        <Avatar name={c.nickname || ''} size="sm" />
+        <Avatar name={c.nickname || ''} size="sm" grade={c.author_deleted ? null : c.author_grade} trial={c.author_grade_trial} role={c.role} />
         <div className="comment-main">
             <div className="comment-head">
                 {c.author_deleted ? name : <Link to={'/profile/' + c.author_id} className="comment-name">{name}</Link>}

@@ -1,5 +1,5 @@
 import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
-import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
+import { MEMBER_REPORT_REASONS, isTradeKind, priceText, type User } from '../shared/market';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 import { searchesHandler } from './alerts';
@@ -18,8 +18,19 @@ export function publicMember(row: any, prefix = '') {
 export async function communityHandler(req: Request, p: string[]): Promise<Response | null> {
     const method = req.method;
     if (p[0] === 'drafts') {
-        const u = await requireUser(req), key = p[1] || 'new';
-        if (!/^(new|\d+)$/.test(key)) fail(400, '임시저장 위치를 확인해 주세요.');
+        const u = await requireUser(req);
+        // 임시글 (WP59): the member's drafts, newest first (at most 100, the cap below), for the editor's
+        // '임시글 2' sheet: the key, the title and kind inside the draft, and when it was saved.
+        if (!p[1] && method === 'GET') {
+            const r = await db().prepare("SELECT draft_key,CASE WHEN json_valid(content) THEN json_extract(content,'$.title') END AS title,CASE WHEN json_valid(content) THEN json_extract(content,'$.kind') END AS kind,updated_at FROM drafts WHERE user_id=? ORDER BY updated_at DESC LIMIT 100")
+                .bind(u.id).all<{ draft_key: string; title: unknown; kind: unknown; updated_at: number }>();
+            return json({ drafts: r.results.map(d => ({ key: d.draft_key, title: typeof d.title === 'string' ? d.title.slice(0, 100) : '', kind: typeof d.kind === 'string' ? d.kind : '', updated_at: d.updated_at })) });
+        }
+        // One draft per board for a new post ('new-sell', 'new-buy' …, so drafts of different boards never
+        // replace each other) and one per post being edited (its id). 'new' is the single slot of earlier
+        // versions, still read and removed.
+        const key = p[1] || '';
+        if (!/^(new|\d{1,12})$/.test(key) && !(key.startsWith('new-') && isTradeKind(key.slice(4)))) fail(400, '임시저장 위치를 확인해 주세요.');
         if (method === 'GET') {
             const d = await db().prepare('SELECT content,updated_at FROM drafts WHERE user_id=? AND draft_key=?').bind(u.id, key).first<any>();
             return json({ draft: d ? { ...parse(d.content, {}), savedAt: d.updated_at } : null });
