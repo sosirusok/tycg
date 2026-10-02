@@ -313,7 +313,9 @@ async function route(req: Request): Promise<Response> {
             case 'stats': if (method === 'GET') return await stats(); break;
             // The whole home page (shelves, 엘리트 매물, notices) in one request (WP42).
             case 'home': if (method === 'GET' && !p[1]) return await homeHandler(req, url); break;
-            case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first() });
+            // ip: whether the visitor's address reached the Worker (CF-Connecting-IP, which the rate limits
+            // read), never the address itself. deploy.yml checks it through the Pages address (WP67).
+            case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first(), ip: !!req.headers.get('cf-connecting-ip') });
             case 'posts': {
                 // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).
                 if (p[2] === 'partners' || p[2] === 'trade') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
