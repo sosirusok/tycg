@@ -221,6 +221,8 @@
 /* 알림함 (/me/alerts): a row per 알림 with its type icon, text, time, the post photo and an unread dot. */
 .alerts-page { max-width: 720px; }
 .alerts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.alerts-tools { display: flex; align-items: center; gap: 8px; }
+.follow-list .strong-link { text-align: left; }
 .alert-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .alert-list li { border-bottom: 1px solid var(--line); }
 .alert-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px; text-align: left; }

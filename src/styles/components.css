@@ -35,9 +35,6 @@
 .post-card-side .post-card-fav:hover { background: var(--white); color: var(--ink); }
 .post-card-side .post-card-fav.on { color: var(--brand); }
 .status-hidden { border: 1px solid var(--line-2); color: var(--ink-2); }
-/* Board '프리미엄 매물' box: a brand outline and no fill (the brand color is never tinted). */
-.post-card.is-promoted { border: 1px solid var(--brand); border-radius: var(--r-12); margin-bottom: 8px; padding: 16px; }
-.post-card.is-promoted > .post-card-fav { top: 8px; right: 8px; }
 @media (max-width: 640px) {
   .post-card { padding: 12px 0; gap: 12px; }
   .post-card-body { gap: 4px; }
@@ -53,7 +50,6 @@
   .post-card .price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; }
   .post-card .price-values strong { font-size: var(--fs-16); line-height: 20px; }
   .post-card-side .post-card-fav { width: 26px; height: 26px; }
-  .post-card.is-promoted { padding: 12px; }
 }
 
 /* Price */
@@ -214,3 +210,72 @@
 .link-card-site { overflow: hidden; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .link-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 700; line-height: 1.4; }
 .link-card-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-3); font-size: var(--fs-13); line-height: 1.5; }
+
+/* 광고 (WP53). The board '광고 매물' box: a brand outline, never a fill (the brand color is never
+   tinted); '비슷한 매물' under a completed post uses the same rows without the outline. '광고' labels are
+   solid text, 12px or larger. Rows: photo | text | heart, hairlines between them. */
+.ad-box { display: grid; margin-bottom: 8px; }
+.ad-board { padding: 0 16px; border: 1px solid var(--brand); border-radius: var(--r-12); }
+.ad-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 40px; border-bottom: 1px solid var(--line); }
+.ad-head h2 { color: var(--brand); font-size: var(--fs-14); font-weight: 700; letter-spacing: -0.2px; }
+.ad-label { color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+.section-head .ad-label { align-self: center; }
+.ad-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 36px; gap: 12px; align-items: center; min-height: 80px; padding: 10px 0; cursor: pointer; }
+.ad-row + .ad-row { border-top: 1px solid var(--line); }
+.ad-thumb { display: grid; place-items: center; width: 56px; height: 56px; border-radius: var(--r-8); overflow: hidden; background: var(--fill); }
+.ad-thumb img:not(.cicon) { width: 100%; height: 100%; object-fit: cover; }
+.ad-text { display: grid; gap: 2px; min-width: 0; }
+.ad-meta { overflow: hidden; color: var(--ink-3); font-size: var(--fs-12); line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
+.ad-title { overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; line-height: 20px; white-space: nowrap; text-overflow: ellipsis; }
+.ad-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ad-bottom { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 20px; }
+.ad-bottom b { color: var(--ink); font-size: var(--fs-15); font-weight: 700; white-space: nowrap; }
+.ad-nick { overflow: hidden; color: var(--ink-3); font-size: var(--fs-13); white-space: nowrap; text-overflow: ellipsis; }
+.ad-fav { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: var(--ink-4); }
+.ad-fav:hover { background: var(--fill); color: var(--ink-2); }
+.ad-fav.on { color: var(--brand); }
+.ad-similar { margin-top: 32px; }
+.ad-similar .ad-head h2 { color: var(--ink); font-size: var(--fs-16); }
+@media (max-width: 640px) {
+  .ad-board { padding: 0 12px; }
+  .ad-row { grid-template-columns: 52px minmax(0, 1fr) 36px; min-height: 72px; padding: 6px 0; }
+  .ad-thumb { width: 52px; height: 52px; }
+  /* Phones show 2 rows, so the first list row stays on the first screen. */
+  .ad-board > .ad-row ~ .ad-row ~ .ad-row { display: none; }
+}
+/* 같은 회원 글 접기 (WP53): one line in place of a member's 3rd and later rows on a board page. */
+.fold-more { display: block; width: 100%; padding: 12px 4px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; text-align: left; }
+.fold-more:hover { background: var(--fill-2); color: var(--ink); }
+
+/* The home bottom ad card (WP53): not a modal (no overlay, no focus trap), a 12px rise as it enters. */
+.home-ad { position: fixed; right: 24px; bottom: 24px; z-index: 40; width: 300px; overflow: hidden; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-16); box-shadow: var(--shadow-pop); animation: home-ad-in .24s ease-out; }
+@keyframes home-ad-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .home-ad { animation: none; } }
+/* While the '엘리트 매물' row is on screen the card steps aside (it is not closed). */
+.home-ad.is-covered { visibility: hidden; }
+.home-ad-body { display: block; width: 100%; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.home-ad-media { position: relative; display: grid; place-items: center; aspect-ratio: 2 / 1; overflow: hidden; background: var(--fill); }
+.home-ad-media img:not(.cicon) { width: 100%; height: 100%; object-fit: cover; }
+.home-ad-tag { position: absolute; top: 10px; left: 10px; display: grid; place-items: center; height: 22px; padding: 0 8px; border-radius: var(--r-4); background: rgba(28, 36, 47, .72); color: var(--white); font-size: var(--fs-12); font-weight: 600; line-height: 1; }
+.home-ad-text { display: grid; gap: 4px; min-width: 0; padding: 14px 16px 16px; }
+.home-ad-meta { overflow: hidden; color: var(--ink-3); font-size: var(--fs-12); white-space: nowrap; text-overflow: ellipsis; }
+.home-ad-title { display: -webkit-box; overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 700; line-height: 1.4; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.home-ad-price { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.home-ad-price b { color: var(--ink); font-size: var(--fs-16); font-weight: 700; white-space: nowrap; }
+.home-ad-price span { overflow: hidden; color: var(--ink-3); font-size: var(--fs-13); white-space: nowrap; text-overflow: ellipsis; }
+.home-ad-x { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: rgba(28, 36, 47, .72); color: var(--white); }
+@media (max-width: 960px) {
+  .home-ad { left: 12px; right: 12px; bottom: calc(60px + env(safe-area-inset-bottom) + 12px); width: auto; }
+  .home-ad-body { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: center; padding: 11px 48px 11px 11px; }
+  .home-ad-media { width: 64px; height: 64px; aspect-ratio: auto; border-radius: var(--r-8); }
+  .home-ad-tag { top: 4px; left: 4px; height: 20px; padding: 0 5px; }
+  .home-ad-text { gap: 2px; padding: 0; }
+  .home-ad-meta { line-height: 16px; }
+  .home-ad-title { display: block; font-size: var(--fs-15); line-height: 20px; white-space: nowrap; text-overflow: ellipsis; }
+  .home-ad-price { line-height: 20px; }
+  .home-ad-price b { font-size: var(--fs-15); }
+  /* A 36px circle inside a 44px hit area. */
+  .home-ad-x { top: 50%; right: 2px; width: 44px; height: 44px; margin-top: -22px; background: none; color: var(--ink-3); }
+  .home-ad-x::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--fill); }
+  .home-ad-x svg { position: relative; }
+}

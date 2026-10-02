@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 // Grade benefits on the strict server: the cafe ceilings every member shares (SITE_RULES: open posts,
 // posts per day, photos, uploads) and same-title rules, the 끌올 지갑 (WP40: wallet, refill, same-post
-// gap, 새 글 우선, grant fill, races), 게시판 상단 노출 and the home shelf, the quick price change,
+// gap, 새 글 우선, grant fill, races), the 광고 slots (WP53), the quick price change,
 // GET me/usage, and the daily cron's bumped_at backfill and grade-end reminder. scripts/test-local.mjs runs it on the 8791 server,
 // which has no POST_LIMITS=relaxed and receives test cron events (--test-scheduled).
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8791');
@@ -257,7 +257,7 @@ await grant(direct, 'premium');
 equal((await wallet(direct)).tokens, 10, 'a grant from the member page fills the wallet too (10/10)');
 const directChat = (await direct('chats')).data.chats.find(x => x.partner_id === 'manager');
 const directLine = directChat && (await direct(`chats/${directChat.id}/messages`)).data.messages.filter(m => m.type === 'system').map(m => m.body);
-equal(directLine, ['프리미엄 등급 지급 완료 (영구)\n끌올이 10개로 충전되었습니다.'], 'a direct grant says so in the manager chat too');
+equal(directLine, ['프리미엄 등급 지급 완료 (영구)\n끌올이 10개로 충전되었습니다.\n자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.'], 'a direct grant says so in the manager chat too');
 
 // Race: two parallel bumps on two posts with 1 in the wallet: exactly one passes.
 const racer2 = await register('wrace');
@@ -334,54 +334,44 @@ equal((await manager(`manage/users/${proxy.user.id}/badges`, 'POST', { badge: 'p
 age([proxyPost.data.id], 7);
 equal((await proxy(`posts/${proxyPost.data.id}/bump`, 'POST')).status, 403, 'a 대리(진행) post cannot be bumped without 대리 인증');
 
-// 4. 게시판 상단 노출 and the home shelf.
+// 4. 광고 slots (WP53): filled by new posts and 끌올 without a call, '광고 고정' and '광고 빼기', refills on
+// 완료. Where ads show (the board box, 비슷한 매물, the home row) is checked in verify-promo.
 const plain = await register('plain');
 const plainPost = await created(plain, 'plain post');
-refused(await plain(`posts/${plainPost}/feature`, 'PUT', { active: true }), 403, '게시판 상단 노출은 프리미엄부터 가능합니다.', '일반 cannot feature');
+refused(await plain(`posts/${plainPost}/feature`, 'PUT', { active: true }), 403, '광고는 프리미엄부터 가능합니다.', '일반 cannot pin an ad');
+equal(sql(`SELECT featured_at FROM posts WHERE id=${plainPost}`)[0].featured_at, null, 'a 일반 post takes no ad slot');
+const adSlots = async c => (await c('me/usage')).data.featured.map(f => f.id);
 const premium = await register('prem');
 await grant(premium, 'premium');
 const A = await created(premium, 'premium A');
 const B = await premium('posts', 'POST', sale(`[QA] 혜택 ${run} B${run}`)).then(r => r.data.id);
+equal(await adSlots(premium), [B], 'the newest post takes the premium slot (1) with no call');
 const fa = await premium(`posts/${A}/feature`, 'PUT', { active: true });
-equal([fa.status, fa.data.featured, fa.data.slots, fa.data.used, fa.data.replaced], [200, true, 1, 1, null], 'premium features A');
-const fb = await premium(`posts/${B}/feature`, 'PUT', { active: true });
-equal([fb.status, fb.data.replaced?.id, fb.data.used], [200, A, 1], 'featuring B replaces A');
-equal((await guest('posts/' + A)).data.post.featured, false, 'A is no longer featured');
-const board = (await guest(`posts?kind=sell&q=${run}`)).data;
-equal(board.featured.map(p => p.id), [B], 'board page 1 featured box holds B');
-check(board.posts.some(p => p.id === B), 'B stays in the normal list');
-check(!('featured' in (await guest(`posts?kind=sell&q=${run}&page=2`)).data), 'no featured box on page 2');
-check(!('featured' in (await guest(`posts?kind=sell&q=${run}&sort=price-low`)).data), 'no featured box when sorted by price');
-check(!('featured' in (await guest(`posts?q=${run}`)).data), 'no featured box without a tab');
-const reserved = await premium(`posts/${A}/feature`, 'PUT', { active: false });
-equal(reserved.status, 200, 'turning a feature off is allowed');
+equal([fa.status, fa.data.pinned, fa.data.slots, fa.data.used], [200, true, 1, 1], '광고 고정 on A');
+equal(await adSlots(premium), [A], 'the pinned A holds the slot over the newer B');
+const C = await created(premium, 'premium C');
+equal(await adSlots(premium), [A], 'a newer post does not take a pinned slot');
+const fo = await premium(`posts/${A}/feature`, 'PUT', { active: false });
+equal([fo.status, fo.data.pinned, fo.data.used], [200, false, 1], '광고 빼기 on A');
+equal([sql(`SELECT featured_pin FROM posts WHERE id=${A}`)[0].featured_pin, await adSlots(premium)], [-1, [C]], 'A is out of the ads and the newest automatic post C fills the slot');
+equal((await guest('posts/' + A)).data.post.featured_pin, undefined, 'featured_pin is the author\'s only');
+equal((await premium('posts/' + A)).data.post.featured_pin, -1, 'the author sees 광고 빼기');
+equal((await setStatus(premium, C, 'closed')).status, 200, 'the ad post C is completed');
+equal([sql(`SELECT featured_at FROM posts WHERE id=${C}`)[0].featured_at, await adSlots(premium)], [null, [B]], 'completing clears its slot and B fills it');
+refused(await premium(`posts/${C}/feature`, 'PUT', { active: true }), 409, '거래중인 글만 광고할 수 있습니다.', 'a completed post cannot be pinned');
 const elite = await register('elite');
 await grant(elite, 'elite');
 const E = [];
-for (let i = 0; i < 3; i++) {
-    E.push(await created(elite, `elite ${i}`));
-    equal((await elite(`posts/${E[i]}/feature`, 'PUT', { active: true })).data.replaced, null, `elite features post ${i + 1} of 3 without replacing`);
-}
-equal((await guest(`posts?kind=sell&q=${run}`)).data.featured.map(p => p.id).sort(), [...E].sort(), 'featured box holds the 3 elite posts (at most 3)');
-const home = (await guest('posts?featured=home&size=6')).data.posts.map(p => p.id);
-check(E.every(id => home.includes(id)) && !home.includes(B), 'home shelf has the elite posts and not the premium one');
-check(home.length <= 6, 'home shelf holds at most 6');
-equal((await guest(`posts?kind=sell&q=B${run}`)).data.featured.map(p => p.id), [B], 'B is featured before its bump gets old');
-backdate([B], 73);
-equal((await guest(`posts?kind=sell&q=B${run}`)).data.featured, [], 'B leaves the box 72 hours after its last bump');
-// Two states (WP43): completing a featured post ends its feature and frees the slot.
-equal((await setStatus(elite, E[0], 'closed')).status, 200, 'the featured post is completed');
-equal(sql(`SELECT featured_at FROM posts WHERE id=${E[0]}`)[0].featured_at, null, 'completing clears featured_at');
-check(!(await guest(`posts?kind=sell&q=${run}`)).data.featured.some(p => p.id === E[0]), 'a completed post drops out of the box');
-refused(await elite(`posts/${E[0]}/feature`, 'PUT', { active: true }), 409, '거래중인 글만 상단에 노출할 수 있습니다.', 'a completed post cannot be featured');
-const E3 = await created(elite, 'elite 3');
-const f3 = await elite(`posts/${E3}/feature`, 'PUT', { active: true });
-equal([f3.status, f3.data.replaced, f3.data.used], [200, null, 3], 'the freed slot takes a new post without replacing');
-equal((await elite('me/usage')).data.featured.length, 3, 'usage counts only the open featured posts');
-// The editor never changes the status: a stale 'closed' in the form keeps the post open and featured.
+for (let i = 0; i < 4; i++) E.push(await created(elite, `elite ${i}`));
+equal((await adSlots(elite)).sort(), E.slice(1).sort(), 'the 3 newest elite posts hold the 3 slots');
+const pins = [];
+for (const id of E) pins.push((await elite(`posts/${id}/feature`, 'PUT', { active: true })).data.replaced?.id ?? null);
+equal(pins, [null, null, null, E[0]], 'a 4th 광고 고정 unpins the oldest pin');
+equal((await adSlots(elite)).sort(), E.slice(1).sort(), 'the 3 pinned posts hold the slots');
+// The editor never changes the status: a stale 'closed' in the form keeps the post open and in its slot.
 const editClosed = await elite(`posts/${E[1]}`, 'PUT', sale('elite closed by edit ' + run, { status: 'closed' }));
 equal(editClosed.status, 200, 'saving through the editor');
-equal(sql(`SELECT status,featured_at IS NOT NULL AS featured FROM posts WHERE id=${E[1]}`)[0], { status: 'open', featured: 1 }, 'the editor leaves the post open and featured');
+equal(sql(`SELECT status,featured_at IS NOT NULL AS featured FROM posts WHERE id=${E[1]}`)[0], { status: 'open', featured: 1 }, 'the editor leaves the post open and in its slot');
 
 // 5. Photos: 100 per post for every member; uploads 120 per 10 minutes and 300 per day.
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
@@ -435,12 +425,13 @@ refused(await plain(`posts/${buyPost}/price`, 'PATCH', { price: 200000 }), 400, 
 // 7. GET me/usage.
 const usage = (await daily('me/usage')).data;
 equal([usage.grade, usage.bumpTokens, usage.bumpMax, usage.openPosts, usage.postsToday], ['normal', 0, 3, 4, 4], 'usage counts for 일반');
-equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, boardSlots: 0, homeShelf: false, serviceCoupons: 0 }, '일반 perks');
+equal(usage.perks, { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
+    autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false, replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false }, '일반 perks');
 equal(usage.freshToday, 3, 'usage counts today\'s free new posts (3 of the 4)');
 equal(usage.rules, { photosPerPost: 100, openPosts: 100, postsPerDay: 30, uploadsPer10Min: 120, uploadsPerDay: 300, freshPerDay: 3, keywordAlerts: 10, follows: 100, savedSearches: 20, commentsPer10Min: 20, commentsPerDay: 200 }, 'the cafe rules every member shares');
 check(usage.nextRefillAt > Date.now() && usage.nextRefillAt - Date.now() <= 6 * HOUR, 'nextRefillAt is within the next 6 hours');
 const premiumUsage = (await premium('me/usage')).data;
-equal([premiumUsage.grade, premiumUsage.perks.boardSlots, premiumUsage.bumpMax, premiumUsage.featured.map(f => f.id)], ['premium', 1, 10, [B]], 'premium perks and featured list');
+equal([premiumUsage.grade, premiumUsage.perks.adSlots, premiumUsage.bumpMax, premiumUsage.featured.map(f => f.id)], ['premium', 1, 10, [B]], 'premium perks and its ad slot');
 const managerUsage = (await manager('me/usage')).data;
 equal([managerUsage.perks.bumpMax, managerUsage.bumpTokens, managerUsage.nextRefillAt, managerUsage.rules.openPosts, managerUsage.rules.photosPerPost], [null, null, null, null, 100], 'the manager has no wallet and no open-post ceiling (null)');
 equal((await guest('me/usage')).status, 401, 'usage needs a login');

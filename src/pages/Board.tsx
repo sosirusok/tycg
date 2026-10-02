@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
+import { Bell, BellRing, PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, TIERS, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, isTradeKind, manToWon, parseList, priceLabel, priceText, rankText, skinTags, tagName, validTags, wonToMan,
@@ -10,15 +10,37 @@ import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/rou
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
+import { AdBox } from '../components/AdBox';
+import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
 import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
 
 const PAGE_SIZE = 16;
+
+// 같은 회원 글 접기 (WP53): on a board page each member shows 2 rows; the rest fold into one line
+// '좀비사냥꾼 글 N개 더' right under the 2nd row, which opens them in place. The manager's posts never fold, and
+// the server's order, counts and paging stay as they are.
+type Folded = { post: Post } | { more: string; name: string; count: number };
+const FOLD_AFTER = 2;
+function foldRows(posts: Post[], open: Set<string>): Folded[] {
+    const seen = new Map<string, number>(), total = new Map<string, number>();
+    for (const p of posts) total.set(p.author_id, (total.get(p.author_id) || 0) + 1);
+    const out: Folded[] = [];
+    for (const p of posts) {
+        const n = (seen.get(p.author_id) || 0) + 1, keep = p.role === 'manager' || open.has(p.author_id);
+        seen.set(p.author_id, n);
+        if (n <= FOLD_AFTER || keep) out.push({ post: p });
+        // The fold line sits right under the member's 2nd row and names them, so two folds in a row
+        // never read as the same member.
+        if (n === FOLD_AFTER && !keep && total.get(p.author_id)! > FOLD_AFTER) out.push({ more: p.author_id, name: p.nickname || '', count: total.get(p.author_id)! - FOLD_AFTER });
+    }
+    return out;
+}
 // The server counts up to 300 posts (more shows '300+'); paging then stops at the last full page.
 const COUNT_CAP = 300;
 
 // Lists already seen in this tab, per member and query (the 20 most recent). Back and tab
 // switches render from here at once while a background request checks for changes.
-type ListData = { posts: Post[]; total: number; capped?: boolean; featured?: Post[]; counts?: Record<string, number> };
+type ListData = { posts: Post[]; total: number; capped?: boolean; ads?: Post[]; counts?: Record<string, number> };
 const listCache = new Map<string, ListData>();
 function cacheGet(key: string) {
     const hit = listCache.get(key);
@@ -35,8 +57,9 @@ type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
 
 // Saved searches (GET /searches, 20 per member for every grade), read once per member per page load
 // and kept here so moving between tabs does not ask again. The stored query is the board's own
-// canonical query without the page, compared with its keys sorted.
-type Saved = { id: string; name: string; query: string };
+// canonical query without the page, compared with its keys sorted. alert: the search sends 새 글 알림
+// (WP54); keyword: it holds only the tab, category and word (키워드·게시판 알림, every grade).
+type Saved = { id: string; name: string; query: string; alert?: boolean; keyword?: boolean };
 let savedCache: { user: string; list: Saved[] } | null = null;
 const searchKey = (q: string | URLSearchParams) => { const p = new URLSearchParams(q); p.delete('page'); p.sort(); return p.toString(); };
 // The name is the filter chips in order, within the server's 32 characters.
@@ -249,6 +272,9 @@ export function Board() {
     const cached = fetched?.key === cacheKey ? undefined : cacheGet(cacheKey);
     const data = fetched?.key === cacheKey ? fetched : cached ? { key: cacheKey, ...cached, error: '' } : null;
     const [reload, setReload] = useState(0), [sheet, setSheet] = useState(false);
+    // Members whose folded rows were opened ('좀비사냥꾼 글 N개 더'); a new list folds again.
+    const [unfolded, setUnfolded] = useState<Set<string>>(() => new Set());
+    useEffect(() => { setUnfolded(new Set()); }, [cacheKey]);
     const [saved, setSaved] = useState<Saved[]>(() => me && savedCache?.user === me.id ? savedCache.list : []), [savingSearch, setSavingSearch] = useState(false);
     useEffect(() => {
         if (!me) { setSaved([]); return; }
@@ -279,7 +305,7 @@ export function Board() {
         api<ListData>('posts?' + queryString)
             .then(d => {
                 if (!alive) return;
-                const next: ListData = { posts: d.posts, total: d.total, capped: d.capped, featured: d.featured, counts: d.counts };
+                const next: ListData = { posts: d.posts, total: d.total, capped: d.capped, ads: d.ads, counts: d.counts };
                 const same = JSON.stringify(listCache.get(key)) === JSON.stringify(next);
                 if (!same) cachePut(key, next);
                 setFetched(prev => same && prev?.key === key ? prev : { key, ...(same ? listCache.get(key)! : next), error: '' });
@@ -355,9 +381,41 @@ export function Board() {
         } catch (e) { toast.error(errorText(e)); }
     }
     async function restoreSearch(v: Saved) {
-        try { await api('searches', 'POST', { name: v.name, query: v.query }); await refreshSaved(); }
+        try { await api('searches', 'POST', { name: v.name, query: v.query, alert: !!v.alert }); await refreshSaved(); }
         catch (e) { toast.error(errorText(e)); }
     }
+    // 새 글 알림 (WP54). The bell on a saved chip turns its 알림 on or off; '이 키워드 알림 받기' (after a
+    // search) and the board header bell save the board's tab, category and word with the 알림 on, or
+    // turn on the 알림 of the same saved search.
+    const [alerting, setAlerting] = useState(false);
+    async function setAlert(v: Saved, on: boolean) {
+        if (alerting) return;
+        setAlerting(true);
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await refreshSaved(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAlerting(false); }
+    }
+    const boardQuery = (word: string) => {
+        const p = new URLSearchParams({ kind, category });
+        if (kind === 'exchange') p.set('wantedCategory', wanted);
+        if (word) p.set('q', word);
+        return searchKey(p);
+    };
+    const searched = kind !== 'all' ? (params.get('q') || '').trim() : '';
+    const keywordKey = searched ? boardQuery(searched) : '', boardKey = kind !== 'all' ? boardQuery('') : '';
+    const keywordSaved = keywordKey ? saved.find(v => searchKey(v.query) === keywordKey) : undefined;
+    const boardSaved = boardKey ? saved.find(v => searchKey(v.query) === boardKey) : undefined;
+    function alertFor(key: string, name: string, existing: Saved | undefined, on: boolean) {
+        requireLogin(async () => {
+            if (existing) return setAlert(existing, on);
+            if (alerting) return;
+            setAlerting(true);
+            try { await api('searches', 'POST', { name: name.length > 32 ? name.slice(0, 31) + '…' : name, query: key, alert: true }); toast(ALERT_TEXT.on); await refreshSaved(); }
+            catch (e) { toast.error(errorText(e)); }
+            finally { setAlerting(false); }
+        });
+    }
+    const boardBellOn = !!boardSaved?.alert;
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category, wantedCategory: kind === 'exchange' ? wanted : '' });
     const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
     const compose = () => requireLogin(u => {
@@ -384,7 +442,11 @@ export function Board() {
     return <div className="container page board">
         <div className="board-head">
             <h1 className="page-title">{title}</h1>
-            <button type="button" className="btn btn-line btn-sm board-write" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
+            <div className="board-head-tools">
+                {kind !== 'all' && <button type="button" className={'icon-btn board-bell' + (boardBellOn ? ' is-on' : '')} aria-label={ALERT_TEXT.boardBell} aria-pressed={boardBellOn} title={`${KIND_NAMES[kind]} · ${categoryName(category)} ${ALERT_TEXT.boardBell}`} disabled={alerting}
+                    onClick={() => alertFor(boardKey, `${KIND_NAMES[kind]} · ${categoryName(category)}`, boardSaved, !boardBellOn)}>{boardBellOn ? <BellRing size={20} /> : <Bell size={20} />}</button>}
+                <button type="button" className="btn btn-line btn-sm board-write" onClick={compose}><PenLine size={16} />{kind === 'all' ? '글쓰기' : `${KIND_NAMES[kind]} 글쓰기`}</button>
+            </div>
         </div>
         <div className="tabs kind-tabs" role="tablist" aria-label="거래 구분" ref={tabsRef}>
             {kind === 'all' && <button type="button" role="tab" className="tab" aria-selected>전체{counts && <b>{data!.total.toLocaleString()}</b>}</button>}
@@ -418,9 +480,11 @@ export function Board() {
                     <span className="saved-label">저장한 검색</span>
                     {tabSaved.map(v => { const on = searchKey(v.query) === currentKey; return <span key={v.id} className={'saved-chip' + (on ? ' on' : '')}>
                         <button type="button" aria-pressed={on} title={v.name} onClick={() => { if (!on) void navigate('/trade?' + v.query); }}>{v.name}</button>
+                        <button type="button" className={'saved-bell' + (v.alert ? ' is-on' : '')} aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} aria-pressed={!!v.alert} disabled={alerting} onClick={() => void setAlert(v, !v.alert)}>{v.alert ? <BellRing size={13} /> : <Bell size={13} />}</button>
                         <button type="button" aria-label={v.name + ' 삭제'} onClick={() => void deleteSearch(v)}><X size={13} /></button>
                     </span>; })}
                 </div>}
+                {searched && !keywordSaved?.alert && <div className="keyword-alert"><button type="button" className="btn btn-line btn-sm" disabled={alerting} onClick={() => alertFor(keywordKey, searched, keywordSaved, true)}><Bell size={15} />{ALERT_TEXT.keywordButton}</button></div>}
                 {chips.length > 0 && <div className="active-filters">{chips.map(c => <button type="button" key={c.key} onClick={c.clear} aria-label={c.label + ' 해제'}>{c.label}<X size={13} /></button>)}
                     {me && !isSaved && <button type="button" className="btn btn-line btn-xs save-search" disabled={savingSearch} onClick={() => void saveSearch()}>이 조건 저장</button>}
                     <button type="button" className="clear" onClick={clearAll}>전체 해제</button></div>}
@@ -433,14 +497,13 @@ export function Board() {
                         </select>}
                     </div>
                 </div>
-                {/* '프리미엄 매물' (page 1, 최신순): the same posts stay in the list below, so counts and pages do not change. */}
-                {!loading && !data!.error && !!data!.featured?.length && <section className="featured-box" aria-label="프리미엄 매물">
-                    <h3>프리미엄 매물</h3>
-                    {data!.featured.map(p => <PostCard key={p.id} post={p} promoted showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}
-                </section>}
+                {/* '광고 매물' (WP53, page 1, 최신순): separate from the list below, whose order, counts and pages do not change. */}
+                {!loading && !data!.error && <AdBox ads={data!.ads} list={data!.posts} />}
                 {loading ? <SkeletonRows />
                     : data!.error ? <EmptyState title="목록을 불러오지 못했습니다" text={data!.error} action={<div className="empty-actions"><button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button><button className="btn btn-line" onClick={clearAll}>필터 초기화</button></div>} />
-                    : data!.posts.length ? <div className="post-list">{data!.posts.map(p => <PostCard key={p.id} post={p} showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />)}</div>
+                    : data!.posts.length ? <div className="post-list">{foldRows(data!.posts, unfolded).map(row => 'post' in row
+                        ? <PostCard key={row.post.id} post={row.post} showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />
+                        : <button type="button" key={'more-' + row.more} className="fold-more" onClick={() => setUnfolded(prev => new Set(prev).add(row.more))}>{AD_TEXT.more(row.name, row.count)}</button>)}</div>
                     : <EmptyState icon={chips.length ? 'search' : 'file'} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-line" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">

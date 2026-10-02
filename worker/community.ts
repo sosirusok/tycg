@@ -1,8 +1,11 @@
 import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
 import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
-import { SITE_RULES } from '../shared/membership';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
+import { searchesHandler } from './alerts';
+import { reportComment } from './comments';
+import { autoDeclineSql } from './automation';
+import { DROP_TEXT } from '../shared/membership';
 
 // Badge and grade columns for a listed member, without the grade's end date.
 export function publicMember(row: any, prefix = '') {
@@ -33,24 +36,8 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
             return json({ ok: true });
         }
     }
-    if (p[0] === 'searches') {
-        const u = await requireUser(req);
-        if (method === 'GET') {
-            const r = await db().prepare('SELECT id,name,query FROM saved_searches WHERE user_id=? ORDER BY created_at DESC').bind(u.id).all();
-            return json({ searches: r.results });
-        }
-        if (method === 'POST') {
-            const b = await body(req), name = textField(b.name, 1, 32, '검색 이름'), q = textField(b.query, 1, 12000, '검색 조건');
-            const count = await db().prepare('SELECT COUNT(*) AS n FROM saved_searches WHERE user_id=?').bind(u.id).first<any>();
-            if (count.n >= SITE_RULES.savedSearches) fail(409, `검색은 최대 ${SITE_RULES.savedSearches}개까지 저장할 수 있습니다.`);
-            await db().prepare('INSERT INTO saved_searches(id,user_id,name,query,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), u.id, name, q, Date.now()).run();
-            return json({ ok: true });
-        }
-        if (method === 'DELETE' && p[1]) {
-            await db().prepare('DELETE FROM saved_searches WHERE id=? AND user_id=?').bind(p[1], u.id).run();
-            return json({ ok: true });
-        }
-    }
+    // Saved searches and their 알림 (WP54).
+    if (p[0] === 'searches') return searchesHandler(req, p);
     if (p[0] === 'blocks') {
         const u = await requireUser(req);
         if (method === 'GET') {
@@ -71,8 +58,11 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         await limit('report:' + u.id, 8, 3600000);
         const b = await body(req);
         if (b.postId === undefined && b.userId !== undefined) return reportMember(u, b);
+        // 신고 of a 댓글 (WP55).
+        if (b.commentId !== undefined && b.commentId !== null) return reportComment(u, b);
         const post = await visiblePost(b.postId, u), reason = textField(b.reason, 2, 50, '신고 사유'), detail = textField(b.details, 1, 1000, '신고 설명');
-        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
+        // A waiting 댓글 report on the same post does not count as a report of the post.
+        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending' AND comment_id IS NULL").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
         await db().prepare('INSERT INTO reports(post_id,reporter_id,reason,details,created_at) VALUES(?,?,?,?,?)').bind(post.id, u.id, reason, detail, Date.now()).run();
         return json({ ok: true });
     }
@@ -129,14 +119,20 @@ async function offersHandler(req: Request, p: string[]) {
         if (n === null || n < 1000) fail(400, '제시가는 1,000원 이상입니다.');
         if (await db().prepare("SELECT id FROM offers WHERE post_id=? AND sender_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '대기 중인 제시를 먼저 취소해 주세요.');
         const chat = await ensureChat(u.id, post.author_id), id = crypto.randomUUID(), now = Date.now();
+        // 최저가 미만 제시 자동 거절 (WP56): on a running 가격 내리기 of an 엘리트 author with the switch on, a 제시
+        // under the 최저가 is stored as declined, with the line '제시 자동 거절 · 25만원' for both sides.
+        const decline = autoDeclineSql('p');
         const result = await db().batch([
-            db().prepare("INSERT INTO offers(id,post_id,sender_id,recipient_id,conversation_id,amount,note,created_at,updated_at) SELECT ?,p.id,?,p.author_id,?,?,?,?,? FROM posts p WHERE p.id=? AND p.kind='sell' AND p.hidden=0 AND p.status='open' AND (p.accepts_offers=1 OR p.price_mode='offer') AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=p.author_id) OR (target_id=? AND user_id=p.author_id)) AND NOT EXISTS(SELECT 1 FROM offers WHERE post_id=p.id AND sender_id=? AND status='pending')")
-                .bind(id, u.id, chat, n, note, now, now, post.id, u.id, u.id, u.id),
+            db().prepare(`INSERT INTO offers(id,post_id,sender_id,recipient_id,conversation_id,amount,note,status,created_at,updated_at) SELECT ?,p.id,?,p.author_id,?,?,?,CASE WHEN ${decline.sql} THEN 'declined' ELSE 'pending' END,?,? FROM posts p WHERE p.id=? AND p.kind='sell' AND p.hidden=0 AND p.status='open' AND (p.accepts_offers=1 OR p.price_mode='offer') AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND target_id=p.author_id) OR (target_id=? AND user_id=p.author_id)) AND NOT EXISTS(SELECT 1 FROM offers WHERE post_id=p.id AND sender_id=? AND status='pending')`)
+                .bind(id, u.id, chat, n, note, ...decline.args(n, now), now, now, post.id, u.id, u.id, u.id),
             db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,created_at) SELECT ?,?,?,'offer',?,? WHERE EXISTS(SELECT 1 FROM offers WHERE id=?)").bind(chat, u.id, '가격 제시', id, now, id),
             db().prepare('UPDATE conversations SET updated_at=? WHERE id=?').bind(now, chat),
+            ...guardedMessageStatements(chat, post.author_id, DROP_TEXT.declined(priceText(n)), 'system', id, "EXISTS(SELECT 1 FROM offers WHERE id=? AND status='declined')", [id], now),
+            db().prepare('SELECT status FROM offers WHERE id=?').bind(id),
         ]);
         if (!result[0].meta.changes) fail(409, '이미 제시했거나 글이 바뀌었습니다.');
-        return json({ id, chatId: chat }, 201);
+        const declined = (result[result.length - 1].results[0] as { status: string } | undefined)?.status === 'declined';
+        return json({ id, chatId: chat, ...declined ? { declined: true } : {} }, 201);
     }
     if (method === 'PATCH' && p[1]) {
         const b = await body(req), offer = await db().prepare('SELECT * FROM offers WHERE id=? AND (sender_id=? OR recipient_id=?)').bind(p[1], u.id, u.id).first<any>();

@@ -8,7 +8,8 @@ name: Deploy to Cloudflare
 #                                    fails while the account does not exist and this secret is missing.
 #   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
-# USE_KV ("false" keeps photos in D1 while R2 is off).
+# USE_KV ("false" keeps photos in D1 while R2 is off), CRON_LIMIT (the account's Cron Trigger limit: 5 on
+# Workers Free, the default; 250 on Workers Paid).
 # Without CLOUDFLARE_API_TOKEN every run ends green with a notice and changes nothing.
 
 on:
@@ -250,6 +251,45 @@ jobs:
 
       - run: pnpm typecheck
       - run: pnpm build
+
+      # Workers Free allows 5 Cron Triggers per account. wrangler deploy sets this Worker's triggers only
+      # after the new code is live, so a refused update would leave the site without its 10-minute ticks
+      # (자동 끌올, 새 글 알림). This read-only check counts the other Workers' triggers first and stops before
+      # the migrations when they would not fit. A failed read only warns: the deploy goes on as before.
+      - name: Check the account's Cron Trigger limit (read-only)
+        env:
+          CRON_LIMIT: ${{ vars.CRON_LIMIT }}
+        run: |
+          set -uo pipefail
+          api() { curl -sS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$@"; }
+          skip() { echo "::warning title=Cron Trigger 확인 건너뜀::$1 배포는 그대로 진행합니다."; exit 0; }
+          ours="$(node -e '
+            const { experimental_readRawConfig } = require("wrangler");
+            const { rawConfig } = experimental_readRawConfig({ config: require("path").resolve("wrangler.jsonc") });
+            process.stdout.write(String((rawConfig.triggers?.crons || []).length));' 2>/dev/null)" || ours=""
+          limit="${CRON_LIMIT:-5}"
+          [[ "$ours" =~ ^[0-9]+$ ]] || skip "wrangler.jsonc의 Cron Trigger 수를 읽지 못했습니다."
+          [[ "$limit" =~ ^[0-9]+$ ]] || skip "저장소 변수 CRON_LIMIT는 숫자여야 합니다."
+          [ "$ours" -gt 0 ] || exit 0
+          list="$(api "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" || true)"
+          [ "$(jq -r '.success' <<<"$list" 2>/dev/null)" = "true" ] || skip "계정의 Worker 목록을 읽지 못했습니다."
+          others=0
+          used=""
+          while IFS= read -r name; do
+            if [ -z "$name" ] || [ "$name" = "$WORKER_NAME" ]; then continue; fi
+            res="$(api "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$(jq -rn --arg n "$name" '$n|@uri')/schedules" || true)"
+            [ "$(jq -r '.success' <<<"$res" 2>/dev/null)" = "true" ] || skip "Worker $name 의 Cron Trigger를 읽지 못했습니다."
+            n="$(jq '[(.result.schedules // [])[]? | select(.cron != null)] | length' <<<"$res" 2>/dev/null)" || n=""
+            [[ "$n" =~ ^[0-9]+$ ]] || skip "Worker $name 의 Cron Trigger 수를 읽지 못했습니다."
+            if [ "$n" -gt 0 ]; then others=$((others + n)); used="$used $name($n)"; fi
+          done < <(jq -r '.result[]?.id // empty' <<<"$list")
+          total=$((others + ours))
+          echo "Cron Triggers: 다른 Worker ${others}개 + 이 사이트 ${ours}개 = ${total}개 (한도 ${limit}개)"
+          if [ "$total" -gt "$limit" ]; then
+            room=$((limit - ours)); [ "$room" -ge 0 ] || room=0
+            echo "::error title=Cron Trigger 한도 초과::이 사이트는 Cron Trigger ${ours}개(10분마다 자동 끌올·새 글 알림, 매일 정리)가 필요한데, 같은 Cloudflare 계정의 다른 Worker가 ${others}개를 쓰고 있어 합계 ${total}개로 한도 ${limit}개(무료 플랜 5개)를 넘습니다:${used}. 다른 Worker의 Cron Trigger를 합계 ${room}개 이하로 줄이고 다시 실행하세요. 유료 플랜이면 저장소 변수 CRON_LIMIT에 250을 넣으세요. D1 마이그레이션과 배포 전에 멈췄습니다."
+            exit 1
+          fi
 
       - name: Apply D1 migrations (remote)
         run: pnpm exec wrangler d1 migrations apply DB --remote --config wrangler.jsonc

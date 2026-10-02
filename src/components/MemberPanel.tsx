@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
+import { AD_TEXT, BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
 import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, dateText, priceText, longDate, reviewName, suspendDaysLabel, suspendUntilText, type Review, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { Link } from '../lib/router';
@@ -16,7 +16,7 @@ type TradeRow = { id: string; post_id: number; created_at: number; confirmed: nu
     // 운영진 중개 (WP65): the manager brokered this trade; the trade count is unchanged.
     brokered?: number };
 type TradeCounts = { confirmed: number; pending: number; denied: number };
-type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
+type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string; ad_off?: number }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 
@@ -101,6 +101,13 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 <span className="grow">{gradeInfo(g.grade).name}{g.source === 'trial' ? ' 체험' : ''} <span className="muted small">{g.expires_at ? `${longDate(g.expires_at)}까지` : '영구'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRevoke({ name: `${gradeInfo(g.grade).name} 등급`, task: () => api(`manage/users/${u.id}/grades/${g.id}`, 'DELETE'), done: '등급 회수 완료' })}>회수</button>
             </div>) : <p className="muted small">지급 내역 없음</p>}
+            {/* 광고 (WP53): ads need 본인 인증; the manager can also keep a member out of every ad. */}
+            {gradeInfo(u.grade).rank >= 2 && !u.badges.includes('identity') && <p className="muted small">{AD_TEXT.noIdentity}</p>}
+            <div className="mp-row">
+                <span className="grow">{AD_TEXT.off}</span>
+                <span className="switch"><input type="checkbox" role="switch" aria-label={AD_TEXT.off} checked={!!u.ad_off} disabled={busy}
+                    onChange={e => { const on = e.target.checked; void run(() => api(`manage/users/${u.id}/ad-off`, 'POST', { active: on }), on ? `${AD_TEXT.off} 완료` : `${AD_TEXT.off} 해제`); }} /></span>
+            </div>
             {!u.deleted_at && <div className="mp-grant">
                 <select className="select" aria-label="지급할 등급" value={grade} onChange={e => setGrade(e.target.value as GradeId)}>{GRADES.filter(g => g.id !== 'normal').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select className="select" aria-label="기간" value={plan} onChange={e => setPlan(e.target.value as PlanId)}>{(plans.length ? plans : [{ id: 'permanent', label: '영구' }]).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>

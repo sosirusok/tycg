@@ -55,8 +55,9 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     requireManager(u);
     if (!p[1] && method === 'GET') {
         const r = await db().batch([
-            // A member report (WP22) also names the reported member (target_*) and the chat it came from.
-            db().prepare(`SELECT r.*,p.title,p.hidden,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
+            // A member report (WP22) also names the reported member (target_*) and the chat it came from; a 댓글
+            // report (WP55) carries the reported text (comment_body) and whether the 댓글 is still up.
+            db().prepare(`SELECT r.*,p.title,p.hidden,CASE WHEN r.comment_id IS NOT NULL THEN EXISTS(SELECT 1 FROM comments c WHERE c.id=r.comment_id AND c.deleted_at IS NULL) END AS comment_live,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
                 FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id LEFT JOIN users t ON t.id=r.target_user_id ORDER BY r.created_at DESC LIMIT 100`),
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
@@ -66,9 +67,13 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             db().prepare('SELECT COUNT(*) AS n FROM posts WHERE created_at>=? AND created_at<? AND relist=1').bind(kstDayStart(Date.now()) - 86400000, kstDayStart(Date.now())),
             // The '중개·가측' tab's count (WP65).
             db().prepare("SELECT COUNT(*) AS n FROM service_requests WHERE status='open'"),
+            // '자동 끌올 어제 46번 · 지연 120번' (WP52), written by the daily cron.
+            db().prepare("SELECT value FROM settings WHERE key='sys:auto_stats'"),
         ]);
+        let auto: { done: number; delayed: number } | null = null;
+        try { const v = JSON.parse((r[5].results[0] as { value: string } | undefined)?.value || 'null'); if (v) auto = { done: Number(v.done) || 0, delayed: Number(v.delayed) || 0 }; } catch { /* none yet */ }
         return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n, openServices: (r[4].results[0] as any).n,
-            usage: { relistsYesterday: (r[3].results[0] as any).n } });
+            usage: { relistsYesterday: (r[3].results[0] as any).n, autoYesterday: auto } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
     if (p[1] === 'reports' && p[2] && p[3] === 'messages' && !p[4] && method === 'GET') {

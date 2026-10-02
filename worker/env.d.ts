@@ -21,7 +21,8 @@ interface Env {
     // day past KV Free's limits. scripts/test-local.mjs sets it on one short-lived server; deploys never do.
     KV_TEST_FAIL?: string;
     // Test only: 'on' lets local requests send X-Test-Db-Bytes (the database size for the D1 photo
-    // guard) and X-Test-Storage (store one upload in KV or D1). Set by scripts/test-local.mjs only.
+    // guard) and X-Test-Storage (store one upload in KV or D1), and makes the 자동 끌올 ticks use the
+    // test event's scheduledTime as now. Set by scripts/test-local.mjs only.
     TEST_HOOKS?: string;
     // Test only: the origin of a local fixture server (tests/fixtures/preview-server.mjs) that every
     // 링크 미리보기 fetch goes to, honoured only for saves served on 127.0.0.1 (worker/unfurl.ts).

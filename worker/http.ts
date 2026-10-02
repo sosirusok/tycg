@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { SUSPEND_FOREVER, suspendUntilText, type User } from '../shared/market';
 import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
 import { meteredDb } from './meter';
+import { enrolStatements } from './automation';
 
 export const MANAGER_ID = 'manager';
 export const MANAGER_USERNAME = 'sosirusok';
@@ -98,13 +99,20 @@ export type TradeStats = { trade_count: number; deal_sum: number; good_count: nu
 // 거금 adds, per bucket, the largest MIN(거래가, backing) (no backing adds 0), and 후기 좋아요 counts the
 // buckets holding a 좋아요 후기 about the member. One read of at most 2000 rows, deduped here.
 export async function tradeStats(userId: string): Promise<TradeStats> {
-    const r = await db().prepare(`SELECT CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END AS other,t.price,t.backing,t.created_at AS at,o.suspended_until,
+    return tradeStatsOf((await tradeStatsStatement(userId).all()).results as TradeRow[]);
+}
+type TradeRow = { other: string; price: number | null; backing: number | null; at: number; suspended_until: number | null; good: number };
+// The read alone, so a caller can put it in its own batch (GET /posts/:id with '비슷한 매물', WP53).
+export function tradeStatsStatement(userId: string) {
+    return db().prepare(`SELECT CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END AS other,t.price,t.backing,t.created_at AS at,o.suspended_until,
             EXISTS(SELECT 1 FROM reviews rv WHERE rv.trade_id=t.id AND rv.target_id=? AND rv.good=1 AND rv.removed_at IS NULL) AS good
         FROM trades t LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
         WHERE (t.seller_id=? OR t.buyer_id=?) AND ${countedTrade('t')} ORDER BY t.created_at DESC LIMIT 2000`)
-        .bind(userId, userId, userId, userId, userId).all<{ other: string; price: number | null; backing: number | null; at: number; suspended_until: number | null; good: number }>();
+        .bind(userId, userId, userId, userId, userId);
+}
+export function tradeStatsOf(rows: TradeRow[]): TradeStats {
     const keys = new Map<string, { deal: number; good: boolean }>();
-    for (const t of r.results) {
+    for (const t of rows) {
         if ((t.suspended_until ?? 0) >= SUSPEND_FOREVER) continue;
         const key = t.other + ':' + Math.floor(t.at / TRADE_BUCKET), k = keys.get(key) || { deal: 0, good: false };
         k.deal = Math.max(k.deal, Math.min(t.price ?? 0, t.backing ?? 0));
@@ -169,6 +177,8 @@ export async function currentUser(r: Request): Promise<User | null> {
     if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
     if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
         writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
+        // A visit resumes 자동 끌올 paused for no visit (WP52): the member is due on the next tick.
+        writes.push(db().prepare("UPDATE automation SET pause_reason='',paused_at=NULL,bump_next_at=?,updated_at=? WHERE user_id=? AND pause_reason='away'").bind(now, now, user.id));
     }
     if (writes.length) await db().batch(writes);
     // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
@@ -229,6 +239,8 @@ export async function grantTrial(userId: string, now = Date.now(), catchUp = fal
         db().prepare("UPDATE users SET trial_at=? WHERE id=? AND trial_at IS NULL AND EXISTS(SELECT 1 FROM user_grades WHERE user_id=? AND source='trial')").bind(now, userId, userId),
         // The trial fills the 끌올 지갑 to the 플러스 cap (no chat line).
         db().prepare('UPDATE users SET bump_tokens=?,bump_at=? WHERE id=? AND trial_at=?').bind(PERKS.plus.bumpMax, now, userId, now),
+        // 자동 끌올 is on from the start (WP52): the automation row and the newest open post (no chat line).
+        ...enrolStatements(userId, 'plus', now, 'EXISTS(SELECT 1 FROM users WHERE id=? AND trial_at=?)', [userId, now], false),
     ]);
     return r[0].meta.changes > 0;
 }
@@ -247,7 +259,7 @@ export function requireManager(u: User) {
 }
 
 // 이용 정지 (WP22): a suspended member can still sign in, read, close or delete their posts, and write
-// to the manager's chat to appeal, but cannot write posts, 끌올, 상단 노출, change prices, reopen or
+// to the manager's chat to appeal, but cannot write posts, 끌올, 광고 고정·빼기, change prices, reopen or
 // reserve a post, send or accept 제시, apply or write to other members until suspended_until passes.
 export const isSuspended = (until: number | null | undefined, now = Date.now()) => typeof until === 'number' && until > now;
 export function requireActive(u: User) {

@@ -11,8 +11,8 @@ import {
 // (1GB on R2, 100MB on KV, 30MB on D1).
 const UPLOAD_ROWS = SITE_RULES.openPosts * SITE_RULES.photosPerPost;
 
-// A photo is "in use" while a post, a chat message or one of the owner's drafts references it.
-export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
+// A photo is "in use" while a post, a chat message, a 댓글 (WP55) or one of the owner's drafts references it.
+export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM comments c WHERE c.image_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -217,7 +217,8 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     if (p[0] === 'images' && p[1] && method === 'GET') {
         const m = await db().prepare('SELECT * FROM uploads WHERE id=?').bind(p[1]).first<any>();
         if (!m) fail(404, '사진을 찾을 수 없습니다.');
-        const publicImage = await db().prepare('SELECT 1 FROM post_images pi JOIN posts p ON p.id=pi.post_id WHERE pi.upload_id=? AND p.hidden=0 LIMIT 1').bind(p[1]).first();
+        // A 댓글 photo (WP55) is public while its post is.
+        const publicImage = await db().prepare('SELECT 1 FROM post_images pi JOIN posts p ON p.id=pi.post_id WHERE pi.upload_id=? AND p.hidden=0 UNION ALL SELECT 1 FROM comments c JOIN posts p ON p.id=c.post_id WHERE c.image_id=? AND p.hidden=0 LIMIT 1').bind(p[1], p[1]).first();
         if (!publicImage) {
             const u = await currentUser(req);
             const allowed = u && (u.id === m.owner_id || u.role === 'manager' || await db().prepare('SELECT 1 FROM message_images mi JOIN messages msg ON msg.id=mi.message_id JOIN conversations c ON c.id=msg.conversation_id WHERE mi.upload_id=? AND (c.user_a=? OR c.user_b=?) LIMIT 1').bind(p[1], u.id, u.id).first());

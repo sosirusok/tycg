@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { dateText, wonText } from '../../shared/market';
-import { BADGES, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, gapText, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
+import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -29,8 +29,11 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
     ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
     ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
-    ['게시판 상단', g => PERKS[g.id].boardSlots ? `${PERKS[g.id].boardSlots}자리` : '-'],
-    ['홈 추천 매물', g => PERKS[g.id].homeShelf ? 'O' : '-'],
+    // 자동 끌올 (WP52): how many posts take turns and how often, from PERKS (copy.md table cells with the
+    // owner's intervals): '-', '글 1개 · 4시간마다 1번', '글 5개 중 1개씩 · 1시간 30분마다', '전체 중 1개씩 · 30분마다'.
+    ['자동 끌올', g => { const k = PERKS[g.id], every = gapText(k.autoEveryMinutes); return !k.autoBumpPosts ? '-' : k.autoBumpPosts === 1 ? `글 1개 · ${every}마다 1번` : Number.isFinite(k.autoBumpPosts) ? `글 ${k.autoBumpPosts}개 중 1개씩 · ${every}마다` : `전체 중 1개씩 · ${every}마다`; }],
+    // 광고 (WP53): where the member's own open posts can show as ads, from PERKS.adSlots.
+    ['광고', g => { const n = PERKS[g.id].adSlots; return n ? [`게시판 상단 ${n}개`, '거래완료 글 하단', ...gradeInfo(g.id).rank >= 3 ? ['홈'] : []].join(' · ') : '-'; }],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
     // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
     ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
@@ -43,6 +46,13 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
     ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
     ['운영진 가측가 표시', () => 'O'],
+    // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
+    ['조건 알림', g => filterAlertText(PERKS[g.id])],
+    // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
+    ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
+    // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
+    ['내 빠른 답장', g => { const k = PERKS[g.id]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (gradeInfo(g.id).rank >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; }],
+    [CHAT_AUTO_TEXT.label, g => { const k = PERKS[g.id]; return [...k.firstReply ? [CHAT_AUTO_TEXT.first] : [], ...k.awayReply ? [CHAT_AUTO_TEXT.away] : []].join(' · ') || '-'; }],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -50,10 +60,14 @@ const FREE_ITEMS = [
     `거래중 글 ${SITE_RULES.openPosts}개`,
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    '댓글·답글',
     '채팅·제시',
+    '기본 빠른 답장',
     '링크 자동 연결',
-    '찜',
+    '찜·알림',
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
+    `키워드·게시판 알림 ${SITE_RULES.keywordAlerts}개`,
+    '판매자 구독',
     '거래 기록·후기',
     '신고·차단',
 ];
@@ -115,6 +129,11 @@ export default function Guide() {
             </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
+                <li>{AD_TEXT.sortNote}</li>
+                <li>{AD_TEXT.orderNote}</li>
+                <li>{AUTO_TEXT.reserve}</li>
+                <li>{AUTO_TEXT.capped}</li>
+                <li>{DROP_TEXT.hold}</li>
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>

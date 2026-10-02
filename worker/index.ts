@@ -1,15 +1,40 @@
+import { env } from 'cloudflare:workers';
 import { handleApi } from './api';
 import { cleanup } from './cleanup';
 import { db } from './http';
 import { meterOn, metered } from './meter';
 import { allowKvTestFailure } from './storage';
+import { bumpJob, dropJob, remindJob, TICK_A, TICK_B, type TickShare } from './automation';
+import { alertJob } from './alerts';
 
-// The daily cleanup. With the test meter on (READ_BUDGET=on, local only), its counts are kept in
-// settings 'sys:last_cron_meter' (never sent by any public route: 'sys:' keys stay on the server).
-async function scheduledRun() {
+// Three cron triggers (wrangler.jsonc): tick A (자동 끌올), tick B ('끌올 가능' 알림 and 새 글 알림) and the daily cleanup
+// (any other expression, as the tests send). With TEST_HOOKS=on (local tests only) the ticks take the
+// event's scheduledTime as now, so a test can run a tick at 03:00 KST or next Monday 10:00.
+function job(cron: string, scheduledTime: number) {
+    const now = (env as Partial<Env>).TEST_HOOKS === 'on' && Number.isFinite(scheduledTime) ? scheduledTime : Date.now();
+    // Tick A also runs 자동 가격 내리기 (WP56) after 자동 끌올, so its bumps see this tick's auto bumps in the
+    // tab caps; a failed drop run never undoes the bumps, and a failed bump run never stops the drops.
+    if (cron === TICK_A) return async () => {
+        const bump = await bumpJob(now).catch(e => ({ bumpError: e instanceof Error ? e.message : 'unknown' }));
+        // The drop bumps share 자동 끌올's caps of this tick (per tab, per tick, one per member).
+        const { share, ...log } = bump as typeof bump & { share?: TickShare };
+        const drop = await dropJob(now, share).catch(e => ({ dropError: e instanceof Error ? e.message : 'unknown' }));
+        return { ...log, drop };
+    };
+    // Tick B also sends the 새 글 알림 (WP54); a failed reminder run never stops them.
+    if (cron === TICK_B) return async () => {
+        const remind = await remindJob(now).catch(e => ({ remindError: e instanceof Error ? e.message : 'unknown' }));
+        return { ...remind, ...await alertJob(now) };
+    };
+    return () => cleanup();
+}
+
+// With the test meter on (READ_BUDGET=on, local only), each run's counts are kept in settings
+// 'sys:last_cron_meter' (never sent by any public route: 'sys:' keys stay on the server).
+async function scheduledRun(run: () => Promise<unknown>) {
     allowKvTestFailure(null);
-    if (!meterOn()) return cleanup();
-    const { result, meter } = await metered(() => cleanup());
+    if (!meterOn()) return run();
+    const { result, meter } = await metered(run);
     const now = Date.now();
     await db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
         .bind('sys:last_cron_meter', JSON.stringify({ ...meter, at: now }), now).run();
@@ -24,7 +49,8 @@ export default {
         if (url.pathname.startsWith('/api/')) return handleApi(request);
         return env.ASSETS.fetch(request);
     },
-    async scheduled(_controller, _env, ctx) {
-        ctx.waitUntil(scheduledRun().then(r => console.log('Cleanup finished', r), e => console.error('Cleanup failed', e instanceof Error ? e.message : e)));
+    async scheduled(controller, _env, ctx) {
+        const name = controller.cron === TICK_A ? 'Auto bump and price drop' : controller.cron === TICK_B ? 'Reminders and alerts' : 'Cleanup';
+        ctx.waitUntil(scheduledRun(job(controller.cron, controller.scheduledTime)).then(r => console.log(name + ' finished', r), e => console.error(name + ' failed', e instanceof Error ? e.message : e)));
     },
 } satisfies ExportedHandler<Env>;

@@ -4,8 +4,9 @@ import type { Coupons } from '../../shared/membership';
 // GET /me/usage (and the 끌올 response): the 끌올 지갑. Null wallet fields are the manager's (no wallet).
 export type Wallet = { bumpTokens: number | null; bumpMax: number | null; bumpRefillMin: number | null; nextRefillAt: number | null };
 export type Usage = Wallet & {
-    perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; boardSlots: number | null; homeShelf: boolean | null };
+    perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; adSlots: number | null };
     rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null; freshPerDay?: number | null };
+    // featured: the member's 광고 slot posts now (WP53, '광고 2/3 · 자동').
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];
     // The member's photo space in the current store (WP45); limit null for the manager.
     photos?: { storage: 'r2' | 'kv' | 'd1'; used: number; limit: number | null };

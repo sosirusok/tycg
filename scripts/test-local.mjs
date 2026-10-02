@@ -70,7 +70,12 @@ async function waitFor(origin, server) {
     throw new Error('로컬 서버 시작 시간을 초과했습니다.\n' + log.slice(-3000));
 }
 
-const base = 'http://127.0.0.1:8790';
+// TEST_PORT_BASE (default 8790) lets two checkouts run their gates at once: the main server uses the
+// base port and the strict/cron server the next one.
+const PORT = Number(process.env.TEST_PORT_BASE || 8790);
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65000) throw new Error('TEST_PORT_BASE must be a port number.');
+const strictBase = `http://127.0.0.1:${PORT + 1}`;
+const base = `http://127.0.0.1:${PORT}`;
 // TEST_SUITES=perks,roles runs only the suites whose file name contains one of the words.
 const only = (process.env.TEST_SUITES || '').split(',').map(v => v.trim()).filter(Boolean);
 const pick = list => only.length ? list.filter(f => only.some(w => f.includes(w))) : list;
@@ -87,10 +92,10 @@ try {
     // POST_LIMITS=relaxed lifts the post caps (open posts, posts per day, same title) on this server only,
     // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     preview = await startPreviewServer();
-    const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8790', '--inspector-port', '0',
+    const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT), '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-services.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs'])) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-services.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -107,13 +112,20 @@ try {
     await writeFile(noR2, JSON.stringify(built));
     // READ_BUDGET=on turns on the read and call meter (worker/meter.ts) on this server only: responses
     // carry X-Rows-Read and friends, and the cron stores its counts in settings 'sys:last_cron_meter'.
-    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
+    const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    await waitFor('http://127.0.0.1:8791', fallback);
+    await waitFor(strictBase, fallback);
     // verify-deals (WP43) runs on this strict server, so completing posts and trade records meet the
-    // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints), and verify-alerts (WP50: 알림함, its cron rows and read costs). verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-budget.mjs'])) {
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+    // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints), and verify-alerts (WP50: 알림함, its cron rows and read costs).
+    // verify-alerts-posts (WP54) runs tick B's 새 글 알림 the same way (and sets the cursor with wrangler d1 execute).
+    // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now),
+    // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
+    // verify-promo (WP53) checks the 광고 placements against the strict rules.
+    // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-budget.mjs'])) {
+        // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
+        // call), so they get longer.
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : 180000);
     }
     const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;
     stop(fallback);
@@ -137,10 +149,10 @@ try {
         { suite: 'tests/verify-parity.mjs', config: moverConfig, vars: [], phase: 'mover' },
     ].filter(p => pick([p.suite]).length);
     for (const p of phases) {
-        const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', '8791', '--inspector-port', '0', '--test-scheduled',
+        const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
             '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'TEST_HOOKS:on', ...p.vars], { stdio: ['ignore', 'pipe', 'pipe'] });
-        await waitFor('http://127.0.0.1:8791', kvServer);
-        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: 'http://127.0.0.1:8791', TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+        await waitFor(strictBase, kvServer);
+        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
         const kvExited = kvServer.exitCode === null ? once(kvServer, 'exit') : null;
         stop(kvServer);
         await kvExited;

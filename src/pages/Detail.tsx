@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { Bell, BellRing, ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
@@ -17,12 +17,23 @@ import { ServiceSheet } from '../components/ServiceSheet';
 import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
+import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
+import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
+import { AdSection } from '../components/AdCard';
+import { Comments } from '../components/Comments';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
-    author_created_at?: number; author_prev_nickname?: string };
+    author_created_at?: number; author_prev_nickname?: string;
+    // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
+    // and its 가격 내리기 (WP56; drop null: not a priced 판매 post).
+    auto?: { bump: boolean; remindAt: number | null; drop?: { on: boolean; floor: number; nextAt: number | null; nextPrice: number | null } | null };
+    // 판매자 구독 (WP54): whether the viewer follows the author, and the author's '구독 허용'.
+    author_followed?: boolean; author_follow_allowed?: boolean;
+    // '비슷한 매물' (WP53): other members' ads under a completed post only.
+    ads?: Post[] };
 const HOUR = 3600000;
 // '15:40' on the Korean clock, rounded up to the minute like the server's message.
 function kstClock(t: number) {
@@ -114,22 +125,37 @@ export function Detail({ id }: { id: string }) {
     const { me, ready, requireLogin, refreshUnread } = useApp();
     // A 404 means the post is gone; any other failure (offline, 429, 5xx) can be retried.
     const [post, setPost] = useState<DetailPost | null>(null), [error, setError] = useState<{ status: number; text: string } | null>(null);
+    // 구독 / 구독 중 in the author box (WP54).
+    const [followBusy, setFollowBusy] = useState(false);
+    const follow = () => requireLogin(async () => {
+        if (!post || followBusy) return;
+        const active = !post.author_followed;
+        setFollowBusy(true);
+        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setFollowBusy(false); }
+    });
     const [lightbox, setLightbox] = useState<number | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+    // 신고 of one 댓글 (WP55), from the 댓글 section.
+    const [commentReport, setCommentReport] = useState<number | null>(null);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
     // 가측 신청 (WP65) from the owner's 더보기 menu.
     const [appraise, setAppraise] = useState(false);
+    // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
+    const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { ...p.auto, bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
-    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
+    // A view that came from an ad (?from=ad) counts as '광고 유입' too (WP53).
+    const load = () => api<{ post: DetailPost }>('posts/' + id + (viewDue(id) ? '?view=1' + (new URLSearchParams(location.search).get('from') === 'ad' ? '&from=ad' : '') : '')).then(d => { setError(null); setPost(d.post); }).catch(e => setError({ status: e instanceof ApiError ? e.status : 0, text: errorText(e) }));
     const mine = !!post && me?.id === post.author_id;
     const loadUsage = () => api<Usage>('me/usage').then(setUsage).catch(() => setUsage(null));
     // Waits for the session check, so a full page load asks for the post once.
     useEffect(() => { if (!ready) return; void load(); }, [id, me?.id, ready]);
-    // The author's counters for 끌올 and 게시판 상단 노출.
+    // The author's 끌올 counters.
     useEffect(() => { if (mine) void loadUsage(); else setUsage(null); }, [mine, me?.id]);
-    // Under 이용 정지 the author may only complete or delete the post (no 끌올, 상단 노출, 가격 수정, 수정).
+    // Under 이용 정지 the author may only complete or delete the post (no 끌올, 가격 수정, 수정).
     const suspended = !!me?.suspended_until && me.suspended_until > now;
     const closedAt = post?.status === 'closed' ? post.closed_at ?? post.updated_at : null;
     // Retention (WP45): 90 days after 완료 only the 대표 photo stays.
@@ -173,13 +199,17 @@ export function Detail({ id }: { id: string }) {
     // 가측 신청 (WP65): an own open 판매·교환 account post; the manager performs it and needs none.
     const canAppraise = mine && openNow && !manager && !suspended && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
 
-    // 끌올: the wallet ('3/4') or '15:40부터 가능'.
+    // 끌올: the wallet ('3/4') or '15:40부터 가능'. A waiting button sets the '끌올 가능' 알림 ('15:40 알림
+    // 예정', WP52).
     const wallet = usage && walletNow(usage, now);
-    const bump = !usage ? { disabled: true, hint: '' }
-        : !openNow || lostProxy || suspended ? { disabled: true, hint: '' }
-        : nextBump > now ? { disabled: true, hint: `${kstClock(nextBump)}부터 가능` }
-        : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '' };
-    const slots = usage?.perks.boardSlots || 0, slotsUsed = usage?.featured.length || 0;
+    const remindAt = post.auto?.remindAt && post.auto.remindAt > now ? post.auto.remindAt : 0;
+    const bump = !usage ? { disabled: true, hint: '', remind: false }
+        : !openNow || lostProxy || suspended ? { disabled: true, hint: '', remind: false }
+        : nextBump > now && remindAt ? { disabled: true, hint: remindText(remindAt), remind: false }
+        : nextBump > now ? { disabled: false, hint: `${kstClock(nextBump)}부터 가능`, remind: true }
+        : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
+    // 자동 끌올 (WP52): 플러스 and up (the 체험 too) and the manager, on an open post.
+    const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
 
     async function startChat() {
         requireLogin(async () => {
@@ -200,22 +230,16 @@ export function Detail({ id }: { id: string }) {
     }
     async function bumpNow() {
         if (busy || bump.disabled) return;
+        if (bump.remind) {
+            setBusy(true);
+            const at = await setBumpRemind(post!.id);
+            if (at) setPost({ ...post!, auto: { ...post!.auto, bump: !!post!.auto?.bump, remindAt: at } });
+            setBusy(false);
+            return;
+        }
         setBusy(true);
         try { await api(`posts/${post!.id}/bump`, 'POST', {}); toast('끌올 완료'); await Promise.all([load(), loadUsage()]); setNow(Date.now()); }
         catch (e) { toast.error(errorText(e)); void loadUsage(); }
-        finally { setBusy(false); }
-    }
-    async function feature(active: boolean) {
-        if (busy) return;
-        setBusy(true);
-        try {
-            const d = await api<{ featured: boolean; replaced: { id: number; title: string } | null }>(`posts/${post!.id}/feature`, 'PUT', { active });
-            setPost({ ...post!, featured: d.featured });
-            toast(d.featured ? '상단 노출 완료' : '상단 노출 해제');
-            if (d.replaced) toast(`‘${d.replaced.title}’ 상단 노출 해제`);
-            void loadUsage();
-        }
-        catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
     async function remove() {
@@ -240,7 +264,7 @@ export function Detail({ id }: { id: string }) {
         ];
     } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : genericBlocks(post, post.category);
 
-    const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls} disabled={bump.disabled || busy} onClick={bumpNow}>
+    const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} onClick={bumpNow}>
         <span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>;
 
     return <div className="container page detail-page">
@@ -264,7 +288,7 @@ export function Detail({ id }: { id: string }) {
                     <span>{kstDate(post.created_at)} 등록{post.bump_count ? ` · 끌올 ${post.bump_count}회` : ''} · 조회 {(post.view_count || 0).toLocaleString('ko-KR')}</span>
                 </div>
                 {/* On phones the author and their verification checks come right under the title. */}
-                <AuthorBox post={post} own={mine} className="author-box-top" />
+                <AuthorBox post={post} own={mine} className="author-box-top" onFollow={follow} followBusy={followBusy} />
                 {trimmed && <p className="muted small detail-trimmed">거래완료 후 90일이 지나 대표 사진만 남아 있습니다.</p>}
                 {/* The first 2 photos load with the page, the rest as they scroll in (WP46). */}
                 {post.images.length > 0 && <Gallery images={post.images} onOpen={setLightbox} />}
@@ -282,6 +306,10 @@ export function Detail({ id }: { id: string }) {
                     {!mine && <button type="button" className="btn btn-text small" onClick={() => requireLogin(() => setReport(true))}><Flag size={15} />신고</button>}
                     <span className="grow" /><span>글 번호 {post.id}</span>
                 </div>
+                {/* 댓글·답글 (WP55): every grade, a completed post included. */}
+                <Comments post={post} onReport={setCommentReport} />
+                {/* '비슷한 매물' (WP53): under a completed post only, never under a live seller's post. */}
+                {!!post.ads?.length && <AdSection title={AD_TEXT.similar} posts={post.ads} className="ad-similar" />}
             </article>
 
             <aside className="side-card" aria-label="가격과 문의">
@@ -306,16 +334,16 @@ export function Detail({ id }: { id: string }) {
                     <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
                 </div>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
-                {/* 게시판 상단 노출 for 프리미엄 and above; lower grades see where it comes from. Others see nothing.
-                    A completed post shows it only while still featured, so it can be turned off. */}
-                {mine && usage && (post.status !== 'closed' || (!!post.featured && slots > 0)) && (slots > 0
-                    ? <div className="promo-row">
-                        <label className="switch"><input type="checkbox" role="switch" checked={!!post.featured} disabled={busy || lostProxy || suspended || (!post.featured && !openNow)} onChange={e => feature(e.target.checked)} />게시판 상단 노출</label>
-                        <span className="owner-hint">{slotsUsed}/{slots}자리 사용</span>
-                    </div>
-                    : <Link to="/guide#grade" className="promo-up">게시판 상단 노출은 프리미엄부터</Link>)}
+                {autoAllowed && openNow && <div className="promo-row">
+                    <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
+                    <Link to="/me/auto" className="owner-hint">설정</Link>
+                </div>}
+                {/* 가격 내리기 (WP56): '다음 내림 10월 2일 20:00 · 27만원' while a setup runs. */}
+                {mine && openNow && post.auto?.drop?.on && post.auto.drop.nextAt && post.auto.drop.nextPrice
+                    && <p className="owner-drop">{DROP_TEXT.next(kstDateTime(post.auto.drop.nextAt), priceText(post.auto.drop.nextPrice))}</p>}
+                {autoSheet}
                 {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
-                <AuthorBox post={post} own={mine} className="author-box-side" />
+                <AuthorBox post={post} own={mine} className="author-box-side" onFollow={follow} followBusy={followBusy} />
                 <p className="safety">입금 전 <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트</a>로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>
             </aside>
         </div>
@@ -344,8 +372,9 @@ export function Detail({ id }: { id: string }) {
 
         <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
-        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(prev => ({ ...p, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count }))} />}
-        <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
+        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => { setPost(prev => ({ ...p, auto: prev?.auto, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count })); if (p.auto?.drop?.on || post.auto?.drop?.on) void load(); }} />}
+        <ReportModal open={report} onClose={() => setReport(false)} target={{ postId: post.id }} />
+        <ReportModal open={commentReport !== null} onClose={() => setCommentReport(null)} target={{ commentId: commentReport }} title="댓글 신고" />
         {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
@@ -354,7 +383,7 @@ export function Detail({ id }: { id: string }) {
     </div>;
 }
 
-function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; className: string }) {
+function AuthorBox({ post, own, className, onFollow, followBusy }: { post: DetailPost; own: boolean; className: string; onFollow: () => void; followBusy: boolean }) {
     // A withdrawn author has no profile; the name is plain 탈퇴회원 without grade or badges.
     if (post.author_deleted) return <div className={'author-box ' + className}>
         <Avatar name={post.nickname} />
@@ -365,7 +394,9 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
     // '이전 닉네임: {닉}' while the nickname changed within 90 days.
     const trades = post.author_trade_count ?? 0, good = post.author_good_count ?? 0;
     const seen = own ? '' : lastSeenText(post.author_last_seen_at);
-    return <Link to={'/profile/' + post.author_id} className={'author-box ' + className}>
+    // '구독' sits beside the profile link (not inside it); it hides when the author takes no follows.
+    const followable = !own && (post.author_follow_allowed !== false || !!post.author_followed);
+    return <div className={'author-box ' + className}><Link to={'/profile/' + post.author_id} className="author-link">
         <Avatar name={post.nickname} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
             {seen && <span className="author-stats author-seen">{seen}</span>}
@@ -373,7 +404,10 @@ function AuthorBox({ post, own, className }: { post: DetailPost; own: boolean; c
             {post.author_created_at && <span className="author-stats">{dateText(post.author_created_at)} 가입</span>}
             {post.author_prev_nickname && <span className="author-stats">이전 닉네임: {post.author_prev_nickname}</span>}</span>
         <ChevronRight size={18} className="muted" />
-    </Link>;
+    </Link>
+        {followable && <button type="button" className={'btn btn-line btn-xs author-follow' + (post.author_followed ? ' is-on' : '')} aria-pressed={!!post.author_followed} disabled={followBusy} onClick={onFollow}>
+            {post.author_followed ? <BellRing size={14} /> : <Bell size={14} />}{post.author_followed ? ALERT_TEXT.following : ALERT_TEXT.follow}</button>}
+    </div>;
 }
 
 function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => void; post: Post }) {
@@ -452,15 +486,16 @@ function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: 
     </Modal>;
 }
 
-function ReportModal({ open, onClose, postId }: { open: boolean; onClose: () => void; postId: number }) {
+// 신고 of the post ({postId}) or of one 댓글 ({commentId}, WP55), with the same reasons.
+function ReportModal({ open, onClose, target, title = '신고' }: { open: boolean; onClose: () => void; target: { postId: number } | { commentId: number | null }; title?: string }) {
     const [reason, setReason] = useState<string>(REPORT_REASONS[0]), [details, setDetails] = useState(''), [busy, setBusy] = useState(false);
     async function send() {
         setBusy(true);
-        try { await api('reports', 'POST', { postId, reason, details }); onClose(); setDetails(''); toast('신고 접수 완료'); }
+        try { await api('reports', 'POST', { ...target, reason, details }); onClose(); setDetails(''); toast('신고 접수 완료'); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
-    return <Modal open={open} onClose={onClose} title="신고" footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고</button>}>
+    return <Modal open={open} onClose={onClose} title={title} footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고</button>}>
         <div className="form-stack">
             <div className="chip-row">{REPORT_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={reason === r} onClick={() => setReason(r)}>{r}</button>)}</div>
             <label className="field"><span className="field-label">내용</span><textarea className="textarea" style={{ minHeight: 120 }} maxLength={1000} value={details} onChange={e => setDetails(e.target.value)} placeholder="예: 입금 후 잠수, 사진 도용" /></label>

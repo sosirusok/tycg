@@ -43,6 +43,14 @@
 
 /* board */
 .board-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.board-head-tools { display: flex; align-items: center; gap: 8px; }
+/* 새 글 알림 (WP54): the board bell, the bell on a saved chip and '이 키워드 알림 받기'. */
+.board-bell { width: 36px; height: 36px; border: 1px solid var(--line); }
+.board-bell.is-on { border-color: var(--brand); }
+.saved-chip > .saved-bell { display: grid; place-items: center; width: 24px; height: 100%; color: var(--ink-4); }
+.saved-chip > .saved-bell.is-on, .saved-chip.on > .saved-bell { color: var(--brand); }
+.keyword-alert { margin-top: 12px; }
+.keyword-alert .btn { gap: 6px; }
 .kind-tabs { margin-top: 20px; }
 .kind-tabs .tab b.zero { color: var(--ink-4); }
 .board-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
@@ -100,9 +108,6 @@
 .filter-open { display: none; }
 .board-notice { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 14px 16px; border-radius: var(--r-12); background: var(--fill-2); font-size: var(--fs-14); }
 .board-notice .btn { margin-left: auto; }
-/* '프리미엄 매물' above the list on page 1 (최신순); the cards carry the brand outline. */
-.featured-box { margin-bottom: 16px; }
-.featured-box > h3 { margin-bottom: 10px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
 @media (max-width: 960px) {
   .board-write { display: none; }
   .board-layout { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 20px; }
@@ -146,6 +151,11 @@
 .side-actions .btn[aria-pressed] { padding: 0; }
 .author-box { display: flex; gap: 12px; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); }
 .author-box .name-line .nick { font-size: var(--fs-15); }
+.author-link { display: flex; flex: 1; min-width: 0; gap: 12px; align-items: center; color: inherit; }
+.author-follow { flex: none; gap: 4px; }
+/* The narrow side card puts '구독' on its own row under the author. */
+.author-box-side { flex-wrap: wrap; }
+.author-box-side .author-follow { width: 100%; height: 36px; justify-content: center; }
 .author-stats { display: block; color: var(--ink-3); font-size: var(--fs-13); margin-top: 4px; }
 .author-box-top { display: none; }
 /* '최근 접속', then '거래 3회 · 후기 좋아요 2', the join date and '이전 닉네임' (WP51). */
@@ -198,8 +208,6 @@
 .owner-hint { color: var(--ink-3); font-size: var(--fs-13); }
 .promo-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .promo-row .switch { color: var(--ink); font-weight: 600; }
-.promo-up { padding-top: 16px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: var(--fs-13); }
-.promo-up:hover { color: var(--ink); }
 .menu-item.menu-danger { color: var(--danger); }
 .hidden-note { margin-top: 16px; }
 .offer-context { color: var(--ink-3); font-size: var(--fs-13); }
@@ -216,7 +224,10 @@
   .side-card:has(.side-actions), .side-card:has(.owner-tools) { gap: 0; padding: 16px; }
   .side-card:has(.side-actions) > .side-actions, .author-box-side { display: none; }
   .side-card .safety { margin-top: 0; }
-  .side-card .promo-row, .side-card .promo-up { padding: 0 0 14px; border-top: 0; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .side-card .promo-row { padding: 0 0 14px; border-top: 0; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  /* The 가격 내리기 line belongs to the automation block: the hairline goes under it, before the safety note. */
+  .side-card .promo-row:has(+ .owner-drop) { padding-bottom: 6px; margin-bottom: 0; border-bottom: 0; }
+  .side-card .owner-drop { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
   .mobile-cta, .owner-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 44; display: flex; align-items: center; gap: 8px; min-height: 64px; padding: 8px var(--gutter) calc(8px + env(safe-area-inset-bottom)); background: var(--white); border-top: 1px solid var(--line); }
   .mobile-cta .price-label, .mobile-cta .price-values del { display: none; }
   .mobile-cta .price-offer { font-size: var(--fs-12); margin: 0; }
@@ -357,6 +368,9 @@
 .chat-shell.is-empty .chat-list { border-right: 0; }
 .chat-list-head { position: sticky; top: 0; z-index: 1; display: grid; gap: 12px; padding: 20px 20px 12px; background: var(--white); }
 .chat-list-title { font-size: var(--fs-20); font-weight: 700; }
+/* '지금 자리 비움' (WP57) sits at the right of the title. */
+.chat-list-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.chat-away { gap: 8px; color: var(--ink-2); font-size: var(--fs-13); white-space: nowrap; }
 .chat-list ul { margin: 0; padding: 0 8px 8px; list-style: none; }
 .chat-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: var(--r-8); }
 .chat-item:hover { background: var(--fill-2); }
@@ -448,6 +462,12 @@
 .review-verdict { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
 .composer { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
 .quick-replies { margin-bottom: 8px; }
+.quick-replies .chip { flex: none; }
+.chip-add { gap: 4px; color: var(--ink-2); }
+/* An own quick reply can hold 100 characters; the chip shows the start of it. */
+.chip-own { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; line-height: 28px; }
+/* An automatic answer (WP57): the member's own bubble with a small '자동 응답' above it. */
+.bubble-auto { color: var(--ink-3); font-size: var(--fs-12); }
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .composer textarea { flex: 1; min-width: 0; max-height: 160px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--r-pill); resize: none; font-size: var(--fs-15); line-height: 1.45; outline: none; }
 /* Pill while it is one line; a taller draft gets the modal radius so the corners do not clip text. */
@@ -553,6 +573,7 @@
 /* '더 보기' under a member's post lists (내 글, 찜한 글, 최근 본 글, profile lists). */
 .more-btn { display: flex; width: 100%; margin-top: 16px; }
 /* 내 글: the seller's rows with today's limits above them. */
+.mine-ad { margin: -6px 0 12px; }
 .mine-usage { margin-bottom: 12px; color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
 /* 끌올 지갑 gauge (내 글 header and the profile's grade card): '끌올 3/4' then '· 1:20 후 충전'. */
 .wallet-gauge { color: var(--ink-3); font-size: var(--fs-14); font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -583,6 +604,7 @@
   .seller-bump { flex: 1; }
 }
 /* Simple lists (my trades; the manager lists reuse them) */
+.follow-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .simple-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
@@ -642,7 +664,7 @@
 @media (max-width: 640px) { .grade-free { padding: 14px 16px; } .grade-free li { font-size: var(--fs-13); } }
 .grade-notes { display: grid; gap: 6px; margin: 16px 0 0; padding-left: 20px; color: var(--ink-3); font-size: var(--fs-14); }
 /* Phones: columns size to their content (the 일반 column needs the least) and the text is 12px, so
-   '6개월 3만원' and '홈 추천 매물' stay on one line at 390. */
+   '6개월 3만원' stays on one line at 390. */
 @media (max-width: 640px) {
   .grade-benefits { table-layout: auto; }
   .grade-benefits thead th:first-child { width: auto; }
@@ -711,4 +733,122 @@
   .modal.style-sheet { height: 100dvh; max-height: 100dvh; border-radius: 0; }
   .style-tools-wrap { order: 3; border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
   .style-pop { top: auto; bottom: calc(100% + 6px); }
+}
+
+/* 자동 끌올 (WP52): 내 거래 › 자동화, the '자동' chip, the waiting 끌올 button and the 뺄 글 선택 sheet. */
+.auto-card { display: grid; gap: 12px; max-width: 720px; }
+.auto-card .card-title { margin-bottom: 0; }
+.auto-wallet { margin: 0; }
+.auto-status { margin: 0; color: var(--ink-2); font-size: var(--fs-14); line-height: 1.55; overflow-wrap: anywhere; }
+.auto-status.is-paused { color: var(--ink); font-weight: 600; }
+.auto-link { color: var(--brand); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.auto-note { margin: 0; color: var(--ink-3); font-size: var(--fs-13); }
+.auto-switches { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.auto-switches .switch { color: var(--ink); font-weight: 600; }
+.auto-stale { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
+.auto-stale .btn { flex: none; }
+.away-now { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
+.away-now .btn { flex: none; }
+.mine-stale { margin-bottom: 12px; }
+.auto-list-title { margin: 4px 0 0; color: var(--ink-2); font-size: var(--fs-14); font-weight: 700; }
+.auto-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.auto-list li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.auto-thumb { display: grid; place-items: center; width: 40px; height: 40px; overflow: hidden; border-radius: var(--r-8); background: var(--fill); }
+.auto-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.auto-main { display: grid; gap: 2px; min-width: 0; }
+.auto-title { overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.auto-list li:not(.is-on) .auto-title { color: var(--ink-2); font-weight: 500; }
+.auto-sub { color: var(--ink-3); font-size: var(--fs-13); }
+/* '알림' card (WP54): saved searches with their switch, no thumbnail column. */
+.alert-card .auto-list li { grid-template-columns: minmax(0, 1fr) auto; }
+.alert-card .auto-title { text-align: left; }
+.alert-count { flex: none; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
+.auto-post-switch { padding: 8px 0 8px 8px; }
+.auto-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-14); }
+.auto-hints { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--ink-3); font-size: var(--fs-13); }
+.tag.tag-auto { height: 20px; padding: 0 6px; border: 1px solid var(--brand); background: var(--white); color: var(--brand); font-weight: 600; }
+.seller-bump.is-waiting, .owner-bump .btn.is-waiting, .owner-bar-bump.is-waiting { color: var(--ink-2); background: var(--fill-2); }
+.auto-swap { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.auto-swap-row { width: 100%; border: 0; text-align: left; cursor: pointer; font: inherit; }
+.auto-swap-row:hover { outline: 1px solid var(--line-2); }
+.auto-swap-row .post-strip-text { flex: 1; }
+.auto-swap-out { flex: none; color: var(--brand); font-size: var(--fs-14); font-weight: 600; }
+@media (max-width: 640px) {
+  .auto-stale { align-items: flex-start; flex-direction: column; }
+}
+/* 가격 내리기 (WP56): two settings (or 플러스's fixed text) and '판매 글 전체' above the list; each row has
+   the 즉거가, a compact 최저가 field and, once on, the next drop. */
+.drop-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; padding: 14px 0 2px; border-top: 1px solid var(--line); }
+.drop-setting { display: grid; gap: 6px; min-width: 112px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
+.drop-setting .select { height: 40px; font-size: var(--fs-14); }
+.drop-setting strong { color: var(--ink); font-size: var(--fs-15); font-weight: 600; line-height: 24px; }
+.drop-all { margin-left: auto; height: 40px; }
+.drop-list li { align-items: start; }
+.drop-list .auto-post-switch { padding-top: 8px; }
+.drop-floor { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.drop-floor-label { color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; }
+.drop-floor .input-unit { width: 112px; }
+.drop-floor .input { height: 36px; padding: 0 44px 0 12px; font-size: var(--fs-14); }
+.drop-floor .input-unit > span { right: 12px; font-size: var(--fs-13); }
+.drop-status { margin-top: 4px; color: var(--ink); font-size: var(--fs-13); font-weight: 600; }
+.drop-decline { color: var(--ink); font-weight: 600; }
+.owner-drop { margin: 0; color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; }
+/* 채팅 (WP57): own quick replies with a delete button, the add field, then the two automatic answers. */
+.template-list li { grid-template-columns: minmax(0, 1fr) auto; min-height: 48px; padding: 6px 0; }
+.template-text { color: var(--ink); font-size: var(--fs-14); line-height: 1.5; overflow-wrap: anywhere; }
+.template-add { display: flex; gap: 8px; }
+.template-add .input { height: 40px; font-size: var(--fs-14); }
+.template-add .btn { flex: none; height: 40px; }
+.chat-auto-block { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.chat-auto-block .switch { color: var(--ink); font-weight: 600; }
+.chat-auto-block .textarea { min-height: 72px; padding: 10px 12px; font-size: var(--fs-14); }
+.away-hours { display: flex; align-items: center; gap: 8px; color: var(--ink-3); }
+.away-hours .select { width: 104px; height: 40px; font-size: var(--fs-14); }
+
+
+/* 댓글·답글 (WP55): rows under the post body, 답글 indented one level, the composer last. */
+.comments > h2 { margin-bottom: 4px; }
+.comment-list { margin: 0; padding: 0; list-style: none; }
+.comment { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.comment .avatar { width: 32px; height: 32px; font-size: var(--fs-13); }
+.comment.is-reply { padding-left: 42px; }
+.comment.is-deleted { display: block; }
+.comment-gone { color: var(--ink-4); font-size: var(--fs-14); }
+.comment-main { min-width: 0; }
+.comment-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; font-size: var(--fs-14); font-weight: 600; }
+.comment-name { min-width: 0; max-width: 100%; color: var(--ink); }
+.comment-tag { flex: none; padding: 1px 6px; border-radius: var(--r-4); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; line-height: 18px; }
+.comment-body { margin-top: 4px; color: var(--ink); font-size: var(--fs-15); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-photo { display: block; width: 120px; height: 120px; margin-top: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-8); background: var(--fill); }
+.comment-photo img { width: 100%; height: 100%; object-fit: cover; }
+.comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 6px; color: var(--ink-4); font-size: var(--fs-13); }
+.comment-act { min-height: 24px; color: var(--ink-3); font-size: var(--fs-13); font-weight: 500; }
+.comment-act:hover { color: var(--ink); }
+.comment-empty { padding: 14px 0 4px; color: var(--ink-3); font-size: var(--fs-14); }
+.comments .more-btn { margin-top: 16px; }
+.comment-write { margin-top: 20px; }
+.comment-offer-line { margin-bottom: 8px; color: var(--ink-3); font-size: var(--fs-13); }
+.comment-composer { padding: 12px 14px 8px; border: 1px solid var(--line-2); border-radius: var(--r-12); background: var(--white); }
+.comment-composer:focus-within { border-color: var(--ink-2); }
+.comment-input { display: block; width: 100%; min-height: 26px; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-15); line-height: 1.6; resize: none; }
+.comment-input:focus { outline: none; }
+.comment-input::placeholder { color: var(--ink-4); }
+.comment-composer-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.comment-photo-btn { width: 36px; height: 36px; margin-left: -8px; color: var(--ink-3); }
+.comment-count { color: var(--ink-4); font-size: var(--fs-12); }
+.comment-attach { position: relative; display: inline-block; width: 72px; height: 72px; margin-top: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-8); }
+.comment-attach img { width: 100%; height: 100%; object-fit: cover; }
+.comment-attach-x { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-pill); background: rgba(28, 36, 47, 0.72); color: var(--white); }
+.comment-reply-box { padding: 4px 0 16px 42px; border-bottom: 1px solid var(--line); }
+.comment-edit { margin-top: 6px; }
+.comment-edit .comment-input { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-8); }
+.comment-edit .comment-input:focus { border-color: var(--ink-2); }
+.comment-login { height: 48px; }
+.post-card-comments { color: var(--ink-3); white-space: nowrap; }
+.my-comment-body { display: -webkit-box; overflow: hidden; color: var(--ink-2); font-size: var(--fs-14); line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.my-comment-body .tag { margin-right: 6px; }
+.report-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .comment.is-reply, .comment-reply-box { padding-left: 28px; }
+  .comment-photo { width: 96px; height: 96px; }
 }

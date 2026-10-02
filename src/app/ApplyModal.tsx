@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gapText, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, BADGES, GRADES, PERKS, applicationTemplate, gapText, gradeInfo, type Application, type ApplicationKind, type PlanId } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { CIcon, DataItems, Modal, NameLine, Tabs, VerifiedMark } from '../components/ui';
@@ -138,6 +138,8 @@ export function ApplyModal() {
                             {benefits.length > 0 && <span className="grade-row-perks"><DataItems items={benefits} /></span>}
                             {/* The 체험 has no free 중개·가측 (WP65), though the 플러스 row lists them. */}
                             {current && g.id === 'plus' && me?.grade_trial && <span className="muted small">무료 중개·가측은 유료 플러스부터</span>}
+                            {/* 광고 (WP53) needs 본인 인증 too; a member who has it is not reminded. */}
+                            {PERKS[g.id].adSlots > 0 && g.plans.length > 0 && !ownsBadge('identity') && <span className="muted small">{AD_TEXT.hint}</span>}
                         </div>
                         <div className="grade-row-plans">
                             {g.plans.length ? g.plans.map(p => {

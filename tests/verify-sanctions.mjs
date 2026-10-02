@@ -138,7 +138,7 @@ blockedWrite(await b(`chats/${chatAB}/messages`, 'POST', { body: '정지 중 메
 blockedWrite(await b(`posts/${postB.data.id}/bump`, 'POST', {}), 'B\'s 끌올');
 blockedWrite(await b(`posts/${postB.data.id}`, 'PUT', sale('제재 판매 B 수정')), 'B\'s edit');
 blockedWrite(await b(`posts/${postB.data.id}/price`, 'PATCH', { price: 90000 }), 'B\'s price change');
-blockedWrite(await b(`posts/${postB.data.id}/feature`, 'PUT', { active: true }), 'B\'s 상단 노출');
+blockedWrite(await b(`posts/${postB.data.id}/feature`, 'PUT', { active: true }), 'B\'s 광고 고정');
 blockedWrite(await b('applications', 'POST', { kind: 'badge', target: 'identity' }), 'B\'s application');
 check((await b(`posts/${postB.data.id}/bump`, 'POST', {})).data.error.includes('까지'), 'the refusal says until when');
 blockedWrite(await b(`offers/${offerOnB.data.id}`, 'PATCH', { action: 'accepted' }), 'B accepting a 제시');
