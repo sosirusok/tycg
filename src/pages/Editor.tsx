@@ -2,11 +2,12 @@ import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type React
 import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RECORD_PREFERENCES, TRADE_KINDS,
-    categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, RECORD_PREFERENCES, TRADE_KINDS,
+    categoriesForKind, categoryName, choiceLabel, featureTags, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
-import { SITE_RULES, linkPreviewAllowed } from '../../shared/membership';
+import { SITE_RULES, kstDateTime, linkPreviewAllowed } from '../../shared/membership';
+import { validHidden, type LadderHidden } from '../../shared/ladder';
 import { findLinks } from '../../shared/links';
 import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
@@ -16,7 +17,7 @@ import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
 import { SameListingSheet, type Dup } from '../components/SameListingSheet';
 import { PhotoGrid } from '../components/PhotoGrid';
-import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { ClanTierPicker, IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker, TagInput } from '../components/Pickers';
 
 // 글자 꾸미기 sheet (WP49), loaded when first opened.
 const StyleSheet = lazy(() => import('../components/StyleSheet'));
@@ -27,16 +28,21 @@ type Form = {
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
+    ladderHidden: LadderHidden; // 시즌 비공개 (WP68): 판매 and the offered side of 교환 only
+    clanTags: SeasonTag[]; // 클랜 래더 (WP70): the clan's own seasons on clan posts (구매: the wanted ones)
+    wantedClanTags: SeasonTag[]; // the clan ladder an exchange wants for a clan
     link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
     body_style: Mark[]; // 글자 꾸미기 (WP49): ranges over body, shifted as it is typed; drafts carry them
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true, body_style: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], ladderHidden: {}, clanTags: [], wantedClanTags: [], link_preview: true, body_style: [] };
+// 시즌 비공개 goes with 판매 and the offered side of 교환, on account posts only (the server refuses it elsewhere).
+const holdsHidden = (f: Pick<Form, 'kind' | 'category'>) => (f.kind === 'sell' || f.kind === 'exchange') && f.category === 'account';
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
-    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
+    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [], ladderHidden: validHidden(raw.ladderHidden) || {}, clanTags: raw.clanTags || [], wantedClanTags: raw.wantedClanTags || [] };
     form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
@@ -44,7 +50,7 @@ function normalize(raw: Partial<Form>): Form {
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], ladderHidden: p.ladder_hidden || {}, clanTags: p.clan_tags || [], wantedClanTags: p.wanted_clan_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -129,11 +135,13 @@ function forKind(f: Form, kind: TradeKind): Form {
     const shared = category === f.category && ((f.kind === 'sell' && kind === 'exchange') || (f.kind === 'exchange' && kind === 'sell'));
     const details: Record<string, string> = shared ? Object.fromEntries(Object.entries(f.details).filter(([k]) => !k.startsWith('wanted'))) : {};
     if (kind === 'exchange') details.wantedCategory = 'account';
-    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], details };
+    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], ladderHidden: shared ? f.ladderHidden : {}, clanTags: shared ? f.clanTags : [], wantedClanTags: [], details };
 }
 function dropsInput(f: Form, next: Form) {
     return Object.entries(f.details).some(([k, v]) => k !== 'wantedCategory' && !!v && next.details[k] !== v)
-        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags);
+        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags)
+        || (Object.keys(f.ladderHidden).length > 0 && next.ladderHidden !== f.ladderHidden)
+        || (f.clanTags.length > 0 && next.clanTags !== f.clanTags) || (f.wantedClanTags.length > 0 && next.wantedClanTags !== f.wantedClanTags);
 }
 
 // '15:40' on the Korean clock.
@@ -143,6 +151,11 @@ function kstClock(t: number) {
 }
 
 type Draft = Partial<Form> & { savedAt?: number };
+// One row of the 임시글 sheet (GET /api/drafts, WP59): 'new-<kind>' for a new post of that board, the post id
+// for an edit, 'new' for the single slot of earlier versions.
+type DraftInfo = { key: string; title: string; kind: string; updated_at: number };
+const isNewKey = (key: string) => key === 'new' || key.startsWith('new-');
+const draftLabel = (d: DraftInfo) => isNewKey(d.key) ? (isTradeKind(d.kind) ? KIND_NAMES[d.kind] : '글쓰기') : '글 수정';
 // Photos per post (the same for every member; SITE_RULES.photosPerPost) until GET me/usage answers.
 const PHOTO_CAP = SITE_RULES.photosPerPost;
 const EXCHANGE_SIDES = ['account', 'clan'] as const;
@@ -156,6 +169,10 @@ export default function Editor({ id }: { id?: string }) {
     // A link to a 대리(진행) form without 대리 인증 opens 대리(구함) instead and offers the application.
     const proxyBlocked = !id && params.get('kind') === 'proxy_offer' && !!me && !proxyAllowed;
     const urlKind = isTradeKind(params.get('kind'));
+    // '다시 올리기' and '복사해서 새 글' (WP58): /write?from=<id> starts a new post from one of the member's
+    // own posts, with the photos the member still owns. Saving places it as WP44 decides (a relist of the
+    // same listing is a 끌올, or its old place inside the gap).
+    const fromId = !id && /^\d+$/.test(params.get('from') || '') ? params.get('from')! : null;
     const [initial] = useState(() => normalize({
         kind: proxyBlocked ? 'proxy_request' : urlKind ? params.get('kind') as TradeKind : 'sell',
         category: params.get('category') || undefined,
@@ -163,8 +180,14 @@ export default function Editor({ id }: { id?: string }) {
     }));
     const [form, setForm] = useState<Form>(initial);
     const [loaded, setLoaded] = useState(false), [loadError, setLoadError] = useState('');
-    // 'loaded': a draft is on screen ('새로 쓰기' starts over). 'offer': a draft of another kind waits ('불러오기').
-    const [banner, setBanner] = useState<null | { mode: 'loaded' } | { mode: 'offer'; draft: Draft }>(null);
+    // 'loaded': a draft is on screen ('새로 쓰기' starts over).
+    const [banner, setBanner] = useState<null | { mode: 'loaded' }>(null);
+    // 임시글 (WP59): the member's drafts (the '임시글 2' sheet), and the key whose stored draft is this form
+    // (loaded from it or saved to it; null: none yet).
+    const [drafts, setDrafts] = useState<DraftInfo[]>([]), [draftSheet, setDraftSheet] = useState(false);
+    const ownKey = useRef<string | null>(null);
+    // A waiting draft the member chose to replace (the notice's X): the next save may write over it.
+    const [overwrite, setOverwrite] = useState<string | null>(null);
     // Bumped when the whole form is replaced, so folds and pickers open again for the new values.
     const [version, setVersion] = useState(0);
     const [pendingKind, setPendingKind] = useState<TradeKind | null>(null);
@@ -180,12 +203,19 @@ export default function Editor({ id }: { id?: string }) {
     const [dup, setDup] = useState<Dup | null>(null);
     const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [savedAt, setSavedAt] = useState('');
     const formRef = useRef(form), dirty = useRef(false), done = useRef(false), lastSaved = useRef(''), fileInput = useRef<HTMLInputElement>(null), post = useRef<Post | null>(null);
+    // The copied post's form ('새로 쓰기' goes back to it).
+    const copy = useRef<Form | null>(null);
     formRef.current = form;
-    // New posts share one draft slot, so the waiting draft of another kind is not overwritten
-    // until the member loads it or closes the banner.
+    // A new post saves to its board's key ('new-sell' …), so drafts of different boards never replace each
+    // other. When the form moves to a board whose key holds another draft (a kind change), that draft
+    // waits ('임시저장된 글이 있습니다 · 불러오기') and nothing is auto-saved over it until the member loads
+    // it or closes the notice.
+    const draftKey = id || 'new-' + form.kind;
+    const keyRef = useRef(draftKey);
+    keyRef.current = draftKey;
+    const waiting = !id && draftKey !== ownKey.current && draftKey !== overwrite && drafts.some(d => d.key === draftKey) ? draftKey : null;
     const holding = useRef(false);
-    holding.current = banner?.mode === 'offer';
-    const draftKey = id || 'new';
+    holding.current = !!waiting;
     const unsaved = () => dirty.current && !done.current && JSON.stringify(formRef.current) !== lastSaved.current;
     // This form is not auto-saved while that draft waits, so moving to another page in the app asks
     // first: stay, leave without it, or save it over the waiting draft. Holds the answer's resolver.
@@ -223,52 +253,78 @@ export default function Editor({ id }: { id?: string }) {
         if (!me) return;
         let alive = true;
         Promise.all([
-            id ? api<{ post: Post }>('posts/' + id) : Promise.resolve(null),
-            api<{ draft: Draft | null }>('drafts/' + draftKey),
+            id || fromId ? api<{ post: Post }>('posts/' + (id || fromId)) : Promise.resolve(null),
+            api<{ drafts?: DraftInfo[] }>('drafts'),
             api<Usage>('me/usage').catch(() => null),
-        ]).then(([p, dr, usage]) => {
+        ]).then(async ([src, list, usage]) => {
             if (!alive) return;
-            if (p && p.post.author_id !== me.id) throw new Error('본인 글만 수정할 수 있습니다.');
-            // A completed post is read-only (WP43).
-            if (p && p.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
-            const base = p ? fromPost(p.post) : initial;
+            // The draft that opens with the form: the post's own (an edit), the one the 임시글 sheet named
+            // (?draft=), the board's ('new-sell', or the earlier single slot holding that board's draft),
+            // or with no board the newest new-post draft. A copy (WP58) opens as itself; a draft stored under
+            // its board waits for '불러오기' (the waiting notice).
+            const all = Array.isArray(list.drafts) ? list.drafts : [], named = params.get('draft');
+            const pick = id ? all.find(d => d.key === id)
+                : fromId ? undefined
+                : named && isNewKey(named) ? all.find(d => d.key === named)
+                : urlKind ? all.find(d => d.key === 'new-' + initial.kind) || all.find(d => d.key === 'new' && d.kind === initial.kind)
+                : all.find(d => isNewKey(d.key));
+            const dr = pick ? await api<{ draft: Draft | null }>('drafts/' + pick.key) : { draft: null };
+            if (!alive) return;
+            setDrafts(all);
+            if (src && src.post.author_id !== me.id) throw new Error(id ? '본인 글만 수정할 수 있습니다.' : '본인 글만 복사할 수 있습니다.');
+            // A completed post is read-only (WP43); it can still be copied (WP58).
+            if (src && id && src.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
+            const p = id ? src : null;
+            const cap = usage?.rules.photosPerPost ?? PHOTO_CAP;
+            let base = p ? fromPost(p.post) : initial;
+            if (src && !p) {
+                // A copy is a new post: its photos are the ones the member still owns, within the new-post cap,
+                // and its 꾸미기 those of the member's grade now.
+                const ids = src.post.images.slice(0, 100);
+                const owned = ids.length ? (await api<{ owned?: string[] }>('uploads/lookup', 'POST', { ids })).owned ?? [] : [];
+                if (!alive) return;
+                const f = fromPost(src.post);
+                base = { ...f, status: 'open', images: f.images.filter(i => owned.includes(i)).slice(0, cap), body_style: normalizeMarks(f.body, f.body_style, rank) };
+                copy.current = base;
+            }
             post.current = p?.post || null;
             // An edit may keep the photos a post already has.
-            setPhotoCap(Math.max(usage?.rules.photosPerPost ?? PHOTO_CAP, p?.post.images.length || 0));
+            setPhotoCap(Math.max(cap, p?.post.images.length || 0));
             setUsage(usage);
             const draft = dr.draft && typeof dr.draft.kind === 'string' && 'offer' in dr.draft ? dr.draft : null;
-            if (!draft) replaceForm(base, false);
+            if (!draft || !pick) replaceForm(base, false);
             else if (p) {
                 // An edit draft counts only when it is newer than the post itself.
-                if ((draft.savedAt || 0) > p.post.updated_at) { replaceForm(fromDraft(draft), true); setBanner({ mode: 'loaded' }); }
-                else { replaceForm(base, false); api('drafts/' + draftKey, 'DELETE').catch(() => {}); }
-            } else if (!urlKind || fromDraft(draft).kind === initial.kind) {
-                replaceForm(fromDraft(draft), true); setBanner({ mode: 'loaded' });
-            } else {
-                // '구매 글쓰기' from the 구매 board keeps 구매; the draft of another kind waits for 불러오기.
-                replaceForm(base, false); setBanner({ mode: 'offer', draft });
-            }
+                if ((draft.savedAt || 0) > p.post.updated_at) { replaceForm(fromDraft(draft), true); ownKey.current = pick.key; setBanner({ mode: 'loaded' }); }
+                else { replaceForm(base, false); api('drafts/' + pick.key, 'DELETE').catch(() => {}); setDrafts(all.filter(d => d.key !== pick.key)); }
+            } else { replaceForm(fromDraft(draft), true); ownKey.current = pick.key; setBanner({ mode: 'loaded' }); }
             setLoaded(true);
         }).catch(e => { if (alive) setLoadError(errorText(e)); });
         return () => { alive = false; };
-    }, [id, me?.id]);
+    }, [id, fromId, me?.id]);
 
     const persist = async (manual = false) => {
         if (!loaded || done.current || (!dirty.current && !manual) || (holding.current && !manual)) return true;
-        const snapshot = JSON.stringify(formRef.current);
-        if (snapshot === lastSaved.current && !manual) return true;
+        const key = keyRef.current, snapshot = JSON.stringify(formRef.current);
+        if (snapshot === lastSaved.current && key === ownKey.current && !manual) return true;
         try {
-            await api('drafts/' + draftKey, 'PUT', JSON.parse(snapshot));
+            await api('drafts/' + key, 'PUT', JSON.parse(snapshot));
+            // The form moved to another key (a kind change, or a draft of the earlier single slot): the
+            // copy under the old key goes, so the 임시글 list holds it once.
+            const moved = ownKey.current && ownKey.current !== key ? ownKey.current : null;
+            ownKey.current = key;
             lastSaved.current = snapshot;
-            setSavedAt(kstClock(Date.now()));
-            // The waiting draft has just been replaced by this form.
-            setBanner(b => b?.mode === 'offer' ? null : b);
+            if (moved) api('drafts/' + moved, 'DELETE').catch(() => {});
+            const f = formRef.current, now = Date.now();
+            setDrafts(list => [{ key, title: f.title, kind: f.kind, updated_at: now }, ...list.filter(d => d.key !== key && d.key !== moved)]);
+            setOverwrite(null);
+            setSavedAt(kstClock(now));
             if (manual) toast('임시저장 완료');
             return true;
         } catch (e) { if (manual) toast.error(errorText(e)); return false; }
     };
     // Auto-save shortly after edits, and before leaving the page.
-    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, banner]);
+    useEffect(() => { if (!loaded || !dirty.current) return; const t = setTimeout(() => void persist(), 1500); return () => clearTimeout(t); }, [form, loaded, waiting]);
     useEffect(() => {
         if (!loaded) return;
         setLeaveGuard(async () => {
@@ -280,8 +336,13 @@ export default function Editor({ id }: { id?: string }) {
         return () => {
             setLeaveGuard(null);
             window.removeEventListener('beforeunload', warn);
-            // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out.
-            if (unsaved() && !holding.current) void fetch('/api/drafts/' + draftKey, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) }).catch(() => {});
+            // Leaving with the browser's Back button skips the guard, so the last edits are sent on the way out
+            // (and a copy under the form's old key goes once they are stored).
+            if (unsaved() && !holding.current) {
+                const key = keyRef.current, moved = ownKey.current && ownKey.current !== key ? ownKey.current : null;
+                void fetch('/api/drafts/' + key, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formRef.current) })
+                    .then(r => { if (r.ok && moved) return fetch('/api/drafts/' + moved, { method: 'DELETE', keepalive: true, credentials: 'same-origin' }); }).catch(() => {});
+            }
         };
     }, [loaded]);
 
@@ -295,14 +356,34 @@ export default function Editor({ id }: { id?: string }) {
     }
 
     function startOver() {
-        replaceForm(post.current ? fromPost(post.current) : initial, false);
+        const own = ownKey.current;
+        replaceForm(post.current ? fromPost(post.current) : copy.current || initial, false);
         setSavedAt('');
         setBanner(null);
-        api('drafts/' + draftKey, 'DELETE').catch(() => {});
+        ownKey.current = null;
+        if (own) { api('drafts/' + own, 'DELETE').catch(() => {}); setDrafts(list => list.filter(d => d.key !== own)); }
     }
-    function loadDraft(draft: Draft) {
-        replaceForm(fromDraft(draft), true);
+    // Opens a stored draft in this form (the waiting notice's or the 임시글 sheet's '불러오기'). The form on
+    // screen is saved first under its own key; an edit draft opens on its post's edit page, and a new-post
+    // draft chosen while editing a post opens on the write page.
+    async function loadKey(key: string) {
+        if (!isNewKey(key)) { setDraftSheet(false); if (key !== id) void navigate('/edit/' + key); return; }
+        if (id) { setDraftSheet(false); void navigate('/write?draft=' + encodeURIComponent(key)); return; }
+        if (holding.current && unsaved()) { if (!await new Promise<boolean>(resolve => setLeaveAsk(() => resolve))) return; }
+        else if (!await persist()) return;
+        let d: { draft: Draft | null };
+        try { d = await api<{ draft: Draft | null }>('drafts/' + key); }
+        catch (e) { toast.error(errorText(e)); return; }
+        if (!d.draft || typeof d.draft.kind !== 'string') { setDrafts(list => list.filter(x => x.key !== key)); return; }
+        replaceForm(fromDraft(d.draft), true);
+        ownKey.current = key;
+        setOverwrite(null);
         setBanner({ mode: 'loaded' });
+        setDraftSheet(false);
+    }
+    async function removeDraft(key: string) {
+        try { await api('drafts/' + key, 'DELETE'); setDrafts(list => list.filter(d => d.key !== key)); toast('삭제 완료'); }
+        catch (e) { toast.error(errorText(e)); }
     }
 
     const patch = (v: Partial<Form>) => { dirty.current = true; setForm(f => ({ ...f, ...v })); };
@@ -325,7 +406,7 @@ export default function Editor({ id }: { id?: string }) {
     function changeCategory(category: string) {
         if (category === form.category) return;
         const keep = form.kind === 'exchange' ? Object.fromEntries(Object.entries(form.details).filter(([k]) => k.startsWith('wanted'))) : {};
-        patch({ category, tags: [], details: keep });
+        patch({ category, tags: [], ladderHidden: {}, clanTags: [], details: keep });
     }
 
     // Photos from the picker, a paste or a drop, within the cap; one batch at a time, 3 uploads at
@@ -421,10 +502,12 @@ export default function Editor({ id }: { id?: string }) {
             // edit keeps the thumbnail it had while the 대표 is the same.
             const cover = form.images[0], had = post.current;
             const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], ladderHidden: holdsHidden(form) ? form.ladderHidden : {},
+                clanTags: form.category === 'clan' ? form.clanTags : [], wantedClanTags: form.kind === 'exchange' && form.details.wantedCategory === 'clan' ? form.wantedClanTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
-            if (!holding.current) api('drafts/' + draftKey, 'DELETE').catch(() => {});
+            // The form's own draft goes; a waiting draft of the same board stays for later.
+            if (ownKey.current) api('drafts/' + ownKey.current, 'DELETE').catch(() => {});
             setLeaveGuard(null);
             toast(id ? d.notice || '수정 완료'
                 : d.placed === 'bump' ? '등록 완료 · 끌올 1개 사용'
@@ -482,11 +565,15 @@ export default function Editor({ id }: { id?: string }) {
     // 닉 종류: nicknameTypes on 판매 and the offered side of 교환, wantedNicknameTypes on 구매 and the wanted side.
     const nickTypes = (key: 'nicknameTypes' | 'wantedNicknameTypes') => <div className="field"><span className="field-label">닉 종류</span>
         <NickTypePicker multiple value={parseList(d[key], NICK_TYPES)} onChange={v => setDetail(key, v.length ? JSON.stringify(v) : '')} />
+        <span className="field-hint">{RARE_NICK_HINT}</span>
     </div>;
-    const hasWanted = form.wantedTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
+    const hasWanted = form.wantedTags.length > 0 || form.wantedClanTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
+    // 특징 태그 (WP70) on 판매 and the offered side of 교환: '#불새상류', up to 10.
+    const tagField = (label: string) => <div className="field"><span className="field-label">{label}</span>
+        <TagInput label={label} value={featureTags(d.featureTags)} onChange={v => setDetail('featureTags', v.length ? JSON.stringify(v) : '')} /></div>;
 
     const sellerAccount = <div className="grid-gap-16">
-        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} /></div>
+        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} hidden={form.ladderHidden} onHiddenChange={ladderHidden => patch({ ladderHidden })} /></div>
         <div className="ed-grid">
             <Num label="대주 수" value={d.ownerCount || ''} onChange={v => setDetail('ownerCount', v)} unit="대주" max={9999} placeholder="예: 2" />
             <div className="field"><span className="field-label">전적</span><Segmented name="전적" options={['무전적', '전적 있음'] as const} value={d.recordStatus || ''} onChange={v => setDetail('recordStatus', v)} /></div>
@@ -495,6 +582,7 @@ export default function Editor({ id }: { id?: string }) {
         </div>
         {nickTypes('nicknameTypes')}
         <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
+        {tagField('계정 특징 태그')}
         <div className="ed-grid ed-grid-3">
             <Num label={PHANTOM_LABEL} value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="예: 246" />
@@ -555,7 +643,20 @@ export default function Editor({ id }: { id?: string }) {
         </div>;
     };
 
-    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
+    // 클랜 (WP70): the clan's fields, 현재 클랜 티어 and its 클랜 래더 (구매: the clan tiers wanted), and on 판매 and the
+    // offered side of 교환 its 특징 태그. A 교환 that asks for a clan names the wanted tier and clan ladder.
+    const clanInfo = <div className="grid-gap-16">
+        {generic('clan')}
+        <div className="field"><span className="field-label">현재 클랜 티어</span><ClanTierPicker value={d.clanTier || ''} onChange={v => setDetail('clanTier', v)} /></div>
+        <div className="field"><span className="field-label">{buying ? '원하는 클랜 티어' : '클랜 래더 기록'}</span><SeasonPicker clan value={form.clanTags} onChange={clanTags => patch({ clanTags })} /></div>
+        {!buying && tagField('클랜 특징 태그')}
+    </div>;
+    const wantedClan = <div className="grid-gap-16">
+        <div className="field"><span className="field-label">현재 클랜 티어</span><ClanTierPicker value={d.wantedClanTier || ''} onChange={v => setDetail('wantedClanTier', v)} /></div>
+        <div className="field"><span className="field-label">원하는 클랜 티어</span><SeasonPicker clan value={form.wantedClanTags} onChange={wantedClanTags => patch({ wantedClanTags })} /></div>
+    </div>;
+
+    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : category === 'clan' && buying ? '원하는 클랜' : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
     const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
     const photoCount = `${form.images.length}/${photoCap}`;
     // 링크 미리보기 (WP48): the switch shows for 플러스 and up (the 무료 체험 too) once the body holds a link.
@@ -564,16 +665,21 @@ export default function Editor({ id }: { id?: string }) {
     return <div className="container page editor">
         <div className="ed-top">
             <h1 className="page-title">{id ? '글 수정' : '글쓰기'}</h1>
-            <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
+            <span className="ed-top-side">
+                <span className="muted small">{savedAt ? `${savedAt} 자동 저장됨` : ''}</span>
+                <button type="button" className="btn btn-line btn-sm" onClick={() => setDraftSheet(true)}>{drafts.length ? `임시글 ${drafts.length}` : '임시글'}</button>
+            </span>
         </div>
         {suspendedUntil && <p className="alert" role="status">이용 정지 중입니다. ({suspendUntilText(suspendedUntil)})</p>}
-        {banner && <div className="restore" role="status">
-            <span>{banner.mode === 'loaded' ? '임시저장된 글을 불러왔습니다' : '임시저장된 글이 있습니다'}</span>
+        {waiting ? <div className="restore" role="status">
+            <span>임시저장된 글이 있습니다</span>
             <span aria-hidden="true">·</span>
-            {banner.mode === 'loaded'
-                ? <button type="button" className="restore-action" onClick={startOver}>새로 쓰기</button>
-                : <button type="button" className="restore-action" onClick={() => loadDraft(banner.draft)}>불러오기</button>}
-            {banner.mode === 'offer' && <button type="button" className="icon-btn restore-close" aria-label="닫기" onClick={() => setBanner(null)}><X size={16} /></button>}
+            <button type="button" className="restore-action" onClick={() => void loadKey(waiting)}>불러오기</button>
+            <button type="button" className="icon-btn restore-close" aria-label="닫기" onClick={() => setOverwrite(waiting)}><X size={16} /></button>
+        </div> : banner && <div className="restore" role="status">
+            <span>임시저장된 글을 불러왔습니다</span>
+            <span aria-hidden="true">·</span>
+            <button type="button" className="restore-action" onClick={startOver}>새로 쓰기</button>
         </div>}
         <form className="ed-form" onSubmit={submit} key={version}>
             <fieldset disabled={busy}>
@@ -592,7 +698,7 @@ export default function Editor({ id }: { id?: string }) {
                         <Segmented name="내놓는 대상" options={EXCHANGE_SIDES} label={categoryName} allowEmpty={false} value={category} onChange={v => { if (v) changeCategory(v); }} />
                         <span>에서</span>
                         <Segmented name="구하는 대상" options={EXCHANGE_SIDES} label={categoryName} allowEmpty={false} value={wanted}
-                            onChange={v => { if (v && v !== wanted) patch({ details: { ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('wanted'))), wantedCategory: v }, wantedTags: [] }); }} />
+                            onChange={v => { if (v && v !== wanted) patch({ details: { ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('wanted'))), wantedCategory: v }, wantedTags: [], wantedClanTags: [] }); }} />
                         <span>구함</span>
                     </div> : <div className="chip-row mt-16" role="radiogroup" aria-label="세부 분류">
                         {categoriesForKind(kind).map(c => <button type="button" key={c.id} role="radio" aria-checked={category === c.id} className="chip" aria-pressed={category === c.id} onClick={() => changeCategory(c.id)}>{c.name}</button>)}
@@ -621,14 +727,14 @@ export default function Editor({ id }: { id?: string }) {
                 </Section>}
 
                 {kind === 'exchange' ? <>
-                    <Section title={`내가 내놓는 ${categoryName(category)}`}>{account ? sellerAccount : generic('clan')}</Section>
+                    <Section title={`내가 내놓는 ${categoryName(category)}`}>{account ? sellerAccount : clanInfo}</Section>
                     <section className="ed-section">
                         <Fold className="ed-fold" filled={hasWanted} summary={<h2>{`내가 구하는 ${categoryName(wanted)}`}</h2>}>
-                            <div className="mt-16">{wanted === 'account' ? buyerAccount('wanted') : <p className="muted">원하는 클랜은 내용에 적어 주세요.</p>}</div>
+                            <div className="mt-16">{wanted === 'account' ? buyerAccount('wanted') : wantedClan}</div>
                         </Fold>
                     </section>
                 </> : hasInfo && <Section title={infoTitle}>
-                    {account ? (buying ? buyerAccount('') : sellerAccount) : generic(category)}
+                    {account ? (buying ? buyerAccount('') : sellerAccount) : category === 'clan' ? clanInfo : generic(category)}
                 </Section>}
 
                 <section className="ed-section">
@@ -666,6 +772,18 @@ export default function Editor({ id }: { id?: string }) {
         <SameListingSheet dup={dup} onClose={() => setDup(null)} />
         <Modal open={!!pendingKind} onClose={() => setPendingKind(null)} title="거래 구분 변경" description="거래 구분을 바꾸면 입력한 계정 정보가 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => setPendingKind(null)}>취소</button><button type="button" className="btn btn-danger-solid" onClick={() => { if (pendingKind) applyKind(pendingKind); }}>바꾸기</button></>} />
+        <Modal open={draftSheet} onClose={() => setDraftSheet(false)} title="임시글">
+            {drafts.length ? <ul className="draft-list">{drafts.map(d => <li key={d.key}>
+                <span className="grow">
+                    <strong className="draft-title">{d.title.trim() || '제목 없음'}</strong>
+                    <span className="muted small">{draftLabel(d)} · {kstDateTime(d.updated_at)}</span>
+                </span>
+                {d.key === ownKey.current ? <span className="tag">작성 중</span> : <span className="draft-actions">
+                    <button type="button" className="btn btn-line btn-sm" onClick={() => void loadKey(d.key)}>불러오기</button>
+                    <button type="button" className="btn btn-text small" onClick={() => void removeDraft(d.key)}>삭제</button>
+                </span>}
+            </li>)}</ul> : <EmptyState title="임시글이 없습니다." />}
+        </Modal>
         <Modal open={!!leaveAsk} onClose={() => void answerLeave('stay')} title="저장되지 않은 글" description="이 글을 임시저장하면 이전에 임시저장된 글은 지워집니다."
             footer={<><button type="button" className="btn btn-line" onClick={() => void answerLeave('stay')}>취소</button><button type="button" className="btn btn-danger" onClick={() => void answerLeave('leave')}>나가기</button><button type="button" className="btn btn-primary" onClick={() => void answerLeave('save')}>임시저장</button></>} />
     </div>;

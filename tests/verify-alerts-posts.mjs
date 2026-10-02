@@ -26,10 +26,19 @@ let checks = 0;
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
 function equal(actual, expected, name) { assert.deepEqual(actual, expected, name); checks++; console.log('PASS ' + name); }
 
+// The local dev server may hold the SQLite file for a moment while it commits (SQLITE_BUSY): such a
+// statement never ran, so it is tried again (3 more times, half a second apart and longer).
 function sql(command) {
-    const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
-        '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
-    return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
+                '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+            return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+        } catch (error) {
+            if (attempt >= 4 || !String(error.stderr || error.message).includes('SQLITE_BUSY')) throw error;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * attempt);
+        }
+    }
 }
 async function send(url, init) {
     try { return await fetch(url, init()); }
@@ -97,8 +106,9 @@ async function post(c, kind, category, title, extra = {}) {
 }
 async function save(c, name, query, alert = true) { return c('searches', 'POST', { name, query, alert }); }
 
-// Earlier runs' 알림 would only add rows to read; this run's own searches are the only ones on.
-sql('UPDATE saved_searches SET alert=0 WHERE alert=1');
+// Earlier runs' 알림 would only add rows to read; this run's own searches are the only ones on, and no
+// earlier member's 자동 매칭 (WP58) runs in these ticks.
+sql('UPDATE saved_searches SET alert=0 WHERE alert=1; UPDATE automation SET match_on=0 WHERE match_on=1');
 sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%'");
 const manager = client('10.251.0.2');
 equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'manager logs in');

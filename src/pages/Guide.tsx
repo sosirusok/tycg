@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
-import { styleRank } from '../../shared/richtext';
+import { dateText, wonText } from '../../shared/market';
+import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, DROP_TEXT, PERKS, PROVIDER_TEXT, REPORT_TEXT, SITE_RULES, gapText, gradeInfo } from '../../shared/membership';
+import { BENEFIT_ROWS, PAID_GRADES, TABLE_GRADES, gradeExtras, gradeHook, monthly, vsNormal, type PaidGrade } from '../../shared/benefits';
 import { api } from '../lib/api';
+import { Link } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
+import { EarnBlock } from '../components/ProviderCard';
 
 type Notice = { id: number; title: string; body: string; created_at: number };
 
@@ -18,59 +20,53 @@ const STEPS = [
     ['거래완료', '거래완료 누르고 거래한 회원 선택. 상대가 확인하면 거래 기록에 남음.'],
 ] as const;
 
-// Grade benefit table: every number comes from PERKS (the limits the Worker enforces) and every
-// price from GRADES, so the guide cannot drift from the rules. 관리자 is described under the table.
-// A cell may hold two lines (영구 and 6개월 prices), each its own line.
-const TABLE_GRADES = GRADES.filter(g => g.id !== 'admin');
-const NAME_STYLE: Record<string, string> = { normal: '-', plus: '회색 테두리', premium: '파란 테두리', elite: '파란 바탕' };
-const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
-const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
-    ['가격', g => g.plans.length ? g.plans.map(p => `${p.label} ${wonText(p.price)}`) : '무료'],
-    ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
-    ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
-    ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
-    // 자동 끌올 (WP52): how many posts take turns and how often, from PERKS (copy.md table cells with the
-    // owner's intervals): '-', '글 1개 · 4시간마다 1번', '글 5개 중 1개씩 · 1시간 30분마다', '전체 중 1개씩 · 30분마다'.
-    ['자동 끌올', g => { const k = PERKS[g.id], every = gapText(k.autoEveryMinutes); return !k.autoBumpPosts ? '-' : k.autoBumpPosts === 1 ? `글 1개 · ${every}마다 1번` : Number.isFinite(k.autoBumpPosts) ? `글 ${k.autoBumpPosts}개 중 1개씩 · ${every}마다` : `전체 중 1개씩 · ${every}마다`; }],
-    // 광고 (WP53): where the member's own open posts can show as ads, from PERKS.adSlots.
-    ['광고', g => { const n = PERKS[g.id].adSlots; return n ? [`게시판 상단 ${n}개`, '거래완료 글 하단', ...gradeInfo(g.id).rank >= 3 ? ['홈'] : []].join(' · ') : '-'; }],
-    ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
-    // 제목 강조 and 링크 미리보기 (WP48): the list title ladder and the save-time link cards.
-    ['제목 강조', g => TITLE_STYLE_NAMES[titleTier(g.id)]],
-    ['링크 미리보기', g => linkPreviewAllowed(g.id) ? 'O' : '-'],
-    // 글자 꾸미기 (WP49): the tools of each grade, shown on the post detail only.
-    ['글자 꾸미기', g => STYLE_LADDER[styleRank(g.id)]],
-    // 중개·가측 (WP65): free requests per month (shared between the two), handling order, and the
-    // 운영진 가측가 on the post for every grade (paid requests too).
-    // The 플러스 cells carry the 체험 qualifiers of tier-table.md (no free requests, 4순위 while on the trial).
-    ['무료 중개·가측 (매월 1일 초기화)', g => { const n = PERKS[g.id].serviceCoupons; return !n ? '-' : Number.isFinite(n) ? `월 ${n}회${g.id === 'plus' ? ' (체험 중 0)' : ''}` : '무제한'; }],
-    ['중개·가측 처리 순서', g => `${gradePriority(g.id)}순위${g.id === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`],
-    ['운영진 가측가 표시', () => 'O'],
-    // 조건 알림 (WP54): saved searches with any filter that send 새 글 알림 (프리미엄 and up also 가격 내림).
-    ['조건 알림', g => filterAlertText(PERKS[g.id])],
-    // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
-    ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
-    // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
-    ['내 빠른 답장', g => { const k = PERKS[g.id]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (gradeInfo(g.id).rank >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; }],
-    [CHAT_AUTO_TEXT.label, g => { const k = PERKS[g.id]; return [...k.firstReply ? [CHAT_AUTO_TEXT.first] : [], ...k.awayReply ? [CHAT_AUTO_TEXT.away] : []].join(' · ') || '-'; }],
-];
-// What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
+// What the free 일반 grade already has (WP61 change 2): every cafe basic, with anti-flood ceilings only.
 const FREE_ITEMS = [
     `사진 글당 ${SITE_RULES.photosPerPost}장`,
-    `거래중 글 ${SITE_RULES.openPosts}개`,
-    `하루 새 글 ${SITE_RULES.postsPerDay}개`,
-    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '댓글·답글',
     '채팅·제시',
-    '기본 빠른 답장',
-    '링크 자동 연결',
     '찜·알림',
-    `검색 조건 저장 ${SITE_RULES.savedSearches}개`,
     `키워드·게시판 알림 ${SITE_RULES.keywordAlerts}개`,
     '판매자 구독',
+    `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    `하루 새 글 우선 ${SITE_RULES.freshPerDay}개`,
+    '링크 자동 연결',
     '거래 기록·후기',
-    '신고·차단',
+    '공유·카톡 미리보기',
+    // WP58 and WP63: every grade.
+    `모두 끌올 · 일괄 변경 ${BULK_MAX}개`,
+    '다시 올리기 · 복사해서 새 글',
+    '맞는 구매 글·판매 글 링크',
+    '인기순 정렬',
 ];
+// What the site does better than a cafe board, for every grade.
+const CAFE_ITEMS = ['끌올 버튼 (링크 다시 올리기 없음)', '끌올 가능 알림', '가격 내림 표시', '제시 기록', '상대가 확인한 거래 기록', '인증 표시', '같은 회원 글 접기', '광고는 목록 순서와 별개'];
+
+// A table cell: 'O' as a check mark (the letter stays for screen readers), '무제한' in bold.
+function Cell({ v }: { v: string }) {
+    if (v === 'O' || v.startsWith('O ')) return <><Check size={16} className="cell-check" aria-hidden="true" /><span className="sr-only">O</span>{v.slice(1)}</>;
+    if (v.includes('무제한')) { const [a, b] = v.split('무제한'); return <>{a}<b>무제한</b>{b}</>; }
+    return <>{v}</>;
+}
+const metalOf = (g: PaidGrade) => g === 'elite' ? 'gold' : g === 'premium' ? 'silver' : 'bronze';
+
+// The paid grade cards (owner requests 2026-10-01 and 2026-10-02): the metal accent (엘리트 gold with the
+// shimmer and '모든 혜택'), the price with 월 환산 for 6개월, the hook in big type, at most 3 '일반 대비' lines and
+// '혜택 N가지' (the table rows where the grade beats 일반), all from PERKS and GRADES.
+function GradeCards({ onApply }: { onApply: (g: PaidGrade) => void }) {
+    return <div className="grade-cards">{PAID_GRADES.map(g => {
+        const info = gradeInfo(g), vs = vsNormal(g);
+        return <article key={g} className={'grade-card grade-card-' + metalOf(g)}>
+            <div className="grade-card-head"><CIcon name={info.icon} size={28} /><h3>{info.name}</h3>{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</div>
+            <ul className="grade-card-price">{info.plans.map(p => <li key={p.id}><b>{p.label} {wonText(p.price)}</b>{p.months ? <span> · 월 환산 {monthly(p.price, p.months)}</span> : null}</li>)}</ul>
+            <p className="grade-card-hook">{gradeHook(g)}</p>
+            {vs.length > 0 && <><p className="grade-card-vs-title">일반 대비</p>
+                <ul className="grade-card-vs">{vs.map(line => <li key={line}><Check size={15} aria-hidden="true" />{line}</li>)}</ul></>}
+            <div className="grade-card-foot"><a href="#grade-table" className="grade-card-count">혜택 {gradeExtras(g).length}가지</a>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => onApply(g)}>{info.name} 신청</button></div>
+        </article>;
+    })}</div>;
+}
 
 export default function Guide() {
     const { openApply, config } = useApp();
@@ -104,6 +100,7 @@ export default function Guide() {
                 <li>거래 횟수와 거금은 상대가 확인한 거래만 셉니다. 같은 회원과의 거래는 30일에 1번만 셉니다.</li>
                 <li>거금은 글에 올린 가격·MAX·제시 안에서만 셉니다.</li>
                 <li>확인된 거래는 프로필 거래 기록에 남고, 완료된 글에는 거래가가 표시됩니다.</li>
+                <li><Link to="/providers?type=broker" className="guide-link">{PROVIDER_TEXT.guide}</Link></li>
             </ul>
         </section>
 
@@ -114,21 +111,29 @@ export default function Guide() {
 
         <section className="section" id="grade">
             <div className="section-head"><h2 className="section-title">등급</h2><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'grade', target: 'plus', plan: 'permanent' })}>등급 신청하기</button></div>
-            <div className="table-scroll">
+            <GradeCards onApply={g => openApply({ kind: 'grade', target: g, plan: 'permanent' })} />
+            <div className="table-scroll" id="grade-table">
                 <table className="grade-benefits">
-                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g.id}>{g.name}</th>)}</tr></thead>
-                    <tbody>{BENEFIT_ROWS.map(([label, cell]) => <tr key={label}>
-                        <th scope="row">{label}</th>
-                        {TABLE_GRADES.map(g => { const v = cell(g); return <td key={g.id}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : v}</td>; })}
+                    <thead><tr><th scope="col"><span className="sr-only">항목</span></th>{TABLE_GRADES.map(g => <th scope="col" key={g}>{gradeInfo(g).name}{g === 'elite' && <span className="grade-card-all">모든 혜택</span>}</th>)}</tr></thead>
+                    <tbody>{BENEFIT_ROWS.map(row => <tr key={row.label}>
+                        <th scope="row">{row.label}</th>
+                        {TABLE_GRADES.map(g => { const v = row.cell(g); return <td key={g} className={g === 'elite' ? 'is-elite' : undefined}>{Array.isArray(v) ? v.map(line => <span key={line} className="cell-line">{line}</span>) : <Cell v={v} />}</td>; })}
                     </tr>)}</tbody>
                 </table>
             </div>
+            <EarnBlock earn={config.earn} className="mt-16" />
             <div className="grade-free">
                 <h3>일반 (무료)</h3>
                 <ul>{FREE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
             </div>
+            <div className="grade-free">
+                <h3>카페보다 편한 점</h3>
+                <ul>{CAFE_ITEMS.map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}</ul>
+            </div>
             <ul className="grade-notes">
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
+                <li>거래중 글 {SITE_RULES.openPosts}개, 하루 새 글 {SITE_RULES.postsPerDay}개는 도배 방지 상한이며 모든 등급이 같습니다.</li>
+                <li>자동 기능은 {PERKS.plus.pauseDays}일 동안 접속이 없으면 멈추고 접속하면 다시 시작됩니다. (엘리트 {PERKS.elite.pauseDays}일)</li>
                 <li>{AD_TEXT.sortNote}</li>
                 <li>{AD_TEXT.orderNote}</li>
                 <li>{AUTO_TEXT.reserve}</li>
@@ -137,9 +142,19 @@ export default function Guide() {
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
-                <li>중개·가측: 내 판매·교환 계정 글의 더보기에서 가측 신청, 채팅의 더보기에서 중개 신청. 무료 횟수가 없으면 유료이며 수수료는 매니저가 채팅으로 안내합니다. 플러스 체험 중에는 무료 횟수가 없습니다.</li>
-                <li>운영진 가측가는 글을 수정하면 표시되지 않습니다.</li>
+                <li>중개/가측 탭의 같은 등급 안 순서는 접속 중인 회원 먼저, 그다음 3시간마다 바뀌는 무작위 순서입니다.</li>
+                <li>{REPORT_TEXT.urgentNote}</li>
+                <li>{REPORT_TEXT.demoteNote}</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
+            </ul>
+        </section>
+
+        {/* 홈 화면 앱과 웹 푸시 (WP64): every grade; the bar '알림 켜기' shows after a chat message or an 알림. */}
+        <section className="section">
+            <h2 className="section-title">휴대폰 알림</h2>
+            <ul className="grade-notes">
+                <li>아이폰은 iOS 16.4 이상에서 홈 화면에 추가한 뒤 알림을 켤 수 있습니다.</li>
+                <li>{'사파리 공유 버튼 > 홈 화면에 추가'}</li>
             </ul>
         </section>
 
@@ -151,7 +166,7 @@ export default function Guide() {
                 <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
-                <li>중개는 운영진 또는 신용인에게만 맡깁니다.</li>
+                <li>중개는 중개 인증 회원에게 맡기세요. 거래 대금은 사이트를 거치지 않습니다.</li>
                 <li>다른 거래 카페·밴드 홍보 링크는 금지입니다.</li>
             </ul>
         </section>

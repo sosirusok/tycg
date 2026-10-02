@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind, manToWon, priceText, wonToMan } from '../../shared/market';
-import { ALERT_TEXT, AUTO_REPLY_MAX, AUTO_TEXT, CHAT_AUTO_TEXT, DROP_TEXT, TEMPLATE_MAX, dropEveryText, dropStepText, kstDateTime } from '../../shared/membership';
+import { ALERT_TEXT, AUTO_REPLY_MAX, AUTO_TEXT, CHAT_AUTO_TEXT, DROP_TEXT, MATCH_TEXT, TEMPLATE_MAX, dropEveryText, dropStepText, gradeInfo, kstDateTime } from '../../shared/membership';
+import { useApp } from '../app/state';
 import { TEMPLATE_VARS } from '../../shared/market';
 import type { ChatAuto } from './Chat';
 import { api, errorText, imageUrl } from '../lib/api';
@@ -10,18 +11,22 @@ import { Link, navigate } from '../lib/router';
 import { CIcon, SkeletonRows } from '../components/ui';
 import { WalletGauge, kstClock, useMinuteClock, type Usage, type Wallet } from '../components/Wallet';
 import { useAutoToggle } from '../components/AutoSheet';
+import { offerPush } from '../app/state';
 
 // GET me/automation (WP52). state: '' running, 'idle' 쉬는 중 (every post on page 1), 'wait' 쉬는 중 (another
 // reason), 'busy' delayed, 'reply' / 'away' paused,
 // 'wallet' waiting for 3 끌올. nextAt: the tick that looks next (null: parked). slots null: every post.
 // drop (WP56): the post's 가격 내리기 (null: not a priced 판매 post).
 export type PostDrop = { on: boolean; floor: number; nextAt: number | null; nextPrice: number | null; count: number };
+// match (WP58): whether 자동 매칭 looks at the post now (open 판매·구매 posts only).
 type AutoPost = { id: number; title: string; kind: string; category: string; thumb: string | null; image: string | null; bumped_at: number; hidden: boolean; auto: boolean; stale: boolean;
-    price: number | null; current_offer: number | null; drop: PostDrop | null };
+    price: number | null; current_offer: number | null; drop: PostDrop | null; match?: boolean };
+// 자동 매칭 (WP58): the switch, the posts it may look at (0: below 프리미엄, null: every post), '채팅 보내기' a day.
+type MatchSettings = { on: boolean; slots: number | null; chats: number; count: number };
 type DropSettings = { slots: number | null; step: number; pct: number | null; everyH: number; everyOptions: number[]; canPct: boolean; canDecline: boolean; declineOn: boolean; on: number };
 export type AutoState = Wallet & {
     bumpOn: boolean; bumpNew: boolean; canBumpNew: boolean; state: string; pausedAt: number | null; nextAt: number | null; everyMin: number;
-    slots: number | null; pauseDays: number | null; trial: boolean; listed: number; stale: number; posts: AutoPost[]; drop: DropSettings; chat: ChatAuto;
+    slots: number | null; pauseDays: number | null; trial: boolean; listed: number; stale: number; posts: AutoPost[]; drop: DropSettings; chat: ChatAuto; match: MatchSettings;
 };
 // '다음 내림 10월 2일 20:00 · 27만원' (the Detail owner bar shows the same line).
 export const dropStatus = (d: PostDrop | null | undefined) => d?.on && d.nextAt && d.nextPrice ? DROP_TEXT.next(kstDateTime(d.nextAt), priceText(d.nextPrice)) : null;
@@ -42,15 +47,62 @@ function statusLine(s: AutoState) {
 // 내 거래 › 자동화 (플러스 and up, the 체험 and the manager): the 끌올 card with the wallet, the status, the
 // switches and the list of posts with their own switch.
 export function Auto() {
+    const { me } = useApp();
     const [s, setS] = useState<AutoState | null>(null);
     const load = () => api<AutoState>('me/automation').then(setS).catch(e => toast.error(errorText(e)));
     useEffect(() => { void load(); }, []);
     if (!s) return <SkeletonRows count={2} height={120} />;
+    // 엘리트 and up (관리자 = 엘리트) and the manager: '추천 설정 모두 켜기' on top (WP61).
+    const oneTap = me?.role === 'manager' || gradeInfo(me?.grade).rank >= 3;
     return <>
+        {oneTap && <RecommendCard s={s} setS={setS} />}
         <BumpCard s={s} setS={setS} load={load} />
         <div className="mt-16"><DropCard s={s} setS={setS} /></div>
         <div className="mt-16"><ChatCard chat={s.chat} setChat={chat => setS({ ...s, chat })} /></div>
+        <div className="mt-16"><AlertCard auto={s} setAuto={setS} reload={load} /></div>
     </>;
+}
+
+// '자동 끌올 켜짐 · 가격 내리기 4개 · 매칭 켜짐' and the one button that turns the recommended set on (자동 끌올 with
+// 새 글 자동 포함, 자동 매칭, 첫 문의 자동 안내, 자리 비움); price drops stay as they are.
+function RecommendCard({ s, setS }: { s: AutoState; setS: (s: AutoState) => void }) {
+    const [busy, setBusy] = useState(false);
+    const items = [`자동 끌올 ${s.bumpOn ? '켜짐' : '꺼짐'}`, `가격 내리기 ${s.drop.on}개`, `매칭 ${s.match.on ? '켜짐' : '꺼짐'}`];
+    async function run() {
+        if (busy) return;
+        setBusy(true);
+        try { setS(await api<AutoState>('me/automation/recommended', 'POST', {})); toast('저장 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    return <section className="card card-pad auto-card auto-recommend" aria-label="추천 설정">
+        <p className="auto-recommend-line">{items.join(' · ')}</p>
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void run()}>추천 설정 모두 켜기</button>
+    </section>;
+}
+
+// '자동 매칭' on the '알림' card (WP58): 프리미엄 picks up to 3 posts as chips ('글 2/3'; until the first pick the
+// 3 most recently bumped), 엘리트 and up match every post and get '채팅 보내기'. 플러스 sees the grade it needs.
+function MatchBlock({ s, setS, reload }: { s: AutoState; setS: (s: AutoState) => void; reload: () => Promise<unknown> }) {
+    const m = s.match, [busy, setBusy] = useState(false);
+    if (m.slots === 0) return <div className="match-block"><span className="auto-title">{MATCH_TEXT.switch}</span><span className="auto-sub">{MATCH_TEXT.locked}</span></div>;
+    async function run(fn: () => Promise<unknown>) {
+        if (busy) return;
+        setBusy(true);
+        try { await fn(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    }
+    const posts = s.posts.filter(p => p.match !== undefined);
+    return <div className="match-block">
+        <label className="switch"><input type="checkbox" role="switch" checked={m.on} disabled={busy} onChange={e => void run(async () => setS(await api<AutoState>('me/automation', 'PUT', { matchOn: e.target.checked })))} />{MATCH_TEXT.switch}</label>
+        {m.slots === null ? <span className="auto-sub">{MATCH_TEXT.all}{m.chats ? ` · ${MATCH_TEXT.chat} 하루 ${m.chats}번` : ''}</span> : <>
+            <span className="auto-sub">글 {m.count}/{m.slots}</span>
+            {posts.length ? <div className="chip-row match-chips">{posts.map(p => <button type="button" key={p.id} className="chip chip-sm" aria-pressed={!!p.match} disabled={busy || !m.on}
+                onClick={() => void run(async () => { await api(`posts/${p.id}/auto`, 'PUT', { match: !p.match }); await reload(); })}><span className="chip-own">{p.title}</span></button>)}</div>
+                : <p className="auto-empty">거래중인 판매·구매 글이 없습니다.</p>}
+        </>}
+    </div>;
 }
 
 function BumpCard({ s, setS, load }: { s: AutoState; setS: (s: AutoState) => void; load: () => Promise<unknown> }) {
@@ -239,7 +291,8 @@ type SavedAlert = { id: string; name: string; query: string; alert: boolean; key
 type SavedList = { searches: SavedAlert[]; filterAlerts: number | null; keywordAlerts: number };
 // bare: inside the 알림 page's '검색 알림' modal (every grade, so a 일반 member sees every saved search with
 // its switch too); the modal gives the title.
-export function AlertCard({ bare = false }: { bare?: boolean }) {
+// auto (the 자동화 tab): the card also holds '자동 매칭' (WP58).
+export function AlertCard({ bare = false, auto, setAuto, reload }: { bare?: boolean; auto?: AutoState; setAuto?: (s: AutoState) => void; reload?: () => Promise<unknown> }) {
     const [d, setD] = useState<SavedList | null>(null), [busy, setBusy] = useState(false);
     const load = () => api<SavedList>('searches').then(setD).catch(e => toast.error(errorText(e)));
     useEffect(() => { void load(); }, []);
@@ -247,7 +300,7 @@ export function AlertCard({ bare = false }: { bare?: boolean }) {
     async function toggle(v: SavedAlert, on: boolean) {
         if (busy) return;
         setBusy(true);
-        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); await load(); }
+        try { await api('searches/' + v.id, 'PATCH', { alert: on }); toast(on ? ALERT_TEXT.on : ALERT_TEXT.off); if (on) offerPush(); await load(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
@@ -265,5 +318,6 @@ export function AlertCard({ bare = false }: { bare?: boolean }) {
             </span>
             <label className="switch auto-post-switch"><input type="checkbox" role="switch" aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} checked={v.alert} disabled={busy || locked(v)} onChange={e => void toggle(v, e.target.checked)} /></label>
         </li>)}</ul> : <p className="auto-empty">저장한 검색이 없습니다. 게시판에서 검색 조건을 저장하면 여기서 알림을 켤 수 있습니다.</p>}
+        {auto && setAuto && reload && <MatchBlock s={auto} setS={setAuto} reload={reload} />}
     </section>;
 }

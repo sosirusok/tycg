@@ -1,25 +1,27 @@
 import {
-    db, fail, ApiError, initManager, currentUser, requireUser, json, body, csrf, limit, storedHash, verifyPassword, random,
+    db, fail, ApiError, initManager, currentUser, requireUser, requireActive, json, body, csrf, limit, storedHash, verifyPassword, random, textField,
     digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME, trialWindow, trialOpen, grantTrial,
 } from './http';
-import { postsHandler } from './posts';
-import { filesHandler } from './files';
+import { postsHandler, tagsHandler } from './posts';
+import { filesHandler, unused } from './files';
 import { chatHandler } from './chat';
 import { communityHandler } from './community';
 import { membershipHandler, trialState, trialMeHandler } from './membership';
-import { kstDate, type TrialState } from '../shared/membership';
+import { kstDate, publicRank, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
 import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
+import { statsHandler } from './stats';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
-import { servicesHandler } from './services';
+import { providersHandler } from './providers';
 import { meterOn, localRequest, metered, meterHeaders } from './meter';
 import { notificationsHandler } from './notifications';
 import { automationHandler } from './automation';
 import { followAllowedHandler, followHandler, followsList } from './alerts';
 import { commentsHandler, myComments, postCommentsHandler } from './comments';
+import { pushHandler, withPushes } from './push';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -85,15 +87,14 @@ async function withdraw(req: Request) {
     const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
-        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',deleted_at=? WHERE id=?`).bind(now, u.id),
-        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
+        // 웹 푸시 (WP64): no device gets the member's pushes any more.
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
         db().prepare(`UPDATE offers SET status='cancelled',updated_at=? WHERE ${WITHDRAW_ENDS_OFFERS}`).bind(now, u.id, u.id),
         db().prepare("UPDATE applications SET status='cancelled',updated_at=? WHERE user_id=? AND status='pending'").bind(now, u.id),
-        // Open 중개·가측 신청 end too (WP65), so the manager's list keeps no request of a member who left.
-        db().prepare("UPDATE service_requests SET status='cancelled',decided_at=? WHERE user_id=? AND status='open'").bind(now, u.id),
         // Trade records still waiting for an answer that involve the member end (WP43).
         db().prepare('DELETE FROM trades WHERE (seller_id=? OR buyer_id=?) AND confirmed_at IS NULL AND author_id IS NOT NULL AND removed_at IS NULL').bind(u.id, u.id),
     ]);
@@ -124,6 +125,54 @@ async function signUpTrial(id: string, ip: string, createdAt: number) {
     return false;
 }
 
+// 비밀번호 찾기 (WP59): a guest leaves the id and where to reach them; the manager checks the member and
+// sends a temporary password there. The answer is the same 200 {ok:true} whether the id exists or not
+// (nothing is looked up here), and each address may ask 3 times an hour.
+async function resetRequest(req: Request) {
+    const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
+    if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
+    const contact = textField(b.contact, 1, 100, '연락받을 곳');
+    const ip = await digest(req.headers.get('cf-connecting-ip') || 'local');
+    await limit('reset-ip:' + ip, 3, 3600000);
+    await db().prepare('INSERT INTO reset_requests(username,contact,ip_hash,status,created_at) VALUES(?,?,?,?,?)').bind(username, contact, ip, 'pending', Date.now()).run();
+    return json({ ok: true });
+}
+
+// 프로필 사진 (WP59): POST me/avatar {uploadId, thumb} sets the 256px square photo the browser cut and
+// uploaded (one of the member's own uploads that nothing else uses yet) and its 64px copy for lists (a
+// WebP data URI, or JPEG where the browser cannot make WebP, at most 4,000 characters). DELETE me/avatar
+// goes back to the initial-letter avatar; the photo then falls to the unused-photo cleanup.
+const AVATAR_THUMB = /^data:image\/(webp|jpeg);base64,[A-Za-z0-9+/=]+$/;
+const AVATAR_THUMB_MAX = 4000;
+const AVATAR_AGAIN = '사진을 다시 선택해 주세요.';
+async function avatarHandler(req: Request) {
+    const u = await requireUser(req);
+    if (req.method === 'DELETE') {
+        await db().prepare('UPDATE users SET avatar_id=NULL,avatar_thumb=NULL WHERE id=?').bind(u.id).run();
+        return json({ ok: true });
+    }
+    if (req.method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
+    requireActive(u);
+    await limit('avatar:' + u.id, 20, 3600000);
+    const b = await body(req);
+    if (typeof b.thumb !== 'string' || b.thumb.length > AVATAR_THUMB_MAX || !AVATAR_THUMB.test(b.thumb)) fail(400, AVATAR_AGAIN);
+    if (typeof b.uploadId !== 'string' || b.uploadId.length > 64) fail(400, AVATAR_AGAIN);
+    // The upload is checked inside the update, so a photo attached to a post meanwhile is never taken.
+    const r = await db().prepare(`UPDATE users SET avatar_id=?,avatar_thumb=? WHERE id=? AND EXISTS(SELECT 1 FROM uploads WHERE id=? AND owner_id=? AND (users.avatar_id=uploads.id OR (${unused})))`)
+        .bind(b.uploadId, b.thumb, u.id, b.uploadId, u.id).run();
+    if (!r.meta.changes) fail(400, AVATAR_AGAIN);
+    return json({ ok: true, avatar_id: b.uploadId, avatar_thumb: b.thumb });
+}
+
+// POST me/celebrated: stores the member's public grade rank (manager grants only, a 무료 체험 reads as 일반) as
+// the one celebrated, so the 등급 축하 창 shows once per rise; a lower rank (an ended grade) is stored too, so
+// the next rise shows it again.
+async function celebrated(req: Request) {
+    const u = await requireUser(req), rank = publicRank(u);
+    await db().prepare('UPDATE users SET celebrated_rank=? WHERE id=?').bind(rank, u.id).run();
+    return json({ rank });
+}
+
 async function authHandler(req: Request, p: string[]) {
     const method = req.method;
     if (p[1] === 'me' && method === 'GET') {
@@ -137,6 +186,7 @@ async function authHandler(req: Request, p: string[]) {
     }
     if (p[1] === 'password') return changePassword(req);
     if (p[1] === 'withdraw') return withdraw(req);
+    if (p[1] === 'reset-request') return resetRequest(req);
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
     if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
@@ -198,7 +248,7 @@ async function usersHandler(req: Request, p: string[]) {
             + ' AND (p.author_id=? OR u.suspended_until IS NULL OR u.suspended_until<=?)';
         const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
         // How many 후기 the 후기 tab holds; the trade counts come from tradeStats.
-        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
+        const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,u.avatar_id,u.avatar_thumb,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
             (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count,
             u.follow_allowed,EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=u.id) AS followed,
             CASE WHEN u.id=? THEN (SELECT COUNT(*) FROM follows f WHERE f.target_id=u.id) END AS follower_count FROM users u WHERE u.id=?`)
@@ -210,6 +260,8 @@ async function usersHandler(req: Request, p: string[]) {
         // '거래 12회 · 거금 340만원 · 후기 좋아요 9' (WP43): confirmed trades, deduped per counterpart and 30 days.
         const stats = await tradeStats(row.id);
         const user: Record<string, unknown> = { ...withMember(rest), tradeCount: stats.trade_count, dealSum: stats.deal_sum, goodCount: stats.good_count, reviewCount: review_count };
+        // 프로필 사진 (WP59): the head shows the 256px photo (avatar_id), the rest the 64px copy; none: the initial.
+        if (!user.avatar_id || !user.avatar_thumb) { delete user.avatar_id; delete user.avatar_thumb; }
         // 판매자 구독 (WP54): whether the viewer follows this member and whether the member takes follows
         // ('구독 허용'); the member alone sees how many follow them.
         user.followed = !!followed;
@@ -283,10 +335,12 @@ async function stats() {
 
 // With the test meter on (READ_BUDGET=on, requests to 127.0.0.1 or localhost only), the response
 // carries X-Rows-Read, X-Rows-Written, X-D1-Calls and X-D1-Statements for the whole request.
-export async function handleApi(req: Request) {
+// ctx: the members a request reached (a chat message, 제시, 댓글) get their 웹 푸시 after the response (WP64).
+export async function handleApi(req: Request, ctx?: ExecutionContext) {
     allowKvTestFailure(req);
-    if (!meterOn() || !localRequest(req)) return route(req);
-    const { result, meter } = await metered(() => route(req));
+    const run = () => withPushes(ctx, () => route(req));
+    if (!meterOn() || !localRequest(req)) return run();
+    const { result, meter } = await metered(run);
     for (const [k, v] of Object.entries(meterHeaders(meter))) result.headers.set(k, v);
     return result;
 }
@@ -310,6 +364,8 @@ async function route(req: Request): Promise<Response> {
             // The whole home page (shelves, 엘리트 매물, notices) in one request (WP42).
             case 'home': if (method === 'GET' && !p[1]) return await homeHandler(req, url); break;
             case 'health': return json({ ok: !!await db().prepare('SELECT 1 AS ok').first() });
+            // 특징 태그 (WP70): pinned and most used tags for the board's '태그' filter.
+            case 'tags': if (method === 'GET' && !p[1]) return await tagsHandler(); break;
             case 'posts': {
                 // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).
                 if (p[2] === 'partners' || p[2] === 'trade') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
@@ -323,12 +379,18 @@ async function route(req: Request): Promise<Response> {
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
             case 'me': {
                 if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
+                // 판매 통계 (WP63): me/stats?post=<id>.
+                if (p[1] === 'stats' && !p[2] && method === 'GET') return await statsHandler(req, url);
                 // 자동화 tab (WP52).
                 if (p[1] === 'automation') { const a = await automationHandler(req, p); if (a) return a; break; }
                 // 구독 관리 (WP54).
                 if (p[1] === 'follows' && !p[2] && method === 'GET') return await followsList(req);
                 // 내 거래 '댓글' (WP55).
                 if (p[1] === 'comments' && !p[2] && method === 'GET') return await myComments(req, url);
+                // 프로필 사진 (WP59).
+                if (p[1] === 'avatar' && !p[2]) return await avatarHandler(req);
+                // 등급 축하 창 (WP66): the member saw (or skipped) the window for the current public grade.
+                if (p[1] === 'celebrated' && !p[2] && method === 'POST') return await celebrated(req);
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;
@@ -338,8 +400,10 @@ async function route(req: Request): Promise<Response> {
             // PATCH and DELETE comments/:id (WP55).
             case 'comments': { const r = await commentsHandler(req, p); if (r) return r; break; }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
-            // 중개·가측 신청 (WP65).
-            case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }
+            // 중개/가측 tab (WP66).
+            case 'providers': { const r = await providersHandler(req, p, url); if (r) return r; break; }
+            // 웹 푸시 (WP64): POST and DELETE push/subscribe.
+            case 'push': { const r = await pushHandler(req, p); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

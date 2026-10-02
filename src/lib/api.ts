@@ -12,7 +12,10 @@ function sessionEnded(path: string) {
     if (path !== 'auth/login') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
 }
 
-export async function api<T = any>(path: string, method = 'GET', data?: unknown): Promise<T> {
+// signal: a request the caller may cancel (the chat room's long poll, WP69); a cancelled one rejects with
+// the AbortError itself, never an ApiError.
+export async function api<T = any>(path: string, method = 'GET', data?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
+    const signal = options?.signal;
     let response: Response;
     try {
         response = await fetch('/api/' + path, {
@@ -20,12 +23,15 @@ export async function api<T = any>(path: string, method = 'GET', data?: unknown)
             credentials: 'same-origin',
             headers: data === undefined ? undefined : { 'Content-Type': 'application/json' },
             body: data === undefined ? undefined : JSON.stringify(data),
+            signal,
         });
-    } catch {
+    } catch (e) {
+        if (signal?.aborted) throw e;
         throw new ApiError(0, '인터넷 연결을 확인해 주세요.');
     }
     let body: any, parsed = true;
     try { body = await response.json(); } catch { parsed = false; }
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     // Right before the throw, so the caller's own error toast comes first (AppProvider skips a duplicate).
     if (response.status === 401) sessionEnded(path);
     if (!parsed) throw new ApiError(response.status, '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');
@@ -133,6 +139,52 @@ export async function sendPhoto(file: File, src?: string | null): Promise<Upload
 
 export async function uploadPhoto(file: File): Promise<string> {
     return (await sendPhoto(file)).id;
+}
+
+// 프로필 사진 (WP59): the picked photo cut to a centered 256px square for the upload, and its 64px copy as a
+// data URI of at most 4,000 characters for lists and chat rows. WebP, or JPEG where the browser cannot
+// make WebP (the server takes both).
+async function makeAvatar(file: File): Promise<{ blob: Blob; thumb: string }> {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('JPG, PNG, WebP 사진만 올릴 수 있습니다.');
+    if (file.size > 20 * 1024 * 1024) throw new Error('20MB 이하의 사진을 선택해 주세요.');
+    let bitmap: ImageBitmap;
+    try { bitmap = await createImageBitmap(file); }
+    catch { throw new Error('사진을 열 수 없습니다. JPG, PNG, WebP 사진인지 확인해 주세요.'); }
+    try {
+        const side = Math.min(bitmap.width, bitmap.height);
+        const square = (size: number) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = size;
+            canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+            return canvas;
+        };
+        const big = square(256);
+        let blob = await new Promise<Blob | null>(resolve => big.toBlob(resolve, 'image/webp', 0.85));
+        if (!blob || blob.type !== 'image/webp') blob = await new Promise<Blob | null>(resolve => big.toBlob(resolve, 'image/jpeg', 0.85));
+        const small = square(64);
+        let thumb = '';
+        for (const q of [0.75, 0.5, 0.3]) {
+            for (const type of ['image/webp', 'image/jpeg']) {
+                const uri = small.toDataURL(type, q);
+                if (uri.startsWith(`data:${type};base64,`) && uri.length <= 4000) { thumb = uri; break; }
+            }
+            if (thumb) break;
+        }
+        if (!blob || !thumb) throw new Error('사진을 다시 선택해 주세요.');
+        return { blob, thumb };
+    } finally { bitmap.close(); }
+}
+
+// Uploads the cut photo as it is (no second compression) and sets it: {avatar_id, avatar_thumb}.
+export async function setAvatar(file: File): Promise<{ avatar_id: string; avatar_thumb: string }> {
+    const { blob, thumb } = await makeAvatar(file);
+    let response: Response;
+    try { response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type }, body: blob }); }
+    catch { throw new ApiError(0, '인터넷 연결을 확인해 주세요.'); }
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 401) sessionEnded('uploads');
+    if (!response.ok) throw new ApiError(response.status, body.error || '사진을 올리지 못했습니다.');
+    return api('me/avatar', 'POST', { uploadId: body.id, thumb });
 }
 
 export const imageUrl = (id: string) => '/api/images/' + id;

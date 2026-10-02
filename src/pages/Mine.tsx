@@ -2,17 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
-import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
+import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, matchQuery, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
+import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, PIN_TEXT, STATS_RANK, STATS_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { useApp } from '../app/state';
-import { CIcon, EmptyState, NameLine, SkeletonRows, Tabs } from '../components/ui';
+import { CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { CompleteSheet, type SheetPost } from '../components/CompleteSheet';
 import { WalletGauge, bumpReadyAt, postBlockedUntil, useMinuteClock, walletNow, type Usage, type Wallet } from '../components/Wallet';
 import { remindText, setBumpRemind } from '../components/AutoSheet';
-import { AlertCard, Auto } from './Auto';
+import { Auto } from './Auto';
+import { StatsSheet } from '../components/StatsSheet';
 
 // '자동화' (WP52) shows for 플러스 and up (the 체험 too) and the manager.
 const TABS = [
@@ -71,9 +72,15 @@ function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: 
 }
 
 // A row of 내 글: photo, title, status, price, how many viewed, saved and chatted, then 끌올 and the one
-// 완료 button with the kind's closed label (WP43), which opens the 완료 sheet.
-function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete, onAd }: {
+// 완료 button with the kind's closed label (WP43), which opens the 완료 sheet. A completed post offers
+// '다시 올리기' (WP58); the 더보기 menu holds 광고 (WP53), the '맞는 구매 글' link and '복사해서 새 글'.
+// In 선택 mode (WP58) the row is a checkbox and the actions move to the 선택 bar; a post the last bulk
+// change skipped shows why under it.
+// 판매 통계 (WP63): for 프리미엄 and up the counts line is the '통계' button (StatsSheet); 대표 글 shows its tag,
+// and the 더보기 menu pins or unpins it (플러스 and up; '대표 글 해제' also on a pin a lower grade hides).
+function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRemind, onComplete, onAd, onStats, onPin, selecting, selected, onSelect, skip }: {
     post: OwnPost; usage: Usage | null; now: number; busy: boolean; closeOnly: boolean; suspended: boolean; onBump: () => void; onRemind: () => void; onComplete: () => void; onAd: (pin: boolean) => void;
+    onStats: () => void; onPin: (pin: boolean) => void; selecting: boolean; selected: boolean; onSelect: (on: boolean) => void; skip?: string;
 }) {
     const href = '/posts/' + post.id, thumb = post.images[0];
     const bump = bumpState(post, usage, closeOnly, now);
@@ -83,6 +90,27 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
     // 광고 (WP53): 프리미엄 and above; the row menu pins or removes an open post.
     const adSlots = usage?.perks.adSlots || 0, adMenu = adSlots > 0 && !closed && !post.hidden && !closeOnly;
     const recordable = closed && post.traded === false && post.askable !== false && !suspended && !post.hidden && (post.closed_at ?? 0) > now - 7 * 24 * HOUR;
+    // 맞는 글 (WP58): an open 판매 or 구매 post links to the other side's board with its own fields.
+    const match = !closed && !post.hidden ? matchQuery(post) : null, write = !closeOnly && !suspended;
+    const stored = post.profile_pin_at !== null && post.profile_pin_at !== undefined;
+    const pinMenu = stored || (!!usage?.perks.profilePins && !post.hidden);
+    const statsOn = STATS_RANK[usage?.perks.stats || 'basic'] >= STATS_RANK.trend;
+    const menu = adMenu || !!match || write || pinMenu;
+    const counts = <>조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</>;
+    if (selecting) return <li className={'seller-row is-selecting' + (closed ? ' is-closed' : '')}>
+        <label className="check seller-check"><input type="checkbox" checked={selected} onChange={e => onSelect(e.target.checked)} aria-label={`${post.title} 선택`} /></label>
+        <span className="seller-thumb" aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</span>
+        <div className="seller-main">
+            <Link to={href} className="seller-title">{post.title}</Link>
+            <div className="seller-meta">
+                {closed && <span className="status status-closed">{closedLabel(post.kind)}</span>}
+                {!!post.hidden && <span className="status status-hidden">숨김</span>}
+                {post.auto && !closed && <span className="tag tag-auto">자동</span>}
+                <b>{price}</b>
+            </div>
+            {skip && <p className="seller-skip">{skip}</p>}
+        </div>
+    </li>;
     return <li className={'seller-row' + (post.status === 'closed' ? ' is-closed' : '')}>
         <Link to={href} className="seller-thumb" tabIndex={-1} aria-hidden="true">{thumb ? <img src={imageUrl(thumb)} alt="" loading="lazy" /> : <CIcon name={KIND_ICONS[post.kind]} size={28} />}</Link>
         <div className="seller-main">
@@ -92,26 +120,36 @@ function SellerRow({ post, usage, now, busy, closeOnly, suspended, onBump, onRem
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {post.auto && !closed && <span className="tag tag-auto">자동</span>}
                 {post.featured && !closed && !post.hidden && adSlots > 0 && <span className="tag tag-line">{AD_TEXT.label}</span>}
+                {post.pinned && <span className="tag tag-line">{PIN_TEXT.tag}</span>}
                 <b>{price}</b>
             </div>
-            <span className="seller-stats">조회 {post.view_count || 0} · 찜 {post.fav_count || 0} · 채팅 {post.chat_count || 0}{(adSlots > 0 || !!post.promo_views) && ` · ${AD_TEXT.views(post.promo_views || 0)}`}</span>
+            {statsOn ? <button type="button" className="seller-stats stats-open" onClick={onStats}><span>{counts}</span><b>{STATS_TEXT.button}</b></button>
+                : <span className="seller-stats">{counts}</span>}
+            {skip && <p className="seller-skip">{skip}</p>}
         </div>
         <div className="seller-actions">
             {!closed && <button type="button" className={'btn btn-line btn-sm seller-bump' + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} title={bump.title} aria-description={bump.title} onClick={bump.remind ? onRemind : onBump}><span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>}
             {!closed && <button type="button" className="btn btn-line btn-sm seller-status" disabled={busy} onClick={onComplete}>{closedLabel(post.kind)}</button>}
             {recordable && <button type="button" className="btn btn-line btn-sm seller-status" onClick={onComplete}>거래 기록 요청</button>}
-            {adMenu && <DropdownMenu.Root modal={false}>
+            {closed && write && <Link to={'/write?from=' + post.id} className="btn btn-line btn-sm seller-status">다시 올리기</Link>}
+            {menu && <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="icon-btn seller-more" aria-label="더보기" disabled={busy}><MoreHorizontal size={20} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" sideOffset={6}>
-                        {post.featured_pin !== 1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(true)}>{AD_TEXT.pin}</DropdownMenu.Item>}
-                        {post.featured_pin !== -1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(false)}>{AD_TEXT.unpin}</DropdownMenu.Item>}
+                        {match && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/trade?' + match.query)}>{MATCH_TEXT.link(post.kind)}</DropdownMenu.Item>}
+                        {write && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/write?from=' + post.id)}>복사해서 새 글</DropdownMenu.Item>}
+                        {adMenu && post.featured_pin !== 1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(true)}>{AD_TEXT.pin}</DropdownMenu.Item>}
+                        {adMenu && post.featured_pin !== -1 && <DropdownMenu.Item className="menu-item" onSelect={() => onAd(false)}>{AD_TEXT.unpin}</DropdownMenu.Item>}
+                        {pinMenu && <DropdownMenu.Item className="menu-item" onSelect={() => onPin(!stored)}>{stored ? PIN_TEXT.unpin : PIN_TEXT.pin}</DropdownMenu.Item>}
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
             </DropdownMenu.Root>}
         </div>
     </li>;
 }
+
+type BulkAction = 'bump' | 'close' | 'delete' | 'auto';
+type BulkResult = Partial<Wallet> & { done: number[]; skipped: { id: number; reason: string }[] };
 
 export default function Mine({ tab: raw }: { tab?: string }) {
     const { me, ready, requireLogin, openApply } = useApp();
@@ -129,6 +167,13 @@ export default function Mine({ tab: raw }: { tab?: string }) {
     const [clock] = useMinuteClock();
     // The 완료 sheet for a row, as on the detail page (WP43).
     const [tradePost, setTradePost] = useState<SheetPost | null>(null);
+    // 판매 통계 (WP63): the post whose StatsSheet is open.
+    const [statsPost, setStatsPost] = useState<{ id: number; title: string } | null>(null);
+    // 선택 mode (WP58): the checked rows (at most BULK_MAX), the bulk change waiting for its confirm, and why
+    // the last bulk change skipped some rows (shown under them).
+    const [selecting, setSelecting] = useState(false), [picked, setPicked] = useState<number[]>([]), [skips, setSkips] = useState<Record<number, string>>({});
+    const [ask, setAsk] = useState<'close' | 'delete' | null>(null), [bulkBusy, setBulkBusy] = useState(false);
+    useEffect(() => { setSelecting(false); setPicked([]); setSkips({}); }, [tab]);
     // How many pages of the current tab are on screen, so a reload keeps them.
     const loaded = useRef<{ tab: TabId; page: number }>({ tab, page: 1 });
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
@@ -213,10 +258,63 @@ export default function Mine({ tab: raw }: { tab?: string }) {
             void loadUsage();
         } catch (e) { toast.error(errorText(e)); }
     }
+    // 대표 글 (WP63): PUT posts/:id/pin.
+    async function setPin(post: OwnPost, pin: boolean) {
+        try {
+            await api(`posts/${post.id}/pin`, 'PUT', { active: pin });
+            toast(pin ? PIN_TEXT.pinned : PIN_TEXT.unpinned);
+            setRev(n => n + 1);
+        } catch (e) { toast.error(errorText(e)); }
+    }
     async function keepAll() {
         try { await api('me/automation/continue', 'POST', {}); void navigate('/me/posts', { replace: true }); }
         catch (e) { toast.error(errorText(e)); }
     }
+    // 일괄 변경 (WP58): POST posts/bulk; the wallet in the answer updates the gauge.
+    async function bulk(action: BulkAction, change: Record<string, unknown>) {
+        if (bulkBusy) return null;
+        setBulkBusy(true);
+        try {
+            const d = await api<BulkResult>('posts/bulk', 'POST', { action, ...change });
+            if (d.bumpMax !== undefined) setUsage(u => u && { ...u, bumpTokens: d.bumpTokens ?? null, bumpMax: d.bumpMax ?? null, bumpRefillMin: d.bumpRefillMin ?? null, nextRefillAt: d.nextRefillAt ?? null });
+            return d;
+        } catch (e) { toast.error(errorText(e)); return null; }
+        finally { setBulkBusy(false); setNow(Date.now()); void loadUsage(); }
+    }
+    // '모두 끌올': every open post, oldest bumped first, until the wallet is empty. Nothing to bump: the
+    // first reason ('끌올이 없습니다. 15:40에 1개 충전됩니다.').
+    async function bumpAll() {
+        const d = await bulk('bump', { all: true });
+        if (!d) return;
+        if (d.done.length) { toast(BULK_TEXT.bumped(d.done.length)); setRev(n => n + 1); }
+        else toast.error(d.skipped[0]?.reason || '거래중인 글만 끌올할 수 있습니다.');
+    }
+    async function runSelected(action: BulkAction) {
+        setAsk(null);
+        const ids = picked, rows = (items as OwnPost[] | null || []).filter(p => ids.includes(p.id));
+        const d = await bulk(action, { ids, ...action === 'auto' ? { on: !rows.every(p => p.auto) } : {} });
+        if (!d) return;
+        const n = d.done.length;
+        if (n) toast(action === 'bump' ? BULK_TEXT.bumped(n) : action === 'close' ? BULK_TEXT.closed(n) : action === 'delete' ? BULK_TEXT.deleted(n) : AUTO_TEXT.moved);
+        else if (d.skipped.length) toast.error(d.skipped[0].reason);
+        setSkips(Object.fromEntries(d.skipped.map(x => [x.id, x.reason])));
+        setPicked([]);
+        setRev(r => r + 1);
+    }
+    function pick(id: number, on: boolean) {
+        if (on && picked.length >= BULK_MAX) { toast.error(BULK_TEXT.max); return; }
+        setPicked(prev => on ? [...new Set([...prev, id])] : prev.filter(x => x !== id));
+    }
+    // The first BULK_MAX rows on screen.
+    const firstRows = (items as OwnPost[] | null || []).slice(0, BULK_MAX).map(p => p.id);
+    const allPicked = picked.length > 0 && firstRows.every(id => picked.includes(id));
+    function toggleSelecting() {
+        setSelecting(on => !on);
+        setPicked([]);
+        setSkips({});
+    }
+    // [자동 끌올] in the 선택 bar: 엘리트 and up (every post can be listed) and the manager.
+    const autoAll = manager || gradeInfo(me.grade).rank >= 3;
     const moreButton = data && data.tab === tab && (isPostTab(tab) ? (data.items.length < data.total || (data.capped && data.full)) : tab === 'comments' && data.full)
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
@@ -225,18 +323,36 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         <div className="mt-16"><Tabs label="내 거래 메뉴" value={tab} onChange={t => void navigate('/me/' + t, { replace: true })} items={tabs} /></div>
         <div className="mt-24">
             {items === null ? <SkeletonRows count={3} />
-                : tab === 'auto' ? <><Auto /><div className="mt-16"><AlertCard /></div></>
+                : tab === 'auto' ? <Auto />
                 : tab === 'posts' ? <>
                     {stale && <div className="auto-stale mine-stale">
                         <span>{AUTO_TEXT.staleCount(items.length)}</span>
                         <button type="button" className="btn btn-line btn-sm" onClick={() => void keepAll()}>모두 계속</button>
                     </div>}
-                    {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
+                    {/* '끌올 3/4 · 1:20 후 충전', [모두 끌올] and [선택] (WP58). */}
+                    <div className="mine-head">
+                        {suspended ? <p className="mine-usage">이용 정지 중입니다. ({suspendUntilText(me.suspended_until!)})</p> : usage && <WalletGauge usage={usage} now={now} className="mine-usage" />}
+                        {items.length > 0 && <div className="mine-tools">
+                            {!suspended && !selecting && <button type="button" className="btn btn-line btn-sm" disabled={bulkBusy} onClick={() => void bumpAll()}>{BULK_TEXT.bumpAll}</button>}
+                            <button type="button" className={'btn btn-sm ' + (selecting ? 'btn-primary' : 'btn-line')} aria-pressed={selecting} onClick={toggleSelecting}>{selecting ? '취소' : BULK_TEXT.select}</button>
+                        </div>}
+                    </div>
                     {!suspended && !!usage?.perks.adSlots && <p className="wallet-gauge mine-ad">{AD_TEXT.header(usage.featured.length, usage.perks.adSlots)}</p>}
-                    {items.length ? <><ul className="seller-list">{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)}
-                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })} />)}</ul>
-                    {moreButton}</> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
+                    {items.length ? <><ul className={'seller-list' + (selecting ? ' is-selecting' : '')}>{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id || bulkBusy}
+                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)} onStats={() => setStatsPost({ id: p.id, title: p.title })} onPin={pin => void setPin(p, pin)}
+                        onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })}
+                        selecting={selecting} selected={picked.includes(p.id)} onSelect={on => pick(p.id, on)} skip={skips[p.id]} />)}</ul>
+                    {moreButton}
+                    {selecting && <div className="select-bar" role="toolbar" aria-label="선택한 글">
+                        <label className="check select-count"><input type="checkbox" checked={allPicked} aria-label="전체 선택" onChange={e => setPicked(e.target.checked ? firstRows : [])} />{BULK_TEXT.selected(picked.length)}</label>
+                        <div className="select-actions">
+                            <button type="button" className="btn btn-line btn-sm" disabled={!picked.length || bulkBusy || suspended} onClick={() => void runSelected('bump')}>끌올</button>
+                            <button type="button" className="btn btn-line btn-sm" disabled={!picked.length || bulkBusy} onClick={() => setAsk('close')}>거래완료</button>
+                            <button type="button" className="btn btn-line btn-sm" disabled={!picked.length || bulkBusy} onClick={() => setAsk('delete')}>삭제</button>
+                            {autoAll && <button type="button" className="btn btn-line btn-sm" disabled={!picked.length || bulkBusy || suspended} onClick={() => void runSelected('auto')}>자동 끌올</button>}
+                        </div>
+                    </div>}
+                    </> : <EmptyState icon="file" title="작성한 글이 없습니다" action={<Link to="/write" className="btn btn-primary">글쓰기</Link>} />}
                 </>
                 : (tab === 'favorites' || tab === 'recent') ? (items.length ? <><div className="post-list">{(items as SavedPost[]).map(p => <PostCard key={p.id} post={p} flag={tab === 'favorites' ? priceDrop(p) : undefined} onChange={() => setRev(n => n + 1)} />)}</div>{moreButton}</>
                     : <EmptyState icon="file" title={tab === 'favorites' ? '찜한 글이 없습니다' : '최근 본 글이 없습니다'} action={<Link to="/trade?kind=buy" className="btn btn-line">거래 둘러보기</Link>} />)
@@ -260,6 +376,11 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                 : (items.length ? <ul className="simple-list">{items.map((b: { target_id: string; nickname: string; grade: string; grade_trial?: boolean; badges: string[] }) => <li key={b.target_id}><span className="grow"><Link to={'/profile/' + b.target_id} className="strong-link"><NameLine nickname={b.nickname} grade={b.grade} trial={b.grade_trial} badges={b.badges} /></Link></span><button type="button" className="btn btn-line btn-xs" onClick={() => unblock(b.target_id)}>차단 해제</button></li>)}</ul>
                     : <EmptyState title="차단한 회원이 없습니다" />)}
         </div>
+        <Modal open={ask !== null} onClose={() => setAsk(null)} title={ask === 'delete' ? '글 삭제' : '거래완료'}
+            description={ask === 'delete' ? BULK_TEXT.deleteAsk(picked.length) : BULK_TEXT.closeAsk(picked.length)}
+            footer={<><button type="button" className="btn btn-line" onClick={() => setAsk(null)}>취소</button>
+                <button type="button" className={ask === 'delete' ? 'btn btn-danger-solid' : 'btn btn-primary'} disabled={bulkBusy} onClick={() => ask && void runSelected(ask)}>{ask === 'delete' ? '삭제' : '거래완료'}</button></>} />
+        <StatsSheet post={statsPost} onClose={() => setStatsPost(null)} showAds={!!usage?.perks.adSlots} />
         <CompleteSheet post={tradePost} suspended={suspended} onClose={() => setTradePost(null)} onDone={chatId => {
             if (tradePost?.status === 'closed') { if (chatId) patchPost(tradePost.id, { traded: true }); }
             else if (tradePost) patchPost(tradePost.id, { status: 'closed', closed_at: Date.now(), traded: !!chatId });

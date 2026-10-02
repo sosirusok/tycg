@@ -9,7 +9,9 @@ import { Avatar, CIcon, EmptyState, NameLine, SkeletonRows } from './components/
 import { AuthModal } from './app/AuthModal';
 import { ApplyModal } from './app/ApplyModal';
 import { TrialPopup } from './app/TrialPopup';
-import { trialStatus } from '../shared/membership';
+import { PROVIDER_TEXT, trialStatus } from '../shared/membership';
+import { GradeCelebration } from './components/GradeCelebration';
+import { PushBar } from './app/PushBar';
 import { Home } from './pages/Home';
 import { Board } from './pages/Board';
 import { Detail } from './pages/Detail';
@@ -21,6 +23,7 @@ const Mine = lazy(() => import('./pages/Mine'));
 const Manage = lazy(() => import('./pages/Manage'));
 const Guide = lazy(() => import('./pages/Guide'));
 const Alerts = lazy(() => import('./pages/Alerts'));
+const Providers = lazy(() => import('./pages/Providers'));
 
 export default function App() {
     return <AppProvider><Shell /></AppProvider>;
@@ -74,8 +77,11 @@ function CappedNotice({ home }: { home: boolean }) {
 
 function Shell() {
     const { me, unread, alerts, requireLogin, openAuth, openApply, logout } = useApp();
-    const { path, params, parts } = useLocation();
-    const page = parts[0] || '';
+    const { path, params, parts, search } = useLocation();
+    // The share address /p/:id (WP59: the Worker gave it the post's og: tags) shows the post and is
+    // replaced with /posts/:id below.
+    const shared = parts[0] === 'p' && !!parts[1];
+    const page = shared ? 'posts' : parts[0] || '';
     const write = writeHref(params, path);
     // Stored while rendering, so the links below already point at the board on screen.
     if (page === 'trade') rememberBoard(params);
@@ -96,7 +102,7 @@ function Shell() {
         setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : params.get('q') ? '검색 결과' : '전체')
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
             : page === 'me' ? (parts[1] === 'alerts' ? '알림' : '내 거래')
-            : page === 'manage' ? '매니저 메뉴' : '');
+            : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : '');
     }, [page, params, parts]);
     // Back/Forward returns to the stored scroll position; the board and a post do it themselves
     // once their data is on screen.
@@ -106,11 +112,12 @@ function Shell() {
         if (y !== null) window.scrollTo(0, y);
     }, [path, params, page]);
 
-    // Links from the previous version (board at "/?kind=…", "/activity/…").
+    // Links from the previous version (board at "/?kind=…", "/activity/…"), and the share address.
     useEffect(() => {
         if (path === '/' && params.get('kind')) void navigate('/trade?' + params.toString(), { replace: true, force: true });
         if (page === 'activity') void navigate('/me/' + (parts[1] || 'posts'), { replace: true, force: true });
-    }, [path, params, page, parts]);
+        if (shared) void navigate('/posts/' + parts[1] + search, { replace: true, force: true });
+    }, [path, params, page, parts, shared, search]);
 
     const go = (to: string) => requireLogin(() => void navigate(to));
     // 대리(진행) needs 대리 인증; without it the button opens the application instead of the form.
@@ -137,6 +144,8 @@ function Shell() {
                     {me?.role !== 'manager' && <button type="button" className="header-link header-apply" aria-label="인증/등급 신청하기" onClick={() => openApply()}>
                         <ShieldCheck size={18} /><span className="label-long">인증/등급 신청하기</span><span className="label-short">인증/등급 신청</span>
                     </button>}
+                    {/* 중개/가측 (WP66): on every screen, as text (phones keep a compact one in the top bar). */}
+                    <Link to="/providers" className="header-link header-providers" aria-current={page === 'providers' ? 'page' : undefined}>{PROVIDER_TEXT.tab}</Link>
                     <button type="button" className="header-link header-chat" aria-label={`채팅${unread ? `, 읽지 않은 메시지 ${unread}개` : ''}`} onClick={() => go('/chat')}>
                         <MessageCircle size={20} /><span className="header-link-text">채팅</span>
                         {unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}
@@ -148,7 +157,7 @@ function Shell() {
                         {alerts > 0 && <b className="badge-count">{alerts > 99 ? '99+' : alerts}</b>}
                     </button>}
                     {me ? <DropdownMenu.Root>
-                        <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
+                        <DropdownMenu.Trigger className="account-trigger" aria-label="내 메뉴"><Avatar name={me.nickname} size="sm" grade={me.grade} trial={me.grade_trial} role={me.role} /><span className="account-name">{me.nickname}</span></DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                             <DropdownMenu.Content className="menu" align="end" sideOffset={8}>
                                 <div className="menu-label"><NameLine nickname={me.nickname} grade={me.grade} trial={me.grade_trial} role={me.role} badges={me.badges} compact />
@@ -182,6 +191,7 @@ function Shell() {
                     // Manage renders its tools only for role 'manager' (never for the 관리자 grade).
                     : page === 'manage' ? <Manage tab={parts[1] || 'applications'} />
                     : page === 'guide' ? <Guide />
+                    : page === 'providers' ? <Providers />
                     : <NotFound />}
             </Suspense>
         </main>
@@ -203,6 +213,8 @@ function Shell() {
         <AuthModal />
         <ApplyModal />
         <TrialPopup />
+        <GradeCelebration />
+        <PushBar />
     </>;
 }
 

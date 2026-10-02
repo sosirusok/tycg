@@ -1,6 +1,7 @@
 // Bindings configured in wrangler.jsonc plus secrets set at deploy time.
 interface Env {
-    ASSETS: Fetcher;
+    // Static assets (wrangler.jsonc assets.binding); missing on the local test servers without assets.
+    ASSETS?: Fetcher;
     DB: D1Database;
     // Optional: when absent, uploaded photos are stored in D1 instead.
     BUCKET?: R2Bucket;
@@ -11,6 +12,16 @@ interface Env {
     MANAGER_PASSWORD?: string;
     MANAGER_PASSWORD_HASH?: string;
     MANAGER_PASSWORD_SALT?: string;
+    // 웹 푸시 (WP64), Worker secrets that deploy.yml creates once when the secret list lacks
+    // VAPID_PRIVATE_KEY and never replaces: the P-256 private key as a JWK (JSON), its public key
+    // (base64url of the 65-byte point) and the subject (the site's https address). Without the private
+    // key or the subject, push is off and the app never offers '알림 켜기'.
+    VAPID_PRIVATE_KEY?: string;
+    VAPID_PUBLIC_KEY?: string;
+    VAPID_SUBJECT?: string;
+    // Test only: 'on' lets a request to 127.0.0.1 or localhost subscribe an http://127.0.0.1 endpoint (the
+    // mock push service of tests/verify-push.mjs). Set by scripts/test-local.mjs only; deploys never do.
+    PUSH_TEST?: string;
     // Test only: 'relaxed' lifts the post caps (open posts, posts per day, same title) for requests
     // to 127.0.0.1 or localhost. scripts/test-local.mjs sets it for the API suites; deploys never do.
     POST_LIMITS?: string;

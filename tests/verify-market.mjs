@@ -394,6 +394,113 @@ try {
         equal((await guest('posts?' + new URLSearchParams(query))).status, 400,
             'invalid search condition rejected: ' + Object.keys(query)[0]);
     }
+
+    // ---- 시즌 비공개 (WP68): hidden emblems of a known tier, seller side only ----
+    const hiddenSale = { ...common, title: `[로컬 QA] ${run}-hidden 18마스터`, tags: [{ tier: 'master', season: 18 }], ladderHidden: { master: 2 }, details: {} };
+    const hiddenId = await create(seller, hiddenSale, 'sale with 18시즌 마스터 and 2 hidden 마스터 emblems');
+    const storedHidden = await read(hiddenId);
+    equal([storedHidden.tags, storedHidden.ladder_hidden], [[{ tier: 'master', season: 18 }], { master: 2 }], 'GET returns the ladder and 시즌 비공개');
+    const hiddenOnlyId = await create(seller, { ...hiddenSale, title: `[로컬 QA] ${run}-hidden only`, tags: [] }, 'sale with only hidden 마스터 emblems');
+    const listed = await search({ kind: 'sell', category: 'account', q: run + '-hidden' });
+    equal([listed.find(p => p.id === hiddenId)?.ladder_hidden, listed.find(p => p.id === hiddenOnlyId)?.ladder_hidden], [{ master: 2 }, { master: 2 }], 'lists carry the 시즌 비공개 map');
+    equal((await read(saleId)).ladder_hidden, {}, 'a post without 시즌 비공개 carries an empty map');
+    const swapId = await create(seller, { ...common, kind: 'exchange', title: `[로컬 QA] ${run}-hidden swap`, price: null, tags: [], ladderHidden: { champion: 1 }, details: { wantedCategory: 'clan' } }, '교환 with 시즌 비공개 on the offered account');
+    equal((await read(swapId)).ladder_hidden, { champion: 1 }, 'the offered side of 교환 keeps 시즌 비공개');
+    for (const [label, payload] of [
+        ['ladderHidden on a 구매 post', { ...common, kind: 'buy', title: `[로컬 QA] ${run}-hidden buy`, tags: [], ladderHidden: { master: 1 } }],
+        ['ladderHidden on a 클랜 sale', { ...hiddenSale, category: 'clan', title: `[로컬 QA] ${run}-hidden clan`, ladderHidden: { master: 1 } }],
+        ['ladderHidden on a 대리 post', { ...common, kind: 'proxy_request', category: 'ladder', title: `[로컬 QA] ${run}-hidden proxy`, ladderHidden: { master: 1 } }],
+        ['hidden count 0', { ...hiddenSale, ladderHidden: { master: 0 } }],
+        ['hidden count 100', { ...hiddenSale, ladderHidden: { master: 100 } }],
+        ['hidden count 1.5', { ...hiddenSale, ladderHidden: { master: 1.5 } }],
+        ['hidden count as text', { ...hiddenSale, ladderHidden: { master: '2' } }],
+        ['unknown hidden tier', { ...hiddenSale, ladderHidden: { grandmaster: 1 } }],
+        ['ladderHidden as a list', { ...hiddenSale, ladderHidden: [{ tier: 'master', count: 2 }] }],
+    ]) {
+        const response = await validator('posts', 'POST', payload);
+        if (response.status === 201) fixturePosts.push({ owner: validator, id: response.data.id });
+        equal(response.status, 400, label + ' is refused');
+    }
+    // Search: '하나라도 맞으면' with every season of a tier also finds hidden emblems of that tier; specific
+    // seasons never do, and 'match=all' ignores them.
+    const latest = (await guest('config')).data.latestSeason;
+    const everyMaster = Array.from({ length: latest - 17 + 1 }, (_, i) => ({ tier: 'master', season: 17 + i }));
+    const hiddenQuery = { kind: 'sell', category: 'account', q: run + '-hidden' };
+    check(await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster) }), 'a buyer filter of every 마스터 season finds the hidden-only post');
+    check(await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify([...everyMaster, { tier: 'champion', season: 20 }]) }), 'every 마스터 season plus another tier still finds it');
+    check(await finds(hiddenId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 18 }]) }), 'a filter of only 18시즌 마스터 finds the post through its visible tag');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 18 }]) }), 'a filter of only 18시즌 마스터 never matches hidden emblems');
+    check(!await finds(hiddenId, { ...hiddenQuery, tags: JSON.stringify([{ tier: 'master', season: 19 }]) }), 'a filter of only 19시즌 마스터 does not find the post');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster.slice(1)) }), 'a filter missing one 마스터 season does not match hidden emblems');
+    check(!await finds(hiddenOnlyId, { ...hiddenQuery, tags: JSON.stringify(everyMaster), match: 'all' }), 'match=all ignores hidden emblems');
+    check(await finds(hiddenOnlyId, { kind: 'sell', author: fixtureUsers[0].id, q: '마스터', size: '40' }), "the bare tier word '마스터' also finds hidden emblems");
+    // Copy to a new post and 다시 올리기 build the new post from GET /posts/:id (the editor's prefill).
+    const source = await read(hiddenOnlyId);
+    const copyId = await create(seller, { ...hiddenSale, title: `[로컬 QA] ${run}-hidden copy`, tags: source.tags, ladderHidden: source.ladder_hidden }, '복사해서 새 글 from the hidden-only post');
+    equal((await read(copyId)).ladder_hidden, { master: 2 }, 'the copy keeps 시즌 비공개');
+    equal((await seller(`posts/${hiddenOnlyId}/status`, 'PATCH', { status: 'closed' })).status, 200, 'the hidden-only post is completed');
+    const closed = await read(hiddenOnlyId);
+    equal([closed.status, closed.ladder_hidden], ['closed', { master: 2 }], 'a completed post keeps 시즌 비공개');
+    const relistId = await create(seller, { ...hiddenSale, title: closed.title, tags: closed.tags, ladderHidden: closed.ladder_hidden }, '다시 올리기 of the completed post');
+    equal((await read(relistId)).ladder_hidden, { master: 2 }, 'the relisted post keeps 시즌 비공개');
+    // Edits: an empty map removes the rows; an edit from a page without the field keeps them while the post
+    // can hold them, and drops them when it cannot (구매).
+    await edit(seller, hiddenId, { ...hiddenSale, ladderHidden: {} }, 'edit with an empty 시즌 비공개');
+    equal((await read(hiddenId)).ladder_hidden, {}, 'the edit removed the hidden row');
+    const { ladderHidden: _omit, ...olderPage } = hiddenSale;
+    await edit(seller, copyId, { ...olderPage, title: `[로컬 QA] ${run}-hidden copy` }, 'edit from a page without ladderHidden');
+    equal((await read(copyId)).ladder_hidden, { master: 2 }, 'an edit without the field keeps 시즌 비공개');
+    await edit(seller, copyId, { ...olderPage, kind: 'buy', title: `[로컬 QA] ${run}-hidden copy`, tags: [] }, 'the copy edited into a 구매 post');
+    equal((await read(copyId)).ladder_hidden, {}, 'a 구매 post drops 시즌 비공개');
+
+    // ---- 클랜 래더 티어, 현재 클랜 티어 and 특징 태그 (WP70) ----
+    const clanSeasons = [{ tier: 'gold', season: 30 }, { tier: 'gold', season: 31 }, { tier: 'champion', season: 32 }];
+    const clanSale = { ...common, category: 'clan', title: `[로컬 QA] ${run}-clan 골드`, tags: [], clanTags: clanSeasons, details: { clanName: `큐에이${run}`, clanLevel: '15', clanMembers: '30', clanTier: 'gold', featureTags: JSON.stringify(['#클랜태그' + run.slice(0, 3)]) } };
+    const clanId = await create(seller, clanSale, 'clan sale with clan seasons, 현재 클랜 티어 and a tag');
+    const clanPost = await read(clanId);
+    equal([clanPost.clan_tags, clanPost.details.clanTier, JSON.parse(clanPost.details.featureTags)], [[{ tier: 'champion', season: 32 }, { tier: 'gold', season: 31 }, { tier: 'gold', season: 30 }], 'gold', ['클랜태그' + run.slice(0, 3)]], 'GET returns the clan seasons, the current tier and the tag');
+    const clanBuyId = await create(seller, { ...common, kind: 'buy', category: 'clan', title: `[로컬 QA] ${run}-clan buy`, tags: [], clanTags: [{ tier: 'diamond', season: 31 }], details: { clanTier: 'diamond' } }, '구매 clan post with 원하는 클랜 티어');
+    equal((await read(clanBuyId)).clan_tags, [{ tier: 'diamond', season: 31 }], 'a 구매 clan post keeps its wanted clan seasons');
+    const swapClanId = await create(seller, { ...common, kind: 'exchange', category: 'account', title: `[로컬 QA] ${run}-clan swap`, price: null, tags: [], wantedClanTags: [{ tier: 'platinum', season: 29 }], details: { wantedCategory: 'clan', wantedClanTier: 'platinum' } }, '교환 asking for a clan');
+    const swap = await read(swapClanId);
+    equal([swap.wanted_clan_tags, swap.details.wantedClanTier, swap.clan_tags], [[{ tier: 'platinum', season: 29 }], 'platinum', []], 'the wanted clan ladder and tier are kept apart from the offered side');
+    const clanQuery = { kind: 'sell', category: 'clan', q: run + '-clan' };
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }]) }), 'clan filter (any): 31시즌 클랜 골드');
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }, { tier: 'gold', season: 12 }]) }), 'clan filter (any) with one season it lacks');
+    check(!await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 31 }, { tier: 'gold', season: 12 }]), match: 'all' }), 'clan filter (all) needs every season');
+    check(await finds(clanId, { ...clanQuery, clanTags: JSON.stringify([{ tier: 'gold', season: 30 }, { tier: 'gold', season: 31 }]), match: 'all' }), 'clan filter (all) with both seasons');
+    check(await finds(clanId, { ...clanQuery, clanTier: 'gold' }) && !await finds(clanId, { ...clanQuery, clanTier: 'diamond' }), '현재 클랜 티어 filter');
+    check(await finds(clanId, { ...clanQuery, clanLevel: '15', clanMembersMin: '30', clanMembersMax: '30' }) && !await finds(clanId, { ...clanQuery, clanLevel: '16' }), '클랜 레벨 and 클랜원 수 filters');
+    check(await finds(clanId, { kind: 'sell', tag: '클랜태그' + run.slice(0, 3) }), 'the tag filter finds the clan post');
+    for (const [label, query] of [['an unknown clan tier', { clanTier: 'master' }], ['a clan season out of range', { clanTags: JSON.stringify([{ tier: 'gold', season: 999 }]) }], ['a tag with a space', { tag: '불새 상류' }]]) {
+        equal((await guest('posts?' + new URLSearchParams({ kind: 'sell', category: 'clan', ...query }))).status, 400, 'search refuses ' + label);
+    }
+    // An edit from a page without the clan fields keeps them; an empty list clears them.
+    const { clanTags: _clanOmit, ...olderClan } = clanSale;
+    await edit(seller, clanId, olderClan, 'clan edit from a page without clanTags');
+    equal((await read(clanId)).clan_tags.length, 3, 'an edit without clanTags keeps the clan seasons');
+    await edit(seller, clanId, { ...clanSale, clanTags: [] }, 'clan edit with an empty clan ladder');
+    equal((await read(clanId)).clan_tags, [], 'an empty clanTags clears them');
+    const tagList = n => JSON.stringify(Array.from({ length: n }, (_, i) => `태그${i}`));
+    for (const [label, payload] of [
+        ['a personal tier on a clan ladder', { ...clanSale, clanTags: [{ tier: 'master', season: 30 }] }],
+        ['a clan season before the first clan-ladder season', { ...clanSale, clanTags: [{ tier: 'gold', season: 5 }] }],
+        ['a clan season after the latest season', { ...clanSale, clanTags: [{ tier: 'gold', season: 999 }] }],
+        ['an unknown 현재 클랜 티어', { ...clanSale, details: { ...clanSale.details, clanTier: 'master' } }],
+        ['11 tags', { ...common, title: `[로컬 QA] ${run}-tags 11`, details: { featureTags: tagList(11) } }],
+        ['a 13-character tag', { ...common, title: `[로컬 QA] ${run}-tags 13`, details: { featureTags: JSON.stringify(['가나다라마바사아자차카타파']) } }],
+        ['a tag with a space', { ...common, title: `[로컬 QA] ${run}-tags space`, details: { featureTags: JSON.stringify(['불새 상류']) } }],
+        ['tags on a 구매 post', { ...common, kind: 'buy', title: `[로컬 QA] ${run}-tags buy`, tags: [], details: { featureTags: JSON.stringify(['불새상류']) } }],
+    ]) {
+        const response = await validator('posts', 'POST', payload);
+        if (response.status === 201) fixturePosts.push({ owner: validator, id: response.data.id });
+        equal(response.status, 400, label + ' is refused');
+    }
+    const tenTags = await create(seller, { ...common, title: `[로컬 QA] ${run}-tags 10`, details: { featureTags: tagList(10) } }, '10 tags (the most) are accepted');
+    equal(JSON.parse((await read(tenTags)).details.featureTags).length, 10, 'the 10 tags are kept');
+    // 레어닉 is a 닉 종류.
+    const rareId = await create(seller, { ...common, title: `[로컬 QA] ${run}-rare 사과`, details: { nicknameChars: '2', nicknameTypes: JSON.stringify(['레어닉']) } }, '레어닉 sale');
+    check(await finds(rareId, { kind: 'sell', category: 'account', q: run + '-rare', nicknameTypes: JSON.stringify(['레어닉']) }), 'nicknameTypes 레어닉 finds the 레어닉 sale');
 } catch (error) {
     failed = error;
 } finally {

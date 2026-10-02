@@ -86,6 +86,13 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
+// The member's paid rank for the manager's handling order (WP60: 신고 and the manager's chat list), as
+// priorityRank reads it: the highest current grade the manager granted (source 'manager', so a 플러스 체험
+// counts as 일반), with 관리자 (rank 4) counted as 엘리트 (3); 0 for none and for a withdrawn member.
+// `alias` is the users table alias in the surrounding query. Binds nothing.
+export const paidRankSql = (alias: string) => `COALESCE((SELECT MIN(MAX(g.rank),3) FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND g.source='manager'
+    AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER))),0)`;
+
 // A trade counts once the other member confirmed it ('확인' or their 후기) and while the manager has
 // not removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
 export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
@@ -165,22 +172,44 @@ export const LAST_SEEN_STEP = 10 * 60000;
 // once a week so an active member stays signed in without extra writes.
 // The same session read gives '최근 접속' (users.last_seen_at); it is written only when it is empty
 // or 10 minutes old, and the WHERE repeats that test so parallel requests write it once.
-export async function currentUser(r: Request): Promise<User | null> {
+// visit false (the service worker's read when a 웹 푸시 arrives, WP64): none of these writes.
+export async function currentUser(r: Request, visit = true): Promise<User | null> {
     const t = tokenOf(r);
     if (!t) return null;
     const token = await digest(t), now = Date.now();
-    const row = await db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
-        .bind(token, now).first<any>();
-    if (!row) return null;
+    const row = await sessionStatement(token, now).first<any>();
+    return row ? userFromSession(row, token, now, visit) : null;
+}
+
+// The session read: the token's digest, now.
+function sessionStatement(token: string, now: number) {
+    return db().prepare(`SELECT s.expires_at AS session_expires_at,u.last_seen_at,u.trial_at,EXISTS(SELECT 1 FROM blocks bl WHERE bl.user_id=u.id) AS has_blocks,u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.suspended_until,u.celebrated_rank,${memberColumns('u')} FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?`)
+        .bind(token, now);
+}
+
+// One D1 call for the session and the caller's own reads (채팅 전송, WP69): `extra` builds statements
+// from the session token's digest and now (they find the member through the sessions row themselves),
+// and the visit writes go to `defer` for the caller's own batch instead of a call of their own.
+export async function currentUserWith(r: Request, extra: (token: string, now: number) => D1PreparedStatement[], defer: D1PreparedStatement[]) {
+    const t = tokenOf(r);
+    if (!t) return { user: null, results: [] as D1Result[] };
+    const token = await digest(t), now = Date.now();
+    const [session, ...results] = await db().batch([sessionStatement(token, now), ...extra(token, now)]);
+    const row = session.results[0] as any;
+    return { user: row ? await userFromSession(row, token, now, true, defer) : null, results };
+}
+
+async function userFromSession(row: any, token: string, now: number, visit: boolean, defer?: D1PreparedStatement[]): Promise<User> {
     const { session_expires_at, last_seen_at, trial_at, has_blocks, ...user } = row;
     const writes: D1PreparedStatement[] = [];
-    if (session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
-    if (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP) {
+    if (visit && session_expires_at - now < (SESSION_DAYS - 7) * DAY) writes.push(db().prepare('UPDATE sessions SET expires_at=? WHERE token=?').bind(now + SESSION_DAYS * DAY, token));
+    if (visit && (last_seen_at === null || last_seen_at <= now - LAST_SEEN_STEP)) {
         writes.push(db().prepare('UPDATE users SET last_seen_at=? WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<=?)').bind(now, user.id, now - LAST_SEEN_STEP));
         // A visit resumes 자동 끌올 paused for no visit (WP52): the member is due on the next tick.
         writes.push(db().prepare("UPDATE automation SET pause_reason='',paused_at=NULL,bump_next_at=?,updated_at=? WHERE user_id=? AND pause_reason='away'").bind(now, now, user.id));
     }
-    if (writes.length) await db().batch(writes);
+    if (defer) defer.push(...writes);
+    else if (writes.length) await db().batch(writes);
     // Catch-up for the deploy gap: a member who signed up inside the trial window while the previous
     // Worker still served has no trial yet. Only members with no grade row at all, once per isolate.
     // A failed catch-up never fails the request; the member is tried again in the next isolate.
@@ -245,8 +274,8 @@ export async function grantTrial(userId: string, now = Date.now(), catchUp = fal
     return r[0].meta.changes > 0;
 }
 
-export async function requireUser(r: Request) {
-    const u = await currentUser(r);
+export async function requireUser(r: Request, visit = true) {
+    const u = await currentUser(r, visit);
     if (!u) fail(401, '로그인이 필요합니다.');
     return u;
 }
@@ -300,11 +329,12 @@ export function csrf(r: Request) {
     if (r.headers.get('sec-fetch-site') === 'cross-site') fail(403, '허용되지 않은 요청입니다.');
 }
 
-export async function limit(key: string, max: number, ms: number) {
+// `text` names the limit when it is a rule members meet (WP58: '맞는 글 채팅은 하루 20번까지입니다.').
+export async function limit(key: string, max: number, ms: number, text = '요청이 많습니다. 잠시 후 다시 시도해 주세요.') {
     const now = Date.now();
     const r = await db().prepare('INSERT INTO rate_limits (key,count,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<=? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<=? THEN excluded.reset_at ELSE reset_at END RETURNING count')
         .bind(key, now + ms, now, now).first<{ count: number }>();
-    if (r && r.count > max) fail(429, '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+    if (r && r.count > max) fail(429, text);
 }
 
 export function textField(v: unknown, min: number, max: number, label: string) {

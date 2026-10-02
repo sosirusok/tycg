@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { AD_TEXT, BADGES, GRADES, APPLICATION_STATUS_NAMES, applicationTitle, gradeInfo, type Application, type GradeId, type PlanId } from '../../shared/membership';
 import { MEMBER_REPORT_REASONS, SUSPEND_DAYS, dateText, priceText, longDate, reviewName, suspendDaysLabel, suspendUntilText, type Review, type User } from '../../shared/market';
 import { api, errorText } from '../lib/api';
+import { copyText } from '../lib/share';
 import { Link } from '../lib/router';
-import { Modal, NameLine } from './ui';
+import { Avatar, Modal, NameLine } from './ui';
 
 type Grant = { id: number; grade: GradeId; expires_at: number | null; granted_at: number; application_id: string | null; source?: string };
 type Revoke = { name: string; description?: string; task: () => Promise<unknown>; done: string };
@@ -12,13 +13,38 @@ type Sanction = { id: number; days: number | null; reason: string; created_at: n
 // A 후기 the member received (GET /users/:id/reviews), which the manager may delete (WP23).
 type ReviewRow = Review & { nickname: string };
 // One of the member's trades (WP23, WP43) with 거래가 and backing; confirmed once the other member answered.
-type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number;
-    // 운영진 중개 (WP65): the manager brokered this trade; the trade count is unchanged.
-    brokered?: number };
+type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number };
 type TradeCounts = { confirmed: number; pending: number; denied: number };
-type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string; ad_off?: number }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
+type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string; ad_off?: number; avatar_thumb?: string | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
+
+// 임시 비밀번호 발급 (WP08): a confirm naming the member (children), then the password shown once with
+// '복사' (it is not stored anywhere readable). Used by the member panel and by 비밀번호 재설정 (WP59), whose
+// hint says where to send it.
+export function TempPassword({ userId, open, onClose, hint, children, onIssued }: { userId: string; open: boolean; onClose: () => void; hint: string; children?: ReactNode; onIssued?: () => void }) {
+    const [busy, setBusy] = useState(false), [temp, setTemp] = useState('');
+    const issue = async () => {
+        setBusy(true);
+        try { const d = await api<{ password: string }>(`manage/users/${userId}/password`, 'POST', {}); onClose(); setTemp(d.password); onIssued?.(); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(false); }
+    };
+    const copy = async () => { if (await copyText(temp)) toast('복사 완료'); else toast.error('복사하지 못했습니다.'); };
+    return <>
+        <Modal open={open} onClose={() => { if (!busy) onClose(); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={onClose}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void issue()}>발급</button></>}>
+            {children}
+        </Modal>
+        <Modal open={!!temp} onClose={() => setTemp('')} title="임시 비밀번호"
+            footer={<button type="button" className="btn btn-primary" onClick={() => void copy()}>복사</button>}>
+            <div className="field">
+                <input className="input mp-temp" readOnly value={temp} aria-label="임시 비밀번호" onFocus={e => e.currentTarget.select()} />
+                <span className="field-hint">{hint}</span>
+            </div>
+        </Modal>
+    </>;
+}
 
 // Manager tools for one member: verification switches, grade grants, applications.
 // `version` reloads the panel after changes made elsewhere (e.g. the chat's application card).
@@ -26,8 +52,10 @@ const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 export function MemberPanel({ userId, onChange, version = 0, inChat = false }: { userId: string; onChange?: () => void; version?: number; inChat?: boolean }) {
     const [data, setData] = useState<Detail | null>(null), [error, setError] = useState('');
     const [grade, setGrade] = useState<GradeId>('plus'), [plan, setPlan] = useState<PlanId>('permanent'), [busy, setBusy] = useState(false);
-    // Temporary password: confirm first, then show the result once (it is not stored anywhere readable).
-    const [resetting, setResetting] = useState(false), [temp, setTemp] = useState('');
+    // Temporary password: confirm first, then show the result once (TempPassword).
+    const [resetting, setResetting] = useState(false);
+    // '프로필 사진 삭제' (WP59) asks first.
+    const [removingPhoto, setRemovingPhoto] = useState(false);
     // Turning a badge off or taking back a grade asks first.
     const [revoke, setRevoke] = useState<Revoke | null>(null);
     // 이용 정지: one button opens the form (period and reason); 정지 해제 asks first.
@@ -44,19 +72,9 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     const run = async (task: () => Promise<unknown>, message: string) => {
         setBusy(true);
-        try { await task(); toast(message); setRevoke(null); setSuspendForm(false); setClearing(false); setRemoving(null); setRemovingTrade(null); await load(); onChange?.(); }
+        try { await task(); toast(message); setRevoke(null); setSuspendForm(false); setClearing(false); setRemoving(null); setRemovingTrade(null); setRemovingPhoto(false); await load(); onChange?.(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
-    };
-    const issue = async () => {
-        setBusy(true);
-        try { const d = await api<{ password: string }>(`manage/users/${userId}/password`, 'POST', {}); setResetting(false); setTemp(d.password); }
-        catch (e) { toast.error(errorText(e)); }
-        finally { setBusy(false); }
-    };
-    const copy = async () => {
-        try { await navigator.clipboard.writeText(temp); toast('복사 완료'); }
-        catch { toast.error('복사하지 못했습니다.'); }
     };
     if (error) return <p className="muted">{error}</p>;
     if (!data) return <div className="skeleton" style={{ height: 240 }} />;
@@ -69,8 +87,9 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
 
     return <div className="member-panel">
         <div className="mp-head">
-            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
-            <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span>
+            <div className="mp-who"><Avatar name={u.nickname} src={u.avatar_thumb} grade={u.grade} trial={u.grade_trial} role={u.role} />
+                <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
+                    <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span></span></div>
         </div>
         {pending.length > 0 && !inChat && <div className="mp-block">
             <h4>신청 대기</h4>
@@ -136,7 +155,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             <h4>거래</h4>
             {data.tradeCounts && <p className="small muted">확인 거래 {data.tradeCounts.confirmed} · 확인 대기 {data.tradeCounts.pending} · 거래 아님 {data.tradeCounts.denied}</p>}
             {trades.map(t => <div key={t.id} className="mp-row mp-review">
-                <span className="grow">{t.title || '삭제된 글'} {!!t.brokered && <span className="tag tag-line">운영진 중개</span>} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.price !== null ? ` · 거래가 ${priceText(t.price)}` : ''}{` · 기준 ${t.backing !== null ? priceText(t.backing) + (t.backing_offer ? ' (제시)' : '') : '없음'}`}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
+                <span className="grow">{t.title || '삭제된 글'} <span className="muted small">{t.partner_nickname} · {dateText(t.created_at)}{t.price !== null ? ` · 거래가 ${priceText(t.price)}` : ''}{` · 기준 ${t.backing !== null ? priceText(t.backing) + (t.backing_offer ? ' (제시)' : '') : '없음'}`}{t.confirmed ? '' : ' · 확인 대기'}</span></span>
                 <button type="button" className="btn btn-line btn-xs" disabled={busy} onClick={() => setRemovingTrade(t)}>삭제</button>
             </div>)}
         </div>}
@@ -155,6 +174,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
                 {!suspendedUntil && <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setSuspendForm(true)}>이용 정지</button>}
             </div>
+            {u.avatar_thumb && <button type="button" className="btn btn-line btn-sm btn-block mt-8" disabled={busy} onClick={() => setRemovingPhoto(true)}>프로필 사진 삭제</button>}
         </div>}
         <Modal open={!!revoke} onClose={() => { if (!busy) setRevoke(null); }} title={revoke ? `${u.nickname}님 ${revoke.name} 회수` : ''} description={revoke?.description}
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRevoke(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (revoke) void run(revoke.task, revoke.done); }}>회수</button></>}>
@@ -183,16 +203,12 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
             footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemoving(null)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => { if (removing) void run(() => api(`manage/reviews/${removing.id}`, 'DELETE'), '삭제 완료'); }}>삭제</button></>}>
             {removing && <p className="small">{reviewName(removing.good)} · {removing.nickname}{removing.text ? ` · ${removing.text}` : ''}</p>}
         </Modal>
-        <Modal open={resetting} onClose={() => { if (!busy) setResetting(false); }} title="임시 비밀번호 발급" description="기존 비밀번호는 바로 쓸 수 없게 되고, 모든 기기에서 로그아웃됩니다."
-            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setResetting(false)}>취소</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void issue()}>발급</button></>}>
+        <TempPassword userId={u.id} open={resetting} onClose={() => setResetting(false)} hint="채팅으로 전달">
             <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
-        </Modal>
-        <Modal open={!!temp} onClose={() => setTemp('')} title="임시 비밀번호"
-            footer={<button type="button" className="btn btn-primary" onClick={() => void copy()}>복사</button>}>
-            <div className="field">
-                <input className="input mp-temp" readOnly value={temp} aria-label="임시 비밀번호" onFocus={e => e.currentTarget.select()} />
-                <span className="field-hint">채팅으로 전달</span>
-            </div>
+        </TempPassword>
+        <Modal open={removingPhoto} onClose={() => { if (!busy) setRemovingPhoto(false); }} title="프로필 사진 삭제" description="기본 프로필로 바뀝니다."
+            footer={<><button type="button" className="btn btn-line" disabled={busy} onClick={() => setRemovingPhoto(false)}>취소</button><button type="button" className="btn btn-danger-solid" disabled={busy} onClick={() => void run(() => api(`manage/users/${u.id}/avatar`, 'DELETE'), '삭제 완료')}>삭제</button></>}>
+            <NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
         </Modal>
     </div>;
 }

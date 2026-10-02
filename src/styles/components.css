@@ -45,6 +45,9 @@
   .post-card-specs > * { flex: none; }
   .post-card-specs .tag { height: 20px; padding: 0 6px; }
   .post-card-specs .spec { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Ladder pills (WP68) wrap instead of being cut at the edge; a pill wider than the row ends in '…'. */
+  .post-card-specs.has-ladder { flex-wrap: wrap; row-gap: 4px; }
+  .post-card-specs.has-ladder .ladder-pill { flex: 0 1 auto; min-width: 0; }
   .post-card-thumb { width: 72px; height: 72px; }
   .post-card-bottom { align-items: center; gap: 4px 12px; }
   .post-card .price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; }
@@ -92,22 +95,81 @@
 .mini-card-thumb { position: relative; display: block; width: 64px; height: 64px; border-radius: var(--r-8); overflow: hidden; background: var(--fill); }
 .mini-card-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
-/* Season picker: a chip row of the nine tiers, then the open tier's season boxes */
+/* Season picker: a chip row of the nine tiers (highest first), then the open tier's season boxes (newest
+   first) and, under them, one removable row per picked tier (WP68). */
 .season-picker { display: grid; gap: 0; min-width: 0; }
 .tier-chips { gap: 6px; }
 .tier-chips .chip { flex: none; }
 .tier-chips .chip b { margin-left: 4px; color: var(--brand); font-weight: 700; }
 .tier-chips .chip[aria-pressed='true'] b { color: var(--white); }
+/* A tier with picks wears its tier colors; the open one adds a brand ring. */
+.tier-chips .chip.has-picks, .tier-chips .chip.has-picks[aria-pressed='true'] { background: var(--tier-bg); border-color: var(--tier-line); color: var(--tier-ink); font-weight: 600; }
+.tier-chips .chip.has-picks b, .tier-chips .chip.has-picks[aria-pressed='true'] b { color: inherit; }
+.tier-chips .chip.has-picks[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--white), 0 0 0 4px var(--brand); }
+.tier-chips.chip-scroll { padding: 4px; margin: -4px; }
 .season-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+.season-head strong { color: var(--ink); font-size: var(--fs-13); font-weight: 700; }
+.season-actions { display: inline-flex; gap: 12px; }
 .season-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin-top: 10px; }
 .season-head + .season-grid { margin-top: 6px; }
 .season-box { position: relative; display: grid; place-items: center; height: 36px; border: 1px solid var(--line); border-radius: var(--r-8); color: var(--ink-2); font-size: var(--fs-13); font-weight: 500; cursor: pointer; user-select: none; }
 .season-box input { position: absolute; opacity: 0; pointer-events: none; }
 .season-box:hover { border-color: var(--line-2); }
 .season-box:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+/* 시즌 비공개 (WP68, 판매 and the offered side of 교환): a checkbox and a count. */
+.season-hidden { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.season-hidden .input-unit { width: 92px; }
+.season-hidden .input { height: 36px; padding-right: 30px; }
 .picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .picked button { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 10px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; }
 .picked button:hover { background: var(--line); }
+.ladder-rows { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.ladder-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.ladder-row .ladder-pill { cursor: pointer; text-align: left; }
+.ladder-clear { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; color: var(--ink-3); }
+.ladder-clear:hover { background: var(--fill); color: var(--ink); }
+
+/* 래더 티어 pills (WP68): one pill per tier, '모든 시즌 챔피언' or '챌린저 23~32, 20, 18시즌', in the tier's
+   colors (base.css tokens). They wrap on the detail page and stay on one line on cards. */
+.ladder-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.ladder-pill { display: inline-block; max-width: 100%; padding: 3px 11px; border: 1px solid var(--tier-line); border-radius: 14px; background: var(--tier-bg); color: var(--tier-ink); font-size: var(--fs-13); font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.ladder-pill b { font-weight: 700; }
+/* The detail page's '래더 기록', '원하는 래더' and '래더 시즌' read a step larger. */
+.ladder-block { gap: 8px; }
+.ladder-block .ladder-pill { padding: 4px 12px; border-radius: 15px; font-size: var(--fs-14); }
+.post-card-specs .ladder-pill, .mini-card .ladder-pill { padding: 1px 8px; border-radius: 12px; font-size: var(--fs-12); line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tier-champion { --tier-bg: var(--tier-champion-bg); --tier-ink: var(--tier-champion-ink); --tier-line: var(--tier-champion-line); }
+.tier-challenger { --tier-bg: var(--tier-challenger-bg); --tier-ink: var(--tier-challenger-ink); --tier-line: var(--tier-challenger-line); }
+.tier-master { --tier-bg: var(--tier-master-bg); --tier-ink: var(--tier-master-ink); --tier-line: var(--tier-master-line); }
+.tier-diamond { --tier-bg: var(--tier-diamond-bg); --tier-ink: var(--tier-diamond-ink); --tier-line: var(--tier-diamond-line); }
+.tier-platinum { --tier-bg: var(--tier-platinum-bg); --tier-ink: var(--tier-platinum-ink); --tier-line: var(--tier-platinum-line); }
+.tier-gold { --tier-bg: var(--tier-gold-bg); --tier-ink: var(--tier-gold-ink); --tier-line: var(--tier-gold-line); }
+.tier-silver { --tier-bg: var(--tier-silver-bg); --tier-ink: var(--tier-silver-ink); --tier-line: var(--tier-silver-line); }
+.tier-bronze { --tier-bg: var(--tier-bronze-bg); --tier-ink: var(--tier-bronze-ink); --tier-line: var(--tier-bronze-line); }
+.tier-iron { --tier-bg: var(--tier-iron-bg); --tier-ink: var(--tier-iron-ink); --tier-line: var(--tier-iron-line); }
+/* 클랜 래더 티어 (WP70): solid clan colors; the line is the clan text color (a gold pill keeps a darker edge). */
+.clan-tier-champion { --tier-bg: var(--clan-champion-bg); --tier-ink: var(--clan-champion-ink); --tier-line: var(--clan-champion-text); --clan-text: var(--clan-champion-text); }
+.clan-tier-challenger { --tier-bg: var(--clan-challenger-bg); --tier-ink: var(--clan-challenger-ink); --tier-line: var(--clan-challenger-text); --clan-text: var(--clan-challenger-text); }
+.clan-tier-diamond { --tier-bg: var(--clan-diamond-bg); --tier-ink: var(--clan-diamond-ink); --tier-line: var(--clan-diamond-text); --clan-text: var(--clan-diamond-text); }
+.clan-tier-platinum { --tier-bg: var(--clan-platinum-bg); --tier-ink: var(--clan-platinum-ink); --tier-line: var(--clan-platinum-text); --clan-text: var(--clan-platinum-text); }
+.clan-tier-gold { --tier-bg: var(--clan-gold-bg); --tier-ink: var(--clan-gold-ink); --tier-line: var(--clan-gold-text); --clan-text: var(--clan-gold-text); }
+.clan-tier-silver { --tier-bg: var(--clan-silver-bg); --tier-ink: var(--clan-silver-ink); --tier-line: var(--clan-silver-text); --clan-text: var(--clan-silver-text); }
+.clan-tier-bronze { --tier-bg: var(--clan-bronze-bg); --tier-ink: var(--clan-bronze-ink); --tier-line: var(--clan-bronze-text); --clan-text: var(--clan-bronze-text); }
+/* The clan name on the detail page takes its 현재 클랜 티어 color, as in the game. */
+.clan-name { color: var(--clan-text); font-weight: 700; }
+/* 현재 클랜 티어 chips: the clan rank after the name ('챔피언 1위'). */
+.clan-tier-chips { gap: 6px; }
+.clan-tier-chips .chip small { color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+.clan-tier-chips .chip.has-picks, .clan-tier-chips .chip.has-picks[aria-pressed='true'] { background: var(--tier-bg); border-color: var(--tier-line); color: var(--tier-ink); font-weight: 600; }
+.clan-tier-chips .chip.has-picks small { color: inherit; }
+
+/* 특징 태그 (WP70): small gray '#불새상류' chips; in the editor they are removable like 'picked'. */
+.feature-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.feature-tag { display: inline-flex; align-items: center; max-width: 100%; height: 22px; padding: 0 8px; border-radius: var(--r-4); background: var(--fill); color: var(--ink-2); font-size: var(--fs-12); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.post-card-tags { margin-top: 6px; }
+.tag-input { display: grid; gap: 8px; min-width: 0; }
+.tag-input .picked { margin-top: 0; }
+.tag-chips { gap: 6px; }
 
 /* Choice grid (skins, ranks) */
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
@@ -189,6 +251,21 @@
 .header-notice-inner { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .header-notice p { flex: 1; min-width: 0; color: var(--ink-2); font-size: var(--fs-14); }
 .header-notice .icon-btn { flex: none; width: 32px; height: 32px; }
+/* 알림 켜기 (WP64): one line over the page, right below the header, clear of the toasts above it, under
+   menus and dialogs. */
+.push-bar { position: fixed; z-index: 50; top: calc(var(--header-h) + 12px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(560px, calc(100vw - 32px)); padding: 8px 8px 8px 14px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); box-shadow: var(--shadow-pop); animation: fade .2s ease-out; }
+.push-bar .cicon { flex: none; }
+.push-bar p { flex: 1; min-width: 0; color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
+.push-bar .btn { flex: none; }
+.push-bar .icon-btn { flex: none; width: 32px; height: 32px; }
+@media (max-width: 640px) {
+  .push-bar { top: calc(var(--header-h) + 8px); width: calc(100vw - 16px); gap: 8px; padding-left: 10px; }
+  .push-bar p { font-size: var(--fs-13); }
+}
+/* In a chat room the bar is a line of the room's column (below the pinned post bar, above the messages), so
+   it takes its own space and never covers the pinned bar or the composer; the floating one is hidden there. */
+body.in-room .push-bar:not(.push-bar-room) { display: none; }
+.push-bar.push-bar-room { position: static; z-index: auto; flex: none; width: auto; margin: 8px 12px; transform: none; box-shadow: none; }
 .menu-sub { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--fs-13); }
 .grade-trial { color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; }
 .trial-admin, .usage-admin { display: grid; gap: 6px; max-width: 560px; margin-bottom: 28px; }
@@ -279,3 +356,27 @@
   .home-ad-x::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--fill); }
   .home-ad-x svg { position: relative; }
 }
+
+/* 판매 통계 (WP63): CSS bars in the brand color on white, no chart library. */
+.stats-sheet { display: grid; gap: 24px; }
+.stats-block h3 { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.stats-block h3 > span { color: var(--ink-3); font-size: var(--fs-13); font-weight: 400; }
+/* A label column, then 7 KST days: 조회 bars with their value, the day, then 찜 and 채팅 under them. */
+.stats-grid { display: grid; grid-template-columns: 36px repeat(7, minmax(0, 1fr)); align-items: end; gap: 6px 6px; }
+.stats-row-label { color: var(--ink-3); font-size: var(--fs-12); white-space: nowrap; }
+.stats-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 112px; }
+.stats-val { color: var(--ink-2); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+.stats-bar { display: block; width: min(24px, 100%); border-radius: var(--r-4) var(--r-4) 0 0; background: var(--brand); }
+.stats-day { padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: var(--fs-12); text-align: center; }
+.stats-num { color: var(--ink); font-size: var(--fs-13); text-align: center; font-variant-numeric: tabular-nums; }
+.stats-effect { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.stats-effect li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--ink); font-size: var(--fs-14); }
+.stats-effect-nums { color: var(--ink-3); }
+.stats-effect-nums b { color: var(--ink); font-weight: 700; }
+.stats-note { margin-top: 10px; color: var(--ink-2); font-size: var(--fs-13); }
+/* 24 hours of the day (엘리트 and up). */
+.stats-hours { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); align-items: end; gap: 2px; height: 80px; border-bottom: 1px solid var(--line); }
+.stats-hour { display: flex; align-items: flex-end; height: 100%; }
+.stats-hour-bar { display: block; width: 100%; border-radius: 2px 2px 0 0; background: var(--brand); }
+.stats-hours-axis { display: grid; grid-template-columns: repeat(4, 1fr); padding-top: 6px; color: var(--ink-3); font-size: var(--fs-12); }
+.stats-market p { color: var(--ink); font-size: var(--fs-15); font-weight: 600; }

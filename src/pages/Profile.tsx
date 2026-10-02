@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Ban, Bell, BellRing, ChevronRight, Flag, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
-import { ALERT_TEXT, BADGES, GRADES, gradeInfo, trialStatus } from '../../shared/membership';
-import { ApiError, api, errorText } from '../lib/api';
+import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type ProviderType } from '../../shared/membership';
+import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { setPageTitle, useApp } from '../app/state';
-import { gradeBenefits } from '../app/ApplyModal';
+import { offerPush, setPageTitle, useApp } from '../app/state';
+import { isPaidGrade, nextBenefit } from '../../shared/benefits';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
-import { WalletGauge, couponItem, useMinuteClock, type Usage } from '../components/Wallet';
+import { WalletGauge, autoItem, useMinuteClock, type Usage } from '../components/Wallet';
+import { ProviderEditor, type OwnCard } from '../components/ProviderCard';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -20,13 +21,14 @@ const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZo
 // tradeCount, dealSum (거금), goodCount and reviewCount (WP23): trades as seller or buyer, 좋아요 received, 후기 received.
 type Profile = User & { postCount: number; closedCount: number; tradeCount?: number; dealSum?: number; goodCount?: number; reviewCount?: number; prev_nickname?: string; nickname_next_at?: number; deleted?: boolean; blocked?: boolean; last_seen_at?: number | null; suspended?: boolean;
     // 판매자 구독 (WP54): whether the viewer follows the member, '구독 허용', and (own profile) the follower count.
-    followed?: boolean; follow_allowed?: boolean; follower_count?: number };
+    followed?: boolean; follow_allowed?: boolean; follower_count?: number;
+    // 프로필 사진 (WP59): the 256px photo for the head and its 64px copy; none: the initial letter.
+    avatar_id?: string; avatar_thumb?: string };
 // One row of the 후기 tab: the 후기 plus its author's name line (탈퇴회원 once they left).
-// brokered: the trade of the 후기 was brokered by the manager (운영진 중개, WP65).
-type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean; brokered?: number };
+type ReviewRow = Review & { nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; author_deleted?: boolean };
 // One row of the 거래 기록 tab (WP51): a counted trade with the member's side (sold: seller), the title kept
 // with the trade, 거래가 and the other member's name line.
-type TradeRow = { id: string; post_id: number; created_at: number; price: number | null; kind: string; sold: boolean; title: string; post_gone: boolean; post_hidden: boolean; brokered: boolean;
+type TradeRow = { id: string; post_id: number; created_at: number; price: number | null; kind: string; sold: boolean; title: string; post_gone: boolean; post_hidden: boolean;
     partner_id: string | null; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; partner_deleted?: boolean };
 type ProfileTab = 'active' | 'closed' | 'trades' | 'reviews';
 const PAGE_SIZE = 20;
@@ -45,6 +47,14 @@ export default function ProfilePage({ id }: { id?: string }) {
     // Counts list resets (tab switch, profile save), so a '더 보기' page for an old list is dropped.
     const listGen = useRef(0);
     const [account, setAccount] = useState<'' | 'password' | 'withdraw'>(''), [reporting, setReporting] = useState(false);
+    // The member's own 중개/가측 card (WP66), edited from the 인증 card.
+    const [card, setCard] = useState<{ type: ProviderType; initial: OwnCard | null } | null>(null);
+    const editCard = async (type: ProviderType) => {
+        try { const d = await api<{ mine: OwnCard | null }>(`providers?type=${type}&t=${Date.now()}`); setCard({ type, initial: d.mine }); }
+        catch (e) { toast.error(errorText(e)); }
+    };
+    // 프로필 사진 (WP59): the owner picks a photo from the head (or the 프로필 수정 sheet); it is cut to a square.
+    const avatarInput = useRef<HTMLInputElement>(null), [avatarBusy, setAvatarBusy] = useState(false);
     const mine = me?.id === id;
 
     useEffect(() => {
@@ -90,6 +100,22 @@ export default function ProfilePage({ id }: { id?: string }) {
         } catch (e) { setEditError(errorText(e)); }
         finally { setSaving(false); }
     }
+    async function pickAvatar(file: File | undefined) {
+        if (avatarInput.current) avatarInput.current.value = '';
+        if (!file || avatarBusy) return;
+        setAvatarBusy(true);
+        try { const d = await setAvatar(file); setUser(v => v && { ...v, avatar_id: d.avatar_id, avatar_thumb: d.avatar_thumb }); toast('사진 변경 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAvatarBusy(false); }
+    }
+    async function removeAvatar() {
+        if (avatarBusy) return;
+        setAvatarBusy(true);
+        try { await api('me/avatar', 'DELETE'); setUser(v => v && { ...v, avatar_id: undefined, avatar_thumb: undefined }); toast('사진 삭제 완료'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAvatarBusy(false); }
+    }
+    const photo = user.avatar_id ? imageUrl(user.avatar_id) : null;
     // A member may change their nickname once every 30 days (the manager's is fixed).
     const nicknameLocked = !!user.nickname_next_at && user.nickname_next_at > Date.now();
     const chat = () => requireLogin(async () => {
@@ -101,7 +127,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         if (followBusy) return;
         const active = !user.followed;
         setFollowBusy(true);
-        try { await api(`users/${user.id}/follow`, 'POST', { active }); setUser(v => v && { ...v, followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        try { await api(`users/${user.id}/follow`, 'POST', { active }); setUser(v => v && { ...v, followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); if (active) offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setFollowBusy(false); }
     });
@@ -146,10 +172,20 @@ export default function ProfilePage({ id }: { id?: string }) {
     // While on the 플러스 체험 the card already says 플러스 and the trial line covers keeping it, so the
     // next grade is 프리미엄, as for a paid 플러스 member.
     const nextGrade = user.role === 'manager' ? undefined : GRADES.find(g => g.rank === grade.rank + 1 && g.plans.length);
+    // 등급 연출 (WP66): a thin metal band behind the avatar and '엘리트 회원' with the grade icon for paid grades
+    // (관리자 the same gold as 엘리트); a 무료 체험 shows none, like its hidden chip.
+    const metal = user.role === 'manager' ? 'basic' : ringTier(user.grade, user.grade_trial);
+    const vip = metal === 'gold' || metal === 'silver' || metal === 'bronze';
     return <div className="container page profile">
-        <section className="profile-head">
-            <Avatar name={user.nickname} size="lg" />
+        <section className={'profile-head' + (vip ? ' vip vip-' + metal : '')}>
+            {vip && <span className="vip-band" aria-hidden="true" />}
+            {mine ? <button type="button" className="avatar-edit" aria-label="프로필 사진 변경" disabled={avatarBusy} onClick={() => avatarInput.current?.click()}>
+                <Avatar name={user.nickname} size="lg" src={photo} grade={user.grade} trial={user.grade_trial} role={user.role} />
+                <span className="avatar-edit-badge" aria-hidden="true">{avatarBusy ? <LoaderCircle size={14} className="spin" /> : <Camera size={14} />}</span>
+            </button> : <Avatar name={user.nickname} size="lg" src={photo} grade={user.grade} trial={user.grade_trial} role={user.role} />}
+            {mine && <input ref={avatarInput} type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={e => void pickAvatar(e.target.files?.[0])} />}
             <div className="grow">
+                {vip && <p className="vip-label"><CIcon name={gradeInfo(user.grade).icon} size={18} />{gradeInfo(user.grade).name} 회원</p>}
                 <NameLine nickname={user.nickname} grade={user.grade} trial={user.grade_trial} role={user.role} badges={user.badges} size="lg" />
                 {/* 이용 정지: the member (and the manager) see until when; others see only '이용 제한 회원'. */}
                 {user.suspended && <p className="mt-8"><span className="tag">{user.suspended_until ? `이용 정지 중 (${suspendUntilText(user.suspended_until)})` : '이용 제한 회원'}</span></p>}
@@ -178,7 +214,9 @@ export default function ProfilePage({ id }: { id?: string }) {
                 {/* 본인 인증, 대리 인증, 신용인 (the BADGES order). The owner applies from the row. */}
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
-                    return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <span className="verified"><VerifiedMark size={16} />인증 완료</span> : <>
+                    return <li key={b.id} className={on ? 'on' : ''}><CIcon name={b.icon} size={28} /><span className="grow">{b.name}</span>{on ? <>
+                        {mine && isProviderType(b.id) && <button type="button" className="verify-apply" onClick={() => void editCard(b.id as ProviderType)}>{PROVIDER_TEXT.mine}</button>}
+                        <span className="verified"><VerifiedMark size={16} />인증 완료</span></> : <>
                         <span className="tag tag-line">미인증</span>
                         {mine && user.role !== 'manager' && <button type="button" className="verify-apply" aria-label={b.name + ' 신청'} onClick={() => openApply({ kind: 'badge', target: b.id })}>신청</button>}
                     </>}</li>;
@@ -193,10 +231,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {/* A trial reads '플러스 체험 · 10월 8일까지' (or '… · 내일 18:40 종료' in its last day). */}
                     {trialing && (mine || me?.role === 'manager') ? <p className="grade-trial mt-8">{trialStatus(user.grade_expires_at!)}</p>
                         : user.grade_expires_at && !user.grade_trial && <p className="muted small mt-8">{longDate(user.grade_expires_at)}까지</p>}
-                    {/* '끌올 3/5 · 1:20 후 충전 · 무료 중개·가측 3/5 남음' (WP65 adds the last item; at most 3). */}
-                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" extra={couponItem(usage)} />}
+                    {/* '끌올 3/6 · 0:40 후 충전 · 자동 끌올 3/5' (WP61: at most 3 items). */}
+                    {mine && usage && <WalletGauge usage={usage} now={clock} className="grade-usage" extra={autoItem(usage)} />}
                     {/* One action on the card (등급 신청); the next grade is a plain data line. */}
-                    {mine && nextGrade && <p className="grade-next">다음 등급: {nextGrade.name} · {gradeBenefits(nextGrade.id)[0]}</p>}
+                    {mine && nextGrade && isPaidGrade(nextGrade.id) && <p className="grade-next">다음 등급: {nextGrade.name} · {nextBenefit(nextGrade.id)}</p>}
                 </>}
             </div>
         </section>
@@ -210,13 +248,17 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="section">
             <Tabs label="거래글" value={tab} onChange={setTab} items={[{ id: 'active', label: '거래중' }, { id: 'closed', label: '거래완료' }, { id: 'trades', label: '거래 기록' }, { id: 'reviews', label: '후기' }]} />
             <div className="mt-16">{tab === 'reviews' ? <ReviewList userId={user.id} /> : tab === 'trades' ? <TradeList userId={user.id} />
-                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor />)}</div>
+                : posts === null ? <SkeletonRows count={2} /> : posts.length ? <><p className="muted small" style={{ marginBottom: 12 }}>{capped.on ? `${total - 1}+` : total}건</p><div className="post-list">{posts.map(p => <PostCard key={p.id} post={p} hideAuthor flag={p.pinned ? <span className="tag tag-line">{PIN_TEXT.tag}</span> : undefined} />)}</div>
                 {(posts.length < total || (capped.on && capped.full)) && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>}</>
                 : <EmptyState icon="file" title={tab === 'active' ? '거래중인 글이 없습니다' : '거래완료된 글이 없습니다'} action={mine && tab === 'active' ? <button className="btn btn-primary" onClick={() => void navigate('/write')}>글쓰기</button> : undefined} />}</div>
         </section>
 
         <Modal open={editing} onClose={() => setEditing(false)} title="프로필 수정" footer={<button className="btn btn-primary btn-lg" disabled={saving} onClick={save}>저장</button>}>
             <div className="form-stack">
+                <div className="field"><span className="field-label">프로필 사진</span>
+                    <div className="avatar-row"><Avatar name={user.nickname} src={user.avatar_thumb} grade={user.grade} trial={user.grade_trial} role={user.role} />
+                        <button type="button" className="btn btn-line btn-sm" disabled={avatarBusy} onClick={() => avatarInput.current?.click()}>사진 변경</button>
+                        {photo && <button type="button" className="btn btn-text small" disabled={avatarBusy} onClick={() => void removeAvatar()}>사진 삭제</button>}</div></div>
                 <div className="field"><label className="field-label" htmlFor="profile-nickname">닉네임</label>
                     <input id="profile-nickname" className="input" value={nickname} onChange={e => setNickname(e.target.value)} minLength={2} maxLength={16} disabled={user.role === 'manager' || nicknameLocked} aria-describedby={user.role === 'manager' ? undefined : 'profile-nickname-hint'} />
                     {user.role !== 'manager' && <span id="profile-nickname-hint" className="field-hint">{nicknameLocked ? `${monthDay(user.nickname_next_at!)}부터 변경 가능` : '30일에 한 번 변경 가능'}</span>}</div>
@@ -233,6 +275,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             </div>
         </Modal>
         {!mine && <MemberReportModal open={reporting} onClose={() => setReporting(false)} userId={user.id} nickname={user.nickname} />}
+        {card && <ProviderEditor open onClose={() => setCard(null)} type={card.type} initial={card.initial} onSaved={() => {}} />}
         <PasswordModal open={account === 'password'} onClose={() => setAccount('')} />
         <WithdrawModal open={account === 'withdraw'} onClose={() => setAccount('')} onDone={() => { setAccount(''); setMe(null); void navigate('/'); toast('탈퇴 완료'); }} />
     </div>;
@@ -272,7 +315,6 @@ function ReviewList({ userId }: { userId: string }) {
             <div className="review-line">
                 <span className="review-verdict">{r.good ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}{reviewName(r.good)}</span>
                 {r.tags.map(t => <span key={t} className="tag">{t}</span>)}
-                {!!r.brokered && <span className="tag tag-line">운영진 중개</span>}
             </div>
             {r.text && <p className="review-text">{r.text}</p>}
         </li>)}</ul>
@@ -324,7 +366,6 @@ function TradeList({ userId }: { userId: string }) {
             <div className="review-line">
                 {t.partner_deleted || !t.partner_id ? <NameLine nickname={t.nickname} compact /> : <Link to={'/profile/' + t.partner_id} className="review-who"><NameLine nickname={t.nickname} grade={t.grade} trial={t.grade_trial} role={t.role} badges={t.badges} compact /></Link>}
                 {t.price !== null && <span className="trade-price">거래가 {priceText(t.price)}</span>}
-                {t.brokered && <span className="tag tag-line">운영진 중개</span>}
             </div>
         </li>)}</ul>
         {rows.length < total && <button type="button" className="btn btn-line more-btn" disabled={busy} onClick={() => void more()}>더 보기</button>}

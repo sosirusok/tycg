@@ -19,6 +19,51 @@ export const TIERS = [
 
 export type SeasonTag = { tier: string; season: number };
 
+// 클랜 래더 티어 (WP70), low → high, decided by the clan's rank in each 래더 season; the clan name takes the
+// tier's color in the game. Every clan tier starts at the manager's first clan-ladder season
+// (sys:clan_min_season, default CLAN_MIN_SEASON).
+export const CLAN_TIERS = [
+    { id: 'bronze', name: '브론즈', rank: '71~100위' },
+    { id: 'silver', name: '실버', rank: '46~70위' },
+    { id: 'gold', name: '골드', rank: '26~45위' },
+    { id: 'platinum', name: '플래티넘', rank: '11~25위' },
+    { id: 'diamond', name: '다이아', rank: '4~10위' },
+    { id: 'challenger', name: '챌린저', rank: '2~3위' },
+    { id: 'champion', name: '챔피언', rank: '1위' },
+] as const;
+export const CLAN_MIN_SEASON = 6;
+export const clanTierName = (id: string) => CLAN_TIERS.find(t => t.id === id)?.name || '';
+export const isClanTier = (id: unknown): id is string => typeof id === 'string' && CLAN_TIERS.some(t => t.id === id);
+// Clan ladder seasons: known clan tiers from the first clan-ladder season to the latest one.
+export function validClanTags(input: unknown, latest = LATEST_SEASON, min = CLAN_MIN_SEASON): input is SeasonTag[] {
+    return Array.isArray(input) && input.length <= 300 && input.every(t => t && typeof t === 'object'
+        && Number.isInteger(t.season) && isClanTier(t.tier) && t.season >= min && t.season <= latest);
+}
+
+// 특징 태그 (WP70): words the community names an account or a clan by ('#불새상류'). Up to 10 per post, each 1–12
+// characters without spaces, kept without '#', NFKC with Latin letters in lower case.
+export const FEATURE_TAG_MAX = 10;
+export const FEATURE_TAG_LEN = 12;
+export function normalizeTag(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const v = raw.normalize('NFKC').trim().replace(/^#+/, '').toLowerCase();
+    const n = [...v].length;
+    return n >= 1 && n <= FEATURE_TAG_LEN && /^[\p{L}\p{N}_]+$/u.test(v) ? v : null;
+}
+export const TAG_TEXT = {
+    invalid: '특징 태그: 띄어쓰기 없이 1~12자로 입력해 주세요.',
+    max: '특징 태그는 10개까지입니다.',
+    side: '특징 태그는 판매·교환 계정·클랜 글에만 넣을 수 있습니다.',
+    hint: '띄어쓰기 없이 12자까지',
+} as const;
+// The stored tags of a post (details.featureTags, a JSON list).
+export function featureTags(raw?: string): string[] {
+    try {
+        const v: unknown = JSON.parse(raw || '[]');
+        return Array.isArray(v) ? [...new Set(v.map(normalizeTag).filter((t): t is string => !!t))].slice(0, FEATURE_TAG_MAX) : [];
+    } catch { return []; }
+}
+
 export type User = {
     id: string;
     nickname: string;
@@ -34,6 +79,8 @@ export type User = {
     badges: BadgeId[];
     // The session user's own 이용 정지 end (WP22); other members' profiles carry only `suspended`.
     suspended_until?: number | null;
+    // The session user's last celebrated public grade rank (WP66 등급 축하 창).
+    celebrated_rank?: number;
 };
 
 export type TradeKind = 'buy' | 'sell' | 'exchange' | 'proxy_request' | 'proxy_offer';
@@ -70,8 +117,10 @@ export type Post = {
     view_count?: number;
     // 댓글·답글 (WP55): live 댓글 and 답글 on the post.
     comment_count?: number;
-    // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
-    appraised?: { price: number; at: number } | null;
+    // 대표 글 (WP63): in a member's lists, whether the post shows as 대표; profile_pin_at (the author's
+    // own lists only) also keeps a pin a lower grade no longer shows.
+    pinned?: boolean;
+    profile_pin_at?: number | null;
     // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of
     // the trade and the manager also get a pending one, with deal_state ('확인 대기' / '확인 완료').
     deal_price?: number;
@@ -79,6 +128,12 @@ export type Post = {
     tags: SeasonTag[];
     // Ladders an exchange post wants in return.
     wanted_tags?: SeasonTag[];
+    // 시즌 비공개 (WP68): hidden emblems per tier on 판매 and the offered side of 교환 ({ master: 2 }).
+    ladder_hidden?: Record<string, number>;
+    // 클랜 래더 (WP70): the clan's own ladder (판매, 구매 and the offered side of 교환 on clan posts) and the
+    // clan ladder an exchange wants in return.
+    clan_tags?: SeasonTag[];
+    wanted_clan_tags?: SeasonTag[];
     category: string;
     price_mode: string;
     accepts_offers: number;
@@ -309,7 +364,9 @@ export function expandSkins(chosen: string[]) {
 
 export const NICK_RANKS = ['R', 'S', 'A', 'B', '잡'] as const;
 // 닉 종류 as nickname trades name them ('S급 여사', '남사닉 필수', '두 글자 무받침 영어').
-export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '무받침', '연예인'] as const;
+// 레어닉 (WP70): a word everyone knows or a name from the game ('사과', '철수', '엠제이').
+export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '무받침', '연예인', '레어닉'] as const;
+export const RARE_NICK_HINT = '레어닉: 누구나 아는 단어나 게임 속 이름 (예: 사과, 철수, 엠제이)';
 export function nickTypesText(types: readonly string[]) { return types.join('/'); }
 
 export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;
@@ -439,6 +496,39 @@ export function accountSummary(d: Record<string, string>) {
         d.gas ? `가스 ${Number(d.gas).toLocaleString('ko-KR')}` : '',
         d.minerals ? `미네랄 ${Number(d.minerals).toLocaleString('ko-KR')}` : '',
     ].filter(Boolean);
+}
+
+// 맞는 글 (WP58, round-3 WP34 change 5): the board query of the other side for an own 판매 or 구매 post,
+// from its own fields, for every grade. 판매 → '맞는 구매 글': 구매 posts whose MAX reaches the 즉거가 and,
+// on 계정, that this account fits ('내 계정' filters: 대주 수, 전적, 팬텀 %, 닉네임) with any of its
+// ladders. 구매 → '맞는 판매 글': 판매 posts up to the MAX and, on 계정, the 대주 이하, 무전적, 팬텀 % 이상, the
+// 닉 종류 wanted (one 닉 등급 or one exact length only) and any of the ladders wanted. null for other kinds.
+export function matchQuery(p: Pick<Post, 'kind' | 'category' | 'price' | 'details' | 'tags'>): { kind: 'buy' | 'sell'; query: string } | null {
+    if (p.kind !== 'sell' && p.kind !== 'buy') return null;
+    const d = p.details || {}, q = new URLSearchParams();
+    const kind = p.kind === 'sell' ? 'buy' : 'sell', account = p.category === 'account';
+    q.set('kind', kind);
+    q.set('category', p.category);
+    if (p.price) q.set(p.kind === 'sell' ? 'min' : 'max', String(p.price));
+    if (account && p.kind === 'sell') {
+        if (d.ownerCount) q.set('ownerCountOfMine', d.ownerCount);
+        if (d.recordStatus === '무전적' || d.recordStatus === '전적 있음') q.set('myRecord', d.recordStatus);
+        if (d.phantom) q.set('myPhantom', d.phantom);
+        if (d.nicknameChars) q.set('nicknameChars', d.nicknameChars);
+        if (d.nicknameRank) q.set('nicknameRank', d.nicknameRank);
+        const types = parseList(d.nicknameTypes, NICK_TYPES);
+        if (types.length) q.set('myNicknameType', types[0]);
+    } else if (account) {
+        if (d.maxOwners) q.set('maxOwners', d.maxOwners);
+        if (d.recordPreference === RECORD_PREFERENCES[0]) q.set('recordStatus', RECORD_PREFERENCES[0]);
+        if (d.phantomMin) q.set('phantom', d.phantomMin);
+        const types = parseList(d.wantedNicknameTypes, NICK_TYPES), ranks = parseList(d.nicknameRanks, NICK_RANKS);
+        if (types.length) q.set('nicknameTypes', JSON.stringify(types));
+        if (ranks.length === 1) q.set('nicknameRank', ranks[0]);
+        if (d.nicknameCharsMin && d.nicknameCharsMin === d.nicknameCharsMax) q.set('nicknameChars', d.nicknameCharsMin);
+    }
+    if (account && p.tags?.length) q.set('tags', JSON.stringify(p.tags.map(t => ({ tier: t.tier, season: t.season }))));
+    return { kind, query: q.toString() };
 }
 
 // Quick replies (WP57): chips that fill the chat composer, never sent on their own. User voice (casual

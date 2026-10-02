@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { REPORT_REASONS, dateText, manToWon, priceText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, SERVICE_NAMES, applicationTitle, kstDateTime, type Application, type ServiceKind } from '../../shared/membership';
+import { CLAN_MIN_SEASON, REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
+import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, REPORT_TEXT, applicationTitle, kstDateTime, type Application, type Earn } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
-import { MemberPanel } from '../components/MemberPanel';
+import { MemberPanel, TempPassword } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
+import { RichBody } from '../components/RichBody';
 
-type TabId = 'applications' | 'services' | 'members' | 'reports' | 'hidden' | 'notices' | 'settings';
+type TabId = 'applications' | 'members' | 'resets' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
-    post_images?: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
+    post_images?: string | null; hidden: number | null; reporter_id: string; nickname: string; role?: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
+    // 신고 처리 순서 (WP60): when it was decided, and for a waiting report the reporter's reports and 기각 of
+    // the last 30 days; auto marks a '같은 매물 (자동)' report (filed as the manager).
+    decided_at?: number | null; reporter_reports_30d?: number; reporter_dismissed_30d?: number; auto?: boolean;
     // A member report: the reported member and the chat it came from.
     // A 댓글 report (WP55): the reported text and whether the 댓글 is still up.
     comment_id?: number | null; comment_body?: string | null; comment_live?: number | null;
@@ -24,27 +28,27 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
-    const tab = (['applications', 'services', 'members', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; openServices?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
+    const tab = (['applications', 'members', 'resets', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
+    const [summary, setSummary] = useState<{ reports: Report[]; pendingReports?: number; hidden: Post[]; pendingApplications: number; pendingResets?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
     if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="lock" title="매니저 전용 페이지입니다" /></div>;
-    const pendingReports = summary?.reports.filter(r => r.status === 'pending').length || 0;
+    const pendingReports = summary?.pendingReports ?? summary?.reports.filter(r => r.status === 'pending').length ?? 0;
     return <div className="container page">
         <h1 className="page-title">매니저 메뉴</h1>
         <div className="mt-16"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
             { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
-            { id: 'services', label: <>중개·가측{summary?.openServices ? <b>{summary.openServices}</b> : null}</> },
             { id: 'members', label: '회원' },
+            { id: 'resets', label: <>비밀번호 재설정{summary?.pendingResets ? <b>{summary.pendingResets}</b> : null}</> },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
         ]} /></div>
         <div className="mt-24">
             {tab === 'applications' ? <Applications onChange={loadSummary} />
-                : tab === 'services' ? <Services onChange={loadSummary} />
                 : tab === 'members' ? <Members />
-                : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
+                : tab === 'resets' ? <Resets onChange={loadSummary} />
+                : tab === 'reports' ? <Reports reports={summary?.reports} pendingCount={pendingReports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
                 : tab === 'notices' ? <Notices /> : <Settings usage={summary?.usage} />}
         </div>
@@ -83,49 +87,40 @@ function Applications({ onChange }: { onChange: () => void }) {
     </>;
 }
 
-// 중개·가측 신청 (WP65): open requests by grade priority (1순위 first), then oldest first.
-type ServiceRow = { id: number; kind: ServiceKind; user_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; post_id: number | null; post_title: string | null; post_status: string | null;
-    partner_id: string | null; partner_nickname: string | null; coupon: number; status: string; price: number | null; note: string; created_at: number; priority: number; conversation_id: string | null };
-function Services({ onChange }: { onChange: () => void }) {
-    const [rows, setRows] = useState<ServiceRow[] | null>(null), [member, setMember] = useState<string | null>(null), [busy, setBusy] = useState(0);
-    const [appraising, setAppraising] = useState<ServiceRow | null>(null), [price, setPrice] = useState(''), [cancelling, setCancelling] = useState<ServiceRow | null>(null);
-    const load = useCallback(() => api<{ requests: ServiceRow[] }>('manage/services?status=open').then(d => setRows(d.requests)).catch(e => toast.error(errorText(e))), []);
+// 비밀번호 재설정 (WP59): pending 비밀번호 찾기 requests, newest first. '회원 있음' names the member (with 본인
+// 인증 or not, to judge the request); the temporary password goes to '연락받을 곳', then '처리 완료'.
+type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean };
+function Resets({ onChange }: { onChange: () => void }) {
+    const [rows, setRows] = useState<ResetRow[] | null>(null), [busy, setBusy] = useState(0), [member, setMember] = useState<string | null>(null);
+    // The request whose member gets a temporary password; it stays set so the password stays on screen.
+    const [target, setTarget] = useState<ResetRow | null>(null), [confirming, setConfirming] = useState(false);
+    const load = useCallback(() => api<{ requests: ResetRow[] }>('manage/reset-requests').then(d => setRows(d.requests)).catch(e => toast.error(errorText(e))), []);
     useEffect(() => { void load(); }, [load]);
-    const won = manToWon(price);
-    async function decide(r: ServiceRow, action: 'done' | 'cancel', amount?: number) {
+    async function done(r: ResetRow) {
         if (busy) return;
         setBusy(r.id);
-        try {
-            await api('manage/services/' + r.id, 'PATCH', { action, ...amount !== undefined ? { price: amount } : {} });
-            toast(action === 'done' ? `${SERVICE_NAMES[r.kind]} 완료` : '취소 완료');
-            setAppraising(null); setCancelling(null); setPrice('');
-            void load(); onChange();
-        } catch (e) { toast.error(errorText(e)); }
+        try { await api('manage/reset-requests/' + r.id, 'PATCH', { status: 'done' }); toast('처리 완료'); void load(); onChange(); }
+        catch (e) { toast.error(errorText(e)); }
         finally { setBusy(0); }
     }
     if (!rows) return <SkeletonRows count={3} height={72} />;
     return <>
         {rows.length ? <ul className="simple-list">{rows.map(r => <li key={r.id}>
             <span className="grow">
-                <strong>{r.priority}순위 · {SERVICE_NAMES[r.kind]} 신청</strong>
-                <span className="small">{r.post_id && r.post_title ? <Link to={'/posts/' + r.post_id}>{r.post_title}</Link> : '삭제된 글'}{r.post_title && r.post_status === 'closed' && <span className="muted"> (거래완료)</span>}{r.partner_nickname && <> · 상대 {r.partner_id ? <Link to={'/profile/' + r.partner_id}>{r.partner_nickname}</Link> : r.partner_nickname}</>}</span>
-                {r.note && <span className="muted small">메모: {r.note}</span>}
-                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(r.user_id)}><NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} /></button><span className="muted">{r.grade_trial && '플러스 체험 · '}{r.coupon ? '무료 쿠폰' : '유료'} · {relativeTime(r.created_at)}</span></span>
+                <span className="row small"><strong>@{r.username}</strong><span className={'tag' + (r.user_id ? '' : ' tag-line')}>{r.user_id ? '회원 있음' : '회원 없음'}</span>
+                    {r.user_id && <><button type="button" className="link-btn" onClick={() => setMember(r.user_id)}>{r.nickname}</button><span className="muted">{r.identity ? '본인 인증' : '본인 인증 없음'}</span></>}</span>
+                <span className="small reset-contact">연락받을 곳: <RichBody text={r.contact} /></span>
+                <span className="muted small">{relativeTime(r.created_at)}</span>
             </span>
             <span className="report-actions">
-                {r.conversation_id && <Link to={'/chat/' + r.conversation_id} className="btn btn-line btn-sm">채팅</Link>}
-                <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => r.kind === 'appraise' ? (setPrice(''), setAppraising(r)) : void decide(r, 'done')}>완료</button>
-                <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => setCancelling(r)}>취소</button>
+                {r.user_id && r.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
+                <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => void done(r)}>처리 완료</button>
             </span>
-        </li>)}</ul> : <EmptyState icon="file" title="대기 중인 중개·가측 신청이 없습니다" />}
-        <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
-        <Modal open={!!appraising} onClose={() => { if (!busy) setAppraising(null); }} title="가측 완료" description={appraising?.post_title || undefined}
-            footer={<button className="btn btn-primary btn-lg" disabled={!!busy || won === null || Number.isNaN(won)} onClick={() => appraising && won !== null && decide(appraising, 'done', won)}>완료</button>}>
-            <label className="field"><span className="field-label">가측가</span><div className="input-unit"><input className="input" type="number" inputMode="decimal" min="0.1" step="0.1" value={price} onChange={e => setPrice(e.target.value)} placeholder="예: 12" autoFocus /><span>만원</span></div>
-                {won !== null && !Number.isNaN(won) && <span className="field-hint">{priceText(won)} · 글에 운영진 가측가로 표시</span>}</label>
-        </Modal>
-        <Modal open={!!cancelling} onClose={() => { if (!busy) setCancelling(null); }} title="신청 취소" description={cancelling ? `${cancelling.nickname}님의 ${SERVICE_NAMES[cancelling.kind]} 신청${cancelling.coupon ? ' · 무료 쿠폰은 돌려줍니다.' : ''}` : ''}
-            footer={<><button className="btn btn-line" disabled={!!busy} onClick={() => setCancelling(null)}>닫기</button><button className="btn btn-dark" disabled={!!busy} onClick={() => cancelling && decide(cancelling, 'cancel')}>신청 취소</button></>} />
+        </li>)}</ul> : <EmptyState icon="file" title="대기 중인 요청이 없습니다" />}
+        {target?.user_id && <TempPassword userId={target.user_id} open={confirming} onClose={() => setConfirming(false)} hint="연락받을 곳으로 전달">
+            <p className="small">@{target.username} · {target.nickname}</p>
+        </TempPassword>}
+        <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} />}</Modal>
     </>;
 }
 
@@ -152,31 +147,62 @@ function detailsWithLinks(details: string | null | undefined) {
     return details.split(/(#\d+)/).map((part, i) => /^#\d+$/.test(part) ? <Link key={i} to={'/posts/' + part.slice(1)}>{part}</Link> : part);
 }
 
-function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
-    const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null);
+// 신고 (WP60): '대기 3' in 신고 처리 순서 (the Worker's order: 사기·먹튀 and 회수·해킹 계정 first, then the
+// reporter's grade, then the oldest), and '처리' with the last 50 decisions. A waiting row: the reason, how
+// long it has waited, the reporter with their 30-day counts, the target, and 처리 완료 / 기각. A decided row:
+// the outcome and 되돌리기.
+function Reports({ reports, pendingCount, onChange }: { reports?: Report[]; pendingCount: number; onChange: () => void }) {
+    const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null), [busy, setBusy] = useState(0);
     if (!reports) return <SkeletonRows />;
-    if (!reports.length) return <EmptyState title="접수된 신고가 없습니다" />;
-    const act = async (task: Promise<unknown>, message: string) => { try { await task; toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } };
-    return <>
-        <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
+    const act = async (task: () => Promise<unknown>, message: string, id = 0) => {
+        if (busy) return;
+        setBusy(id || -1);
+        try { await task(); toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } finally { setBusy(0); }
+    };
+    const decide = (r: Report, status: 'pending' | 'resolved' | 'dismissed') => act(() => api('manage/report', 'POST', { id: r.id, status }),
+        status === 'resolved' ? '처리 완료' : status === 'dismissed' ? '기각 완료' : '되돌리기 완료', r.id);
+    const pending = reports.filter(r => r.status === 'pending'), decided = reports.filter(r => r.status !== 'pending');
+    const now = Date.now();
+    const row = (r: Report) => {
+        const waiting = r.status === 'pending';
+        return <li key={r.id} className={waiting ? '' : 'is-done'}>
             <span className="grow">
-                <strong>{r.reason}</strong>
+                <span className="report-head"><strong>{r.reason}</strong>{waiting ? <span className="muted small nowrap">{REPORT_TEXT.waited(now - r.created_at)}</span>
+                    : <span className={'event-status' + (r.status === 'dismissed' ? '' : ' st-approved')}>{r.status === 'dismissed' ? REPORT_TEXT.dismiss : REPORT_TEXT.resolve}</span>}</span>
                 <span className="small">{r.reason === '같은 매물 (자동)' ? detailsWithLinks(r.details) : r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
                 {r.comment_id && <span className="small report-comment">댓글: {r.comment_body}{!r.comment_live && <span className="muted nowrap">{'\u00a0'}· 삭제됨</span>}</span>}
                 {!r.post_id && !r.comment_id && <DeletedPhotos images={r.post_images} />}
-                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{r.post_id ? <> · <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></> : !r.target_user_id && ' · 삭제된 글'}</span>
+                {/* The post: the target of a post report, the place of a 댓글 or 같은 매물 report. */}
+                {r.post_id ? <span className="small">{r.target_user_id || r.comment_id ? '글' : '대상'} <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></span> : !r.target_user_id && <span className="muted small">삭제된 글</span>}
+                {/* Waiting: '신고 30일 4 · 기각 1' (the time is in '3시간 대기'); decided: when. */}
+                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} />
+                    {waiting ? !r.auto && <span className="nowrap">{'\u00a0'}· {REPORT_TEXT.counts(r.reporter_reports_30d ?? 0, r.reporter_dismissed_30d ?? 0)}</span>
+                        : <span className="nowrap">{'\u00a0'}· {kstDateTime(r.decided_at ?? r.created_at)}</span>}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
             <span className="report-actions">
-                {r.comment_id ? !!r.comment_live && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('comments/' + r.comment_id, 'DELETE'), '댓글 삭제 완료')}>댓글 삭제</button>
-                    : r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
+                {r.comment_id ? !!r.comment_live && <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => act(() => api('comments/' + r.comment_id, 'DELETE'), '댓글 삭제 완료')}>댓글 삭제</button>
+                    : r.post_id && <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => act(() => api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
                 {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
                 {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
-                <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+                {waiting ? <>
+                    <button type="button" className="btn btn-primary btn-xs" disabled={!!busy} onClick={() => decide(r, 'resolved')}>{REPORT_TEXT.resolve}</button>
+                    <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => decide(r, 'dismissed')}>{REPORT_TEXT.dismiss}</button>
+                </> : <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => decide(r, 'pending')}>{REPORT_TEXT.undo}</button>}
             </span>
-        </li>)}</ul>
+        </li>;
+    };
+    return <>
+        <section>
+            <h2 className="list-title">{REPORT_TEXT.pending(pendingCount)}</h2>
+            {pending.length ? <ul className="simple-list">{pending.map(row)}</ul> : <EmptyState title="대기 중인 신고가 없습니다" />}
+        </section>
+        <section className="mt-24">
+            <h2 className="list-title">{REPORT_TEXT.decided}</h2>
+            {decided.length ? <ul className="simple-list">{decided.map(row)}</ul> : <EmptyState title="처리한 신고가 없습니다" />}
+        </section>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={onChange} />}</Modal>
         <Modal open={!!evidence} onClose={() => setEvidence(null)} title="신고된 채팅" wide>{evidence && <ReportChat report={evidence} />}</Modal>
     </>;
@@ -370,11 +396,16 @@ function LinkBlockCard() {
 function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } }) {
     const { config, refreshConfig } = useApp();
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
-    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); }, [config]);
+    // 수익 홍보 (WP66): the amounts and the 사례 the Guide, the apply modal and the '중개/가측' tab show.
+    const [earn, setEarn] = useState<Earn>(config.earn || EARN_DEFAULTS);
+    // 클랜 래더 첫 시즌 and 고정 태그 (WP70); the pinned tags come from GET /api/tags.
+    const [clanMin, setClanMin] = useState(String(config.clanMinSeason ?? CLAN_MIN_SEASON)), [pinned, setPinned] = useState<string | null>(null);
+    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); setEarn(config.earn || EARN_DEFAULTS); setClanMin(String(config.clanMinSeason ?? CLAN_MIN_SEASON)); }, [config]);
+    useEffect(() => { api<{ pinned: string[] }>('tags').then(d => setPinned(d.pinned.join(', '))).catch(() => setPinned('')); }, []);
     async function save(e: FormEvent) {
         e.preventDefault();
         setBusy(true);
-        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season) }); refreshConfig(); toast('저장 완료'); }
+        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season), earn, clanMinSeason: Number(clanMin), ...pinned !== null ? { pinnedTags: pinned } : {} }); refreshConfig(); toast('저장 완료'); }
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
@@ -385,6 +416,18 @@ function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday
         <label className="field"><span className="field-label">현재 래더 시즌</span>
             <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={32} max={200} value={season} onChange={e => setSeason(e.target.value)} /><span>시즌</span></div>
             <span className="field-hint">새 시즌 오픈 시 변경. 글쓰기, 검색 시즌 목록에 반영. 낮출 수 없음.</span></label>
+        <label className="field"><span className="field-label">클랜 래더 첫 시즌</span>
+            <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={1} max={Number(season) || 200} value={clanMin} onChange={e => setClanMin(e.target.value)} /><span>시즌</span></div>
+            <span className="field-hint">클랜 래더 기록, 원하는 클랜 티어 시즌 목록의 시작</span></label>
+        <label className="field"><span className="field-label">고정 태그</span>
+            <input className="input" maxLength={200} value={pinned ?? ''} disabled={pinned === null} onChange={e => setPinned(e.target.value)} placeholder="예: 불새상류, 올스킨" />
+            <span className="field-hint">게시판 태그 필터 맨 앞에 표시. 쉼표로 구분, 10개까지</span></label>
+        <fieldset className="field earn-settings"><legend className="field-label">{EARN_TEXT.title}</legend>
+            <label className="field"><span className="field-label">중개 수익 예시 (월)</span><input className="input" maxLength={EARN_MAX} value={earn.broker} onChange={e => setEarn({ ...earn, broker: e.target.value })} placeholder={EARN_DEFAULTS.broker} /></label>
+            <label className="field"><span className="field-label">가측 수익 예시 (월)</span><input className="input" maxLength={EARN_MAX} value={earn.appraise} onChange={e => setEarn({ ...earn, appraise: e.target.value })} placeholder={EARN_DEFAULTS.appraise} /></label>
+            <label className="field"><span className="field-label">사례 문장</span><input className="input" maxLength={EARN_MAX} value={earn.story} onChange={e => setEarn({ ...earn, story: e.target.value })} placeholder={EARN_DEFAULTS.story} /></label>
+            <span className="field-hint">운영진이 직접 들은 사례만. 비우면 기본 문구. 보장 표현 불가.</span>
+        </fieldset>
         <div><button className="btn btn-primary" disabled={busy}>저장</button></div>
     </form></>;
 }

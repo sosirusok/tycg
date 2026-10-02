@@ -65,6 +65,16 @@
 .filter-head strong { color: var(--ink); font-size: var(--fs-15); }
 .filter-group { padding: 18px 0; border-bottom: 1px solid var(--line); }
 .filter-group > h4 { margin-bottom: 12px; font-size: var(--fs-14); font-weight: 700; }
+/* Groups fold (WP70): the title row is the toggle, with the group's active count and a chevron. */
+.filter-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: pointer; user-select: none; }
+.filter-group > summary::-webkit-details-marker { display: none; }
+.filter-group > summary::after { content: ''; flex: none; width: 8px; height: 8px; margin-right: 4px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+.filter-group:not([open]) > summary::after { transform: translateY(2px) rotate(-135deg); }
+.filter-group > summary h4 { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-14); font-weight: 700; }
+.filter-group[open] > summary { margin-bottom: 12px; }
+.filter-group > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--r-4); }
+.filter-group-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--brand); color: var(--white); font-size: var(--fs-12); font-weight: 700; }
+.filter-sub { margin-top: 4px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 600; }
 .filter-group .field-hint { margin-top: 8px; }
 .filter-group .choice-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
 .skin-chips { gap: 6px; }
@@ -146,9 +156,11 @@
 .spec-list dd { margin: 0; color: var(--ink); font-weight: 600; text-align: right; }
 .body-text { color: var(--ink); font-size: var(--fs-16); line-height: 1.75; white-space: pre-wrap; }
 .side-card { position: sticky; top: calc(var(--header-h) + 24px); display: grid; gap: 16px; padding: 24px; border: 1px solid var(--line); border-radius: var(--r-12); background: var(--white); }
-.side-actions { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 8px; }
+.side-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .side-actions.with-offer .btn-primary { grid-column: 1 / -1; }
 .side-actions .btn[aria-pressed] { padding: 0; }
+/* '찜 12' beside the heart (WP59). */
+.side-actions .btn.side-fav[aria-pressed] { gap: 6px; min-width: 52px; padding: 0 16px; font-size: var(--fs-14); }
 .author-box { display: flex; gap: 12px; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); }
 .author-box .name-line .nick { font-size: var(--fs-15); }
 .author-link { display: flex; flex: 1; min-width: 0; gap: 12px; align-items: center; color: inherit; }
@@ -194,17 +206,13 @@
 .owner-tools .owner-bump .btn { height: 56px; }
 .owner-delete { justify-self: center; margin-top: 4px; color: var(--danger); }
 .owner-delete:hover { color: var(--danger); }
-/* 가측 신청 next to 삭제 under the owner tools (WP65). */
+/* '가측 받기' next to 삭제 under the owner tools (WP66). */
 .owner-more { display: flex; justify-content: center; gap: 20px; margin-top: 4px; }
 .owner-more .owner-delete { margin-top: 0; }
 .owner-service:hover { color: var(--ink); }
-/* 운영진 가측가 (WP65): brand text, no fill. */
-.appraised-line { margin: 6px 0 0; color: var(--brand); font-size: var(--fs-14); font-weight: 600; }
-.appraised-tag { color: var(--brand); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
-.service-post { margin: 0; color: var(--ink); font-size: var(--fs-15); line-height: 1.5; overflow-wrap: anywhere; }
-.service-coupon { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: var(--fs-14); }
-.service-coupon b { font-weight: 600; }
-.service-chat { justify-self: start; margin-top: 4px; color: var(--brand); font-size: var(--fs-14); }
+/* '맞는 구매 글' / '맞는 판매 글' under the owner tools (WP58): a text link to the other side's board. */
+.owner-match { display: inline-flex; align-items: center; gap: 2px; justify-self: start; color: var(--brand); font-size: var(--fs-14); font-weight: 600; }
+.owner-match:hover { text-decoration: underline; text-underline-offset: 3px; }
 .owner-hint { color: var(--ink-3); font-size: var(--fs-13); }
 .promo-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .promo-row .switch { color: var(--ink); font-weight: 600; }
@@ -219,7 +227,7 @@
   .side-card { position: static; margin-top: 8px; }
   /* The price with its struck earlier 즉거가 sits under the title; the fixed bar shows the current price only. */
   .price-top { display: block; margin-top: 12px; }
-  .side-card > .price, .side-card > .appraised-line, .owner-tools { display: none; }
+  .side-card > .price, .owner-tools { display: none; }
   .author-box-top { display: flex; margin-top: 16px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
   .side-card:has(.side-actions), .side-card:has(.owner-tools) { gap: 0; padding: 16px; }
   .side-card:has(.side-actions) > .side-actions, .author-box-side { display: none; }
@@ -235,8 +243,12 @@
   .mobile-cta .price { flex: 1; min-width: 0; gap: 0; }
   .mobile-cta .price-values strong { font-size: var(--fs-18); line-height: 24px; }
   .mobile-cta .icon-btn, .owner-bar .icon-btn { flex: none; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: var(--r-8); }
+  /* The heart with its count under it (WP59). */
+  .mobile-cta .cta-fav { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: var(--fs-12); font-weight: 600; line-height: 14px; }
   .owner-bar .status-btn { flex: 1; min-width: 0; height: 44px; font-size: var(--fs-15); }
   .owner-bar-bump { flex: none; height: 44px; min-width: 84px; padding: 0 8px; font-size: var(--fs-14); }
+  .owner-bar-relist { flex: none; height: 44px; padding: 0 12px; font-size: var(--fs-14); }
+  .side-card .owner-match { margin-bottom: 14px; }
   .owner-bar-bump .bump-hint { font-size: var(--fs-12); }
   .detail-page { padding-bottom: 96px; }
   .footer-post { display: none; }
@@ -273,6 +285,15 @@
 /* editor */
 .editor { max-width: calc(760px + var(--gutter) * 2); }
 .ed-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* '15:40 자동 저장됨' and the '임시글 2' button (WP59). */
+.ed-top-side { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+/* 임시글 sheet (WP59): title (or '제목 없음'), board and time, '불러오기' and '삭제'. */
+.draft-list { margin: 0; padding: 0; list-style: none; }
+.draft-list li { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.draft-list li:last-child { border-bottom: 0; }
+.draft-list .grow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.draft-title { overflow: hidden; color: var(--ink); font-size: var(--fs-15); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.draft-actions { display: flex; flex: none; align-items: center; gap: 12px; }
 .ed-form fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .ed-section { padding: 32px 0; border-bottom: 1px solid var(--line); }
 .ed-head { margin-bottom: 18px; }
@@ -426,7 +447,18 @@
 .bubble-row.mine .bubble { border-radius: var(--r-16) var(--r-16) var(--r-4) var(--r-16); background: var(--brand); border-color: var(--brand); color: var(--white); }
 .bubble-meta { display: grid; justify-items: end; flex: none; color: var(--ink-3); font-size: var(--fs-12); }
 .bubble-row:not(.mine) .bubble-meta { justify-items: start; }
-.bubble-meta .read { color: var(--brand); font-weight: 600; }
+/* 읽음 표시 (WP69): '1' over the time of an own message the partner has not read (KakaoTalk style), and a
+   clock over the time while a message is on its way. */
+.bubble-meta .unread-mark { color: var(--brand); font-size: 11px; font-weight: 700; line-height: 14px; }
+.bubble-meta .pending-mark { margin-bottom: 2px; color: var(--ink-3); }
+.bubble-fail { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 4px; color: var(--danger); font-size: var(--fs-12); font-weight: 600; }
+.bubble-fail button { padding: 2px 4px; color: var(--ink-2); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.bubble-fail button:hover { color: var(--ink); }
+/* A photo still uploading: its local preview under a light veil with a small spinner. */
+.bubble-photos span { position: relative; display: block; aspect-ratio: 1; border-radius: var(--r-8); overflow: hidden; background: var(--line); }
+.bubble-photos.n1 span { aspect-ratio: 4 / 3; }
+.is-uploading::after { content: ''; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; border: 2px solid var(--white); border-right-color: transparent; border-radius: 50%; background: rgba(28,36,47,.48); box-shadow: 0 0 0 4px rgba(28,36,47,.48); animation: spin .8s linear infinite; }
+.is-uploading img { opacity: .6; }
 /* '더치트 조회' under a partner's message that holds a phone or account number. */
 .lookup-link { display: block; width: fit-content; margin: -2px 0 8px 2px; color: var(--ink-2); font-size: var(--fs-12); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .lookup-link:hover { color: var(--ink); }
@@ -484,6 +516,8 @@
 .room-panel { border-left: 1px solid var(--line); overflow-y: auto; padding: 20px; }
 .member-panel { display: grid; gap: 20px; }
 .mp-head { display: grid; gap: 6px; }
+.mp-who { display: flex; align-items: center; gap: 12px; }
+.mp-who > .grow { display: grid; gap: 6px; min-width: 0; }
 .mp-block { display: grid; gap: 4px; padding-top: 16px; border-top: 1px solid var(--line); }
 .mp-block h4 { margin-bottom: 6px; font-size: var(--fs-14); font-weight: 700; }
 .mp-row { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: var(--fs-14); }
@@ -590,6 +624,10 @@
 .seller-meta b { color: var(--ink); font-weight: 700; }
 .seller-meta .status-open { border: 1px solid var(--line-2); color: var(--ink-2); }
 .seller-stats { color: var(--ink-3); font-size: var(--fs-13); }
+/* 판매 통계 (WP63): for 프리미엄 and up the counts line is the button that opens the 통계 sheet. */
+.seller-stats.stats-open { display: inline-flex; flex-wrap: wrap; align-items: center; justify-self: start; gap: 2px 8px; padding: 0; text-align: left; }
+.stats-open b { color: var(--brand); font-weight: 700; }
+.stats-open:hover b { text-decoration: underline; text-underline-offset: 3px; }
 .seller-actions { display: flex; align-items: center; gap: 6px; }
 .seller-bump { flex-direction: column; gap: 0; min-width: 96px; height: 44px; line-height: 1.2; }
 .seller-bump .bump-hint { font-size: var(--fs-12); }
@@ -603,12 +641,36 @@
   .seller-actions { grid-column: 2; }
   .seller-bump { flex: 1; }
 }
+/* 내 글 header (WP58): the wallet gauge, then [모두 끌올] and [선택] at the right. */
+.mine-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.mine-head .mine-usage { margin: 0; }
+.mine-tools { display: flex; gap: 6px; margin-left: auto; }
+.mine-tools .btn { height: 36px; }
+/* 선택 mode: a checkbox first and the actions in the 선택 bar; a row the last change skipped says why. */
+.seller-row.is-selecting { grid-template-columns: 24px 56px minmax(0, 1fr); }
+.seller-check { justify-content: center; }
+.seller-skip { margin: 2px 0 0; color: var(--danger); font-size: var(--fs-13); line-height: 1.45; }
+.select-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 8px 12px; margin-top: 16px; padding: 12px 0; background: var(--white); border-top: 1px solid var(--line); }
+.select-count { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.select-actions { display: flex; gap: 6px; margin-left: auto; }
+.select-actions .btn { height: 40px; padding: 0 14px; }
+@media (max-width: 960px) {
+  .select-bar { bottom: calc(60px + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 640px) {
+  .select-bar { flex-wrap: wrap; padding: 10px 0; }
+  .select-actions { flex: 1 1 100%; margin-left: 0; }
+  .select-actions .btn { flex: 1; min-width: 0; padding: 0 6px; }
+}
 /* Simple lists (my trades; the manager lists reuse them) */
 .follow-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .simple-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .simple-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .simple-list li > .grow { display: grid; gap: 4px; min-width: 200px; }
 .report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 신고 (WP60): '대기 3' and '처리' over their lists; each row's reason with how long it waited (or the outcome). */
+.list-title { margin: 0 0 8px; color: var(--ink); font-size: var(--fs-16); font-weight: 700; }
+.report-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 /* A handled row is grayed by its text color, not opacity, so its check marks never turn into a pale brand. */
 .simple-list li.is-done :is(strong, .small, .muted, .nick) { color: var(--ink-3); }
 .simple-list strong, .strong-link { color: var(--ink); font-weight: 700; }
@@ -765,6 +827,11 @@
 .alert-count { flex: none; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
 .auto-post-switch { padding: 8px 0 8px 8px; }
 .auto-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-14); }
+/* 자동 매칭 (WP58): the '알림' card's switch with its post chips, and the '맞는 구매 글' sheet rows. */
+.match-block { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.match-block .switch { color: var(--ink); font-weight: 600; }
+.match-chips .chip { max-width: 100%; }
+.match-list li:not(.is-on) .auto-title { color: var(--ink); font-weight: 600; }
 .auto-hints { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--ink-3); font-size: var(--fs-13); }
 .tag.tag-auto { height: 20px; padding: 0 6px; border: 1px solid var(--brand); background: var(--white); color: var(--brand); font-weight: 600; }
 .seller-bump.is-waiting, .owner-bump .btn.is-waiting, .owner-bar-bump.is-waiting { color: var(--ink-2); background: var(--fill-2); }
@@ -852,3 +919,198 @@
   .comment.is-reply, .comment-reply-box { padding-left: 28px; }
   .comment-photo { width: 96px; height: 96px; }
 }
+
+/* 프로필 사진 (WP59): the owner's head avatar opens the photo picker; a small camera badge marks it. */
+.avatar-edit { position: relative; flex: none; align-self: flex-start; border-radius: var(--r-pill); }
+.avatar-edit:disabled { opacity: 1; }
+.avatar-edit-badge { position: absolute; right: -2px; bottom: -2px; display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--white); color: var(--ink-2); }
+.avatar-row { display: flex; align-items: center; gap: 12px; }
+/* 비밀번호 재설정 (WP59): an open chat address may be long. */
+.reset-contact { overflow-wrap: anywhere; }
+
+/* 중개/가측 (WP66): the segment control, the safety line, then the grade blocks. */
+.providers { padding-top: 24px; }
+.pv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pv-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; border-radius: var(--r-12); background: var(--fill); }
+.pv-seg-btn { min-width: 96px; height: 40px; padding: 0 18px; border-radius: var(--r-8); color: var(--ink-3); font-size: var(--fs-16); font-weight: 700; }
+.pv-seg-btn[aria-selected='true'] { background: var(--brand); color: var(--white); }
+.pv-safety { display: flex; align-items: center; gap: 6px; margin-top: 14px; color: var(--ink-3); font-size: var(--fs-13); }
+.pv-safety svg { flex: none; color: var(--brand); }
+.pv-own { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; width: 100%; margin-top: 14px; padding: 12px 16px; border: 1px dashed var(--line-2); border-radius: var(--r-12); background: var(--fill-2); color: var(--ink-2); font-size: var(--fs-14); text-align: left; }
+.pv-own b { color: var(--ink); }
+.pv-block { margin-top: 24px; }
+.pv-label { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; color: var(--ink-2); font-size: var(--fs-13); font-weight: 700; }
+.pv-label::before { content: ''; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--metal); }
+.pv-label-gold { --metal: var(--metal-gold); }
+.pv-label-silver { --metal: var(--metal-silver); }
+.pv-label-bronze { --metal: var(--metal-bronze); }
+.pv-apply { display: flex; justify-content: center; margin-top: 24px; }
+.pv-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--online); }
+.pv-online { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.pv-mine { display: inline-flex; align-items: center; justify-self: start; height: 20px; padding: 0 6px; border-radius: var(--r-4); background: var(--ink); color: var(--white); font-size: var(--fs-12); font-weight: 600; }
+.pv-badges .v-full { display: none; }
+.pv-badges { display: inline-flex; gap: 6px; }
+/* 엘리트 and 관리자: gold metal cards, 2 per row from 900px (1 on phones), with a slow diagonal shimmer. */
+.pv-elite-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 899px) { .pv-elite-grid { grid-template-columns: minmax(0, 1fr); } }
+.pv-elite { position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 14px; min-height: 132px; padding: 16px 20px 16px 12px; overflow: hidden; border: 1px solid var(--gold-edge); border-radius: var(--r-16);
+  background: radial-gradient(120% 90% at 0% 0%, var(--gold-gloss), transparent 55%), var(--metal-gold); box-shadow: var(--gold-shadow); color: var(--gold-ink); text-align: left; }
+.pv-elite::after { content: ''; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 38%, var(--gold-gloss) 50%, transparent 62%); transform: translateX(-120%); animation: pv-sweep 6s ease-in-out infinite; pointer-events: none; }
+.pv-elite:hover { box-shadow: var(--gold-shadow), 0 0 0 2px var(--gold-edge); }
+@keyframes pv-sweep { 0% { transform: translateX(-120%); } 30%, 100% { transform: translateX(120%); } }
+.pv-elite-who { display: grid; justify-items: center; gap: 6px; align-self: start; min-width: 0; }
+.pv-elite .avatar { width: 76px; height: 76px; border-width: 3px; box-shadow: 0 0 0 2px var(--white); font-size: var(--fs-28); }
+.pv-elite-name { max-width: 96px; overflow: hidden; color: var(--gold-ink); font-size: var(--fs-14); font-weight: 800; white-space: nowrap; text-overflow: ellipsis; }
+.pv-elite-main { position: relative; z-index: 1; display: grid; align-content: center; gap: 8px; min-width: 0; }
+.pv-elite-intro { display: -webkit-box; overflow: hidden; color: var(--gold-ink); font-size: 17px; font-weight: 600; line-height: 1.45; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.pv-elite-intro.is-empty { font-weight: 700; }
+.pv-elite-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--gold-ink); font-size: var(--fs-13); }
+.pv-elite-meta .verified { color: var(--gold-ink); }
+/* 프리미엄 64px and 플러스 48px profiles: 6 and 8 per row (3 and 4 on phones), no card, no effect. */
+.pv-grid { display: grid; gap: 12px 6px; }
+.pv-grid-premium { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.pv-grid-plus { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+@media (max-width: 960px) { .pv-grid-premium { grid-template-columns: repeat(4, minmax(0, 1fr)); } .pv-grid-plus { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .pv-grid-premium { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pv-grid-plus { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.pv-tile { display: grid; justify-items: center; align-content: start; gap: 6px; min-width: 0; padding: 8px 4px; border-radius: var(--r-12); text-align: center; }
+.pv-tile:hover { background: var(--fill-2); }
+.pv-tile-avatar { position: relative; display: inline-grid; }
+.pv-premium .avatar { width: 64px; height: 64px; border-width: 3px; font-size: var(--fs-24); }
+.pv-plus .avatar { width: 48px; height: 48px; border-width: 2px; font-size: var(--fs-18); }
+.pv-tile .pv-dot-on { position: absolute; right: 1px; bottom: 1px; width: 12px; height: 12px; border: 2px solid var(--white); }
+.pv-tile-name { max-width: 100%; overflow: hidden; color: var(--ink); font-size: var(--fs-13); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.pv-premium .pv-tile-name { font-size: var(--fs-14); font-weight: 700; }
+.pv-tile-intro { display: -webkit-box; max-width: 100%; overflow: hidden; color: var(--ink-2); font-size: var(--fs-13); line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.pv-tile .pv-mine { justify-self: center; }
+/* The home popup's gold mini card (WP66 item 12). */
+.pv-mini { position: relative; display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 12px; overflow: hidden; padding: 18px 48px 18px 16px;
+  background: radial-gradient(120% 90% at 0% 0%, var(--gold-gloss), transparent 55%), var(--metal-gold); color: var(--gold-ink); }
+.pv-mini .avatar { width: 56px; height: 56px; border-width: 3px; box-shadow: 0 0 0 2px var(--white); font-size: var(--fs-20); }
+.pv-mini-text { display: grid; gap: 4px; min-width: 0; }
+.pv-mini-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pv-mini-head b { overflow: hidden; font-size: var(--fs-16); font-weight: 800; white-space: nowrap; text-overflow: ellipsis; }
+.pv-mini-kind { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--gold-ink); border-radius: var(--r-4); font-size: var(--fs-12); font-weight: 700; }
+.pv-mini-intro { display: -webkit-box; overflow: hidden; font-size: var(--fs-14); font-weight: 600; line-height: 1.4; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.home-ad-provider { border-color: var(--gold-edge); }
+.home-ad-provider .home-ad-body { position: relative; padding: 0; }
+.pv-mini-ad { flex: none; display: inline-grid; place-items: center; height: 20px; padding: 0 6px; border-radius: var(--r-4); background: rgba(28, 36, 47, .72); color: var(--white); font-size: var(--fs-12); font-weight: 600; line-height: 1; }
+@media (max-width: 960px) {
+  .home-ad-provider .home-ad-body { display: block; padding: 0; }
+  .pv-mini { padding: 12px 52px 12px 12px; }
+  .home-ad-provider .home-ad-x { background: none; }
+}
+@media (prefers-reduced-motion: reduce) { .pv-elite::after { display: none; animation: none; } }
+
+/* 수익 홍보 (WP66 item 15): big example amounts on gold, the 사례, two lines and the footnote. */
+.earn { position: relative; overflow: hidden; padding: 22px 22px 18px; border: 1px solid var(--gold-edge); border-radius: var(--r-16); background: var(--white); box-shadow: var(--gold-shadow); }
+.earn::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 5px; background: var(--metal-gold); }
+.earn-title { color: var(--ink); font-size: var(--fs-18); font-weight: 800; }
+.earn-example { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; color: var(--ink-3); font-size: var(--fs-14); }
+.earn-lead { flex-basis: 100%; color: var(--ink-3); font-size: var(--fs-13); font-weight: 600; }
+.earn-stat { display: inline-flex; align-items: baseline; gap: 8px; padding: 10px 16px; border: 1px solid var(--gold-edge); border-radius: var(--r-12); background: radial-gradient(120% 90% at 0% 0%, var(--gold-gloss), transparent 55%), var(--metal-gold); color: var(--gold-ink); }
+.earn-kind { font-size: var(--fs-14); font-weight: 700; }
+.earn-stat b { font-size: var(--fs-24); font-weight: 800; letter-spacing: -0.6px; white-space: nowrap; }
+.earn-sep { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.earn-story { margin-top: 14px; color: var(--ink); font-size: var(--fs-16); font-weight: 700; }
+.earn-lines { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); font-size: var(--fs-14); }
+.earn-note { margin-top: 10px; color: var(--ink-3); font-size: var(--fs-12); }
+.earn-apply { margin-bottom: 16px; padding: 18px 18px 14px; }
+.earn-apply .earn-stat b { font-size: var(--fs-20); }
+@media (max-width: 640px) {
+  .earn { padding: 18px 16px 14px; }
+  .earn-stat { padding: 8px 12px; }
+  .earn-stat b { font-size: var(--fs-20); }
+}
+.earn-settings { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; }
+
+/* 등급 연출 (WP66 item 14a): a thin metal band behind the top of the avatar and '엘리트 회원' over the name. */
+.profile-head.vip { position: relative; isolation: isolate; padding-top: 20px; }
+.vip-band { position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 44px; border-radius: var(--r-12); background: var(--metal); }
+.vip-band::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(105deg, transparent 38%, var(--gold-gloss) 50%, transparent 62%); opacity: 0; }
+.vip-gold .vip-band { --metal: var(--metal-gold); }
+.vip-gold .vip-band::after { opacity: 1; transform: translateX(-120%); animation: pv-sweep 6s ease-in-out infinite; }
+.vip-silver .vip-band { --metal: var(--metal-silver); }
+.vip-bronze .vip-band { --metal: var(--metal-bronze); }
+.vip-band { overflow: hidden; }
+.profile-head.vip > .grow, .profile-head.vip > .profile-actions { padding-top: 32px; }
+.profile-head.vip .avatar { margin-left: 12px; box-shadow: 0 0 0 3px var(--white); }
+.vip-label { display: flex; width: fit-content; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--ink); font-size: var(--fs-13); font-weight: 700; }
+.vip-gold .vip-label { color: var(--gold-ink); }
+@media (prefers-reduced-motion: reduce) { .vip-gold .vip-band::after { animation: none; opacity: 0; } }
+@media (max-width: 640px) {
+  .profile-head.vip > .grow { padding-top: 0; }
+  .profile-head.vip > .profile-actions { padding-top: 0; }
+}
+
+/* 등급 축하 창 (WP66 item 14b): the metal hero with the grade badge, the own avatar in its new ring, the list. */
+.celebrate { position: fixed; z-index: 80; left: 50%; top: 50%; width: min(380px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); overflow-y: auto; transform: translate(-50%, -50%); border-radius: var(--r-16); background: var(--white); box-shadow: var(--shadow-pop); animation: pop .2s ease-out; }
+.celebrate:focus { outline: none; }
+.celebrate-hero { position: relative; display: grid; justify-items: center; gap: 14px; overflow: hidden; padding: 30px 24px 22px; background: radial-gradient(120% 90% at 0% 0%, var(--gold-gloss), transparent 55%), var(--metal); }
+.celebrate-gold .celebrate-hero { --metal: var(--metal-gold); color: var(--gold-ink); }
+.celebrate-silver .celebrate-hero { --metal: var(--metal-silver); color: var(--ink); }
+.celebrate-bronze .celebrate-hero { --metal: var(--metal-bronze); color: var(--ink); }
+.celebrate-gold .celebrate-hero::after { content: ''; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 38%, var(--gold-gloss) 50%, transparent 62%); transform: translateX(-120%); animation: pv-sweep 6s ease-in-out infinite; pointer-events: none; }
+.celebrate-medal { display: grid; place-items: center; width: 84px; height: 84px; border-radius: 50%; background: var(--white); box-shadow: 0 0 0 4px var(--gold-gloss), var(--shadow-pop); }
+.celebrate-title { position: relative; z-index: 1; color: inherit; font-size: var(--fs-20); font-weight: 800; text-align: center; }
+.celebrate-body { padding: 18px 24px 4px; }
+.celebrate-me { display: flex; align-items: center; gap: 12px; color: var(--ink); font-size: var(--fs-16); font-weight: 700; }
+.celebrate-me .avatar { width: 56px; height: 56px; border-width: 3px; font-size: var(--fs-20); }
+.celebrate-list { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+.celebrate-list li { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--fs-15); font-weight: 600; }
+.celebrate-list svg { flex: none; color: var(--brand); }
+.celebrate-foot { padding: 18px 24px 22px; }
+.celebrate-foot .btn { width: 100%; }
+@media (prefers-reduced-motion: reduce) { .celebrate { animation: none; } .celebrate-gold .celebrate-hero::after { display: none; } }
+
+/* 중개·가측 인증 for 플러스 and up (WP66): a locked option with the rule and '등급 보기'. */
+.apply-option.is-locked { cursor: default; background: var(--fill-2); }
+.apply-lock { color: var(--ink-3); font-size: var(--fs-13); }
+.apply-lock .apply-link { margin-left: 4px; }
+.guide-link { color: var(--brand); font-weight: 600; }
+.guide-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 등급 혜택 카드 (WP61, owner requests 2026-10-01/02): bronze, silver and gold accents (the 엘리트 card shimmers;
+   static with reduced motion), the price with 월 환산, the hook in big type, '일반 대비' lines and '혜택 N가지'. */
+.grade-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 4px 0 24px; }
+@media (max-width: 960px) { .grade-cards { grid-template-columns: minmax(0, 1fr); } }
+.grade-card { position: relative; display: grid; align-content: start; gap: 10px; overflow: hidden; padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: var(--r-16); background: var(--white); box-shadow: var(--shadow-card); }
+.grade-card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 6px; background: var(--metal); }
+.grade-card-bronze { --metal: var(--metal-bronze); border-color: var(--bronze-1); }
+.grade-card-silver { --metal: var(--metal-silver); border-color: var(--silver-2); }
+.grade-card-gold { --metal: var(--metal-gold); border-color: var(--gold-edge); box-shadow: var(--gold-shadow); }
+.grade-card-gold::after { content: ''; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 38%, var(--gold-gloss) 50%, transparent 62%); transform: translateX(-120%); animation: pv-sweep 6s ease-in-out infinite; pointer-events: none; }
+.grade-card-head { display: flex; align-items: center; gap: 8px; }
+.grade-card-head h3 { color: var(--ink); font-size: var(--fs-20); font-weight: 800; }
+.grade-card-all { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: var(--r-4); background: var(--metal-gold); color: var(--gold-ink); font-size: var(--fs-12); font-weight: 700; }
+.grade-card-price { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; color: var(--ink-3); font-size: var(--fs-13); }
+.grade-card-price b { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.grade-card-hook { color: var(--ink); font-size: var(--fs-18); font-weight: 800; line-height: 1.45; letter-spacing: -0.4px; }
+.grade-card-gold .grade-card-hook { color: var(--gold-ink); }
+.grade-card-vs-title { color: var(--ink-3); font-size: var(--fs-12); font-weight: 700; }
+.grade-card-vs { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.grade-card-vs li { display: flex; align-items: flex-start; gap: 6px; color: var(--ink-2); font-size: var(--fs-14); line-height: 1.45; }
+.grade-card-vs svg { flex: none; margin-top: 3px; color: var(--brand); }
+.grade-card-foot { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.grade-card-count { color: var(--ink); font-size: var(--fs-16); font-weight: 800; }
+.grade-card-count:hover { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .grade-card-gold::after { display: none; } }
+/* The table: check marks for O cells, '무제한' in bold, the 엘리트 column with its gold label. */
+.cell-check { display: inline-block; color: var(--brand); vertical-align: -3px; }
+.grade-benefits td b { font-weight: 800; }
+.grade-benefits thead th .grade-card-all { margin-left: 6px; height: 20px; padding: 0 6px; vertical-align: 1px; }
+.grade-free + .grade-free { margin-top: 12px; }
+/* The apply modal's grade rows: the same metal accents on the left edge, the hook over the line. */
+.grade-row { position: relative; }
+.grade-row.metal-bronze, .grade-row.metal-silver, .grade-row.metal-gold { padding-left: 20px; }
+.grade-row.metal-bronze::before, .grade-row.metal-silver::before, .grade-row.metal-gold::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--metal); }
+.grade-row.metal-bronze { --metal: var(--metal-bronze); }
+.grade-row.metal-silver { --metal: var(--metal-silver); }
+.grade-row.metal-gold { --metal: var(--metal-gold); }
+.grade-row-hook { color: var(--ink); font-size: var(--fs-15); font-weight: 800; line-height: 1.45; }
+.grade-row-count { color: var(--ink-2); font-size: var(--fs-12); font-weight: 700; }
+.plan-month { display: block; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
+/* '추천 설정 모두 켜기' (WP61) for 엘리트 and up: the state line and one button. */
+.auto-recommend { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 16px; }
+.auto-recommend-line { color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
+.plan:has(.plan-month) { height: auto; min-height: 40px; padding-block: 5px; }
+.plan b:has(.plan-month) { display: grid; line-height: 1.25; }

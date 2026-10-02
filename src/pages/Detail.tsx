@@ -1,32 +1,35 @@
 import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { Bell, BellRing, ChevronRight, Flag, Heart, Link2, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { Bell, BellRing, ChevronRight, Flag, Heart, MessageCircle, MoreHorizontal, Share2 } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, clanTierName, closedLabel, featureTags, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, takeScrollRestore, withParams } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { setPageTitle, useApp } from '../app/state';
+import { sharePost } from '../lib/share';
+import { offerPush, setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
-import { AppraisedLine, PriceLine } from '../components/PostCard';
+import { PriceLine } from '../components/PostCard';
 import { RichBody } from '../components/RichBody';
-import { ServiceSheet } from '../components/ServiceSheet';
 import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { AD_TEXT, ALERT_TEXT, DROP_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT, DROP_TEXT, MATCH_TEXT, PROVIDER_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
+import { ClanTierPill, FeatureTags, LadderTags, hasLadder, tierClass } from '../components/LadderTags';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
 // and the author's trade and 좋아요 counts from WP23).
 type DetailPost = Post & { bump_count?: number; featured?: boolean; hidden_reason?: string; author_deleted?: boolean; author_last_seen_at?: number | null; author_trade_count?: number; author_deal_sum?: number; author_good_count?: number;
     author_created_at?: number; author_prev_nickname?: string;
+    // '찜 12' (WP59): every favorite of the post; the author's 64px 프로필 사진 for the author box.
+    fav_count?: number; author_avatar_thumb?: string;
     // The author's '자동 끌올' switch and a pending '끌올 가능' 알림 (WP52).
     // and its 가격 내리기 (WP56; drop null: not a priced 판매 post).
     auto?: { bump: boolean; remindAt: number | null; drop?: { on: boolean; floor: number; nextAt: number | null; nextPrice: number | null } | null };
@@ -53,7 +56,20 @@ function specBlock(rows: Row[]) {
 function tagBlock(title: string, names: string[]) {
     return names.length ? [<h3 key={title + '-h'}>{title}</h3>, <div className="tags" key={title}>{names.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div>] : [];
 }
-const ladderNames = (tags: Post['tags']) => [...tags].sort((a, b) => b.season - a.season).map(tagName);
+// Ladders as one tier-colored pill per tier, highest first ('모든 시즌 챔피언', '마스터 18시즌 · 시즌 비공개 2', WP68);
+// clan: the clan tiers ('모든 시즌 클랜 챔피언', '클랜 골드 28~32시즌', WP70).
+function ladderBlock(title: string, tags: Post['tags'], hidden?: Post['ladder_hidden'], clan = false) {
+    return hasLadder(tags, hidden) ? [<h3 key={title + '-h'}>{title}</h3>, <LadderTags key={title} className="ladder-block" tags={tags} hidden={hidden} clan={clan} />] : [];
+}
+// 특징 태그 (WP70): '#불새상류' chips.
+function featureBlock(title: string, raw?: string) {
+    const tags = featureTags(raw);
+    return tags.length ? [<h3 key={title + '-h'}>{title}</h3>, <FeatureTags key={title} tags={tags} />] : [];
+}
+// 현재 클랜 티어 (WP70) as one pill in the clan color.
+function clanTierBlock(title: string, tier?: string) {
+    return tier && clanTierName(tier) ? [<h3 key={title + '-h'}>{title}</h3>, <div className="ladder-tags ladder-block" key={title}><ClanTierPill tier={tier} /></div>] : [];
+}
 
 function nicknameRange(d: Record<string, string>, prefix = '') {
     const min = d[prefix ? 'wantedNicknameCharsMin' : 'nicknameCharsMin'];
@@ -75,10 +91,29 @@ function offeredBlocks(post: Post): ReactNode[] {
             ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['레벨', num(d.level)], ['연구실', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
         ]),
-        ...tagBlock('래더 기록', ladderNames(post.tags)),
+        ...ladderBlock('래더 기록', post.tags, post.ladder_hidden),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d.skinTags))),
         ...d.rareSkins ? [<h3 key="rare-h">기타 스킨</h3>, <p className="body-text" key="rare">{d.rareSkins}</p>] : [],
+        ...featureBlock('계정 특징 태그', d.featureTags),
     ];
+}
+
+// 클랜 (WP70): the clan's fields with the clan name in its 현재 클랜 티어 color (as in the game), the tier pill,
+// its 클랜 래더 (구매: the clan tiers wanted) and its 특징 태그.
+function clanBlocks(post: Post): ReactNode[] {
+    const d = post.details, tier = clanTierName(d.clanTier || '') ? d.clanTier : '';
+    return [
+        ...specBlock((DETAIL_FIELDS.clan || []).map(f => [f.label, f.id === 'clanName' && d.clanName && tier
+            ? <span className={'clan-name ' + tierClass(tier, true)}>{d.clanName}</span>
+            : f.type === 'number' ? num(d[f.id]) : d[f.id]] as Row)),
+        ...clanTierBlock('현재 클랜 티어', tier),
+        ...ladderBlock(post.kind === 'buy' ? '원하는 클랜 티어' : '클랜 래더 기록', post.clan_tags || [], undefined, true),
+        ...featureBlock('클랜 특징 태그', d.featureTags),
+    ];
+}
+// The clan a 교환 asks for: its 현재 클랜 티어 and clan ladder.
+function wantedClanBlocks(post: Post): ReactNode[] {
+    return [...clanTierBlock('현재 클랜 티어', post.details.wantedClanTier), ...ladderBlock('원하는 클랜 티어', post.wanted_clan_tags || [], undefined, true)];
 }
 
 // Buyer-side wishes (구매, and the wanted side of 교환 with the "wanted" prefix).
@@ -90,7 +125,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['스킨 수 (팬텀)', d[key('phantomMin')] ? d[key('phantomMin')] + '% 이상' : ''], ['전적', d[key('recordPreference')]],
             ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
-        ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),
+        ...ladderBlock('원하는 래더', prefix ? post.wanted_tags || [] : post.tags),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d[key('skinTags')]))),
     ];
 }
@@ -98,7 +133,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
 function genericBlocks(post: Post, category: string): ReactNode[] {
     return [
         ...specBlock((DETAIL_FIELDS[category] || []).map(f => [f.label, f.type === 'number' ? num(post.details[f.id]) : post.details[f.id]] as Row)),
-        ...category === 'ladder' ? tagBlock('래더 시즌', post.tags.map(tagName)) : [],
+        ...category === 'ladder' ? ladderBlock('래더 시즌', post.tags) : [],
     ];
 }
 
@@ -131,7 +166,7 @@ export function Detail({ id }: { id: string }) {
         if (!post || followBusy) return;
         const active = !post.author_followed;
         setFollowBusy(true);
-        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); if (active) offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setFollowBusy(false); }
     });
@@ -142,8 +177,6 @@ export function Detail({ id }: { id: string }) {
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
     const [tradeSheet, setTradeSheet] = useState(false), [recordable, setRecordable] = useState(false);
-    // 가측 신청 (WP65) from the owner's 더보기 menu.
-    const [appraise, setAppraise] = useState(false);
     // The '자동 끌올' switch (WP52) and its '뺄 글 선택' sheet.
     const { toggle: toggleAuto, busy: toggling, sheet: autoSheet } = useAutoToggle((postId, on) => setPost(p => p && p.id === postId ? { ...p, auto: { ...p.auto, bump: on, remindAt: p.auto?.remindAt ?? null } } : p));
     // 조회수 (WP45): view=1 once per post and KST day per browser (the server also dedupes); the author never counts.
@@ -196,8 +229,9 @@ export function Detail({ id }: { id: string }) {
     // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
     const lostProxy = mine && post.kind === 'proxy_offer' && !manager && !me?.badges.includes('proxy');
     const openNow = post.status === 'open' && !post.hidden;
-    // 가측 신청 (WP65): an own open 판매·교환 account post; the manager performs it and needs none.
-    const canAppraise = mine && openNow && !manager && !suspended && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
+    // '가측 받기' (WP66): the owner of a 판매·교환 account post finds a 가측 인증 member on the '중개/가측' tab.
+    const canAppraise = mine && !manager && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
+    const findAppraiser = () => void navigate('/providers?type=appraiser');
 
     // 끌올: the wallet ('3/4') or '15:40부터 가능'. A waiting button sets the '끌올 가능' 알림 ('15:40 알림
     // 예정', WP52).
@@ -210,6 +244,11 @@ export function Detail({ id }: { id: string }) {
         : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
     // 자동 끌올 (WP52): 플러스 and up (the 체험 too) and the manager, on an open post.
     const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
+    // WP58: '다시 올리기' on a completed post and '복사해서 새 글' on any own post open the editor with this post
+    // (/write?from=); an open 판매 or 구매 post links to the other side's board ('맞는 구매 글').
+    const canCopy = mine && !suspended && !lostProxy;
+    const copyHref = '/write?from=' + post.id;
+    const match = mine && openNow ? matchQuery(post) : null;
 
     async function startChat() {
         requireLogin(async () => {
@@ -224,7 +263,7 @@ export function Detail({ id }: { id: string }) {
     }
     async function favorite() {
         requireLogin(async () => {
-            try { await api(`posts/${post!.id}/favorite`, 'POST', { active: !post!.favorite }); setPost({ ...post!, favorite: !post!.favorite }); toast(post!.favorite ? '찜 해제' : '찜 완료'); }
+            try { await api(`posts/${post!.id}/favorite`, 'POST', { active: !post!.favorite }); setPost({ ...post!, favorite: !post!.favorite, fav_count: Math.max(0, (post!.fav_count || 0) + (post!.favorite ? -1 : 1)) }); toast(post!.favorite ? '찜 해제' : '찜 완료'); }
             catch (e) { toast.error(errorText(e)); }
         });
     }
@@ -255,15 +294,17 @@ export function Detail({ id }: { id: string }) {
     // The rows of each section are built first; a section without any is left out.
     let info: ReactNode[];
     if (post.kind === 'exchange') {
-        const offered = post.category === 'account' ? offeredBlocks(post) : genericBlocks(post, 'clan');
-        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : [];
+        const offered = post.category === 'account' ? offeredBlocks(post) : clanBlocks(post);
+        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : wantedClanBlocks(post);
         info = [
             ...offered.length ? [<h3 key="offered-h">내놓는 {categoryName(post.category)}</h3>, <Fragment key="offered">{offered}</Fragment>] : [],
             <h3 key="wanted-h">구하는 {categoryName(exchangeWanted)}</h3>,
             wanted.length ? <Fragment key="wanted">{wanted}</Fragment> : <p className="muted" key="wanted">따로 정한 조건 없음 · 내용 참고</p>,
         ];
-    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : genericBlocks(post, post.category);
+    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : post.category === 'clan' ? clanBlocks(post) : genericBlocks(post, post.category);
 
+    // '찜 12' beside the heart (WP59): the button reads '찜하기 · 찜 12' (or '찜 해제 · 찜 12') to screen readers.
+    const favs = post.fav_count || 0, favLabel = `${post.favorite ? '찜 해제' : '찜하기'} · 찜 ${favs}`;
     const bumpButton = (cls: string) => <button type="button" className={'btn btn-line ' + cls + (bump.remind ? ' is-waiting' : '')} disabled={bump.disabled || busy} onClick={bumpNow}>
         <span>끌올</span>{bump.hint && <small className="bump-hint">{bump.hint}</small>}</button>;
 
@@ -281,7 +322,7 @@ export function Detail({ id }: { id: string }) {
                 </div>}
                 <h1 className="detail-title">{post.title}</h1>
                 {/* Phones: the full price line with every struck earlier 즉거가 sits under the title. */}
-                <div className="price-top"><PriceLine post={post} large /><AppraisedLine post={post} /></div>
+                <div className="price-top"><PriceLine post={post} large /></div>
                 <div className="detail-meta">
                     {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                     {post.hidden === 1 && <span className="status status-closed">숨김</span>}
@@ -302,7 +343,7 @@ export function Detail({ id }: { id: string }) {
                     <div className="body-text"><RichBody text={post.body} cards={post.link_cards} marks={post.body_style?.m} /></div>
                 </section>}
                 <div className="row muted small detail-tools">
-                    <button type="button" className="btn btn-text small" onClick={() => { void navigator.clipboard?.writeText(location.href).then(() => toast('링크 복사 완료')); }}><Link2 size={15} />링크 복사</button>
+                    <button type="button" className="btn btn-text small" onClick={() => void sharePost(post.id, post.title)}><Share2 size={15} />공유</button>
                     {!mine && <button type="button" className="btn btn-text small" onClick={() => requireLogin(() => setReport(true))}><Flag size={15} />신고</button>}
                     <span className="grow" /><span>글 번호 {post.id}</span>
                 </div>
@@ -314,7 +355,6 @@ export function Detail({ id }: { id: string }) {
 
             <aside className="side-card" aria-label="가격과 문의">
                 <PriceLine post={post} large />
-                <AppraisedLine post={post} />
                 {mine ? <div className="owner-tools">
                     <StatusSeg post={post} className="btn-block" onComplete={() => setTradeSheet(true)} />
                     {recordable && <button type="button" className="btn btn-line btn-block" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>}
@@ -323,16 +363,19 @@ export function Detail({ id }: { id: string }) {
                         {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
                         {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     </>}
-                    {/* Wide screens have no 더보기 menu, so 가측 신청 is a quiet text button here. */}
+                    {post.status === 'closed' && canCopy && <Link to={copyHref} className="btn btn-line btn-block">다시 올리기</Link>}
+                    {/* Wide screens have no 더보기 menu, so '가측 받기' and 복사해서 새 글 are quiet text buttons here. */}
                     <div className="owner-more">
-                        {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={() => setAppraise(true)}>가측 신청</button>}
+                        {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={findAppraiser}>{PROVIDER_TEXT.appraise}</button>}
+                        {canCopy && <Link to={copyHref} className="btn btn-text owner-service">복사해서 새 글</Link>}
                         <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
                     </div>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
                     <button type="button" className="btn btn-primary btn-lg" onClick={startChat}><MessageCircle size={19} />채팅하기</button>
                     {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
-                    <button type="button" className={'btn btn-line btn-lg' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /></button>
+                    <button type="button" className={'btn btn-line btn-lg side-fav' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={favLabel} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /><span>찜 {favs}</span></button>
                 </div>}
+                {match && <Link to={'/trade?' + match.query} className="owner-match">{MATCH_TEXT.link(post.kind)}<ChevronRight size={16} aria-hidden="true" /></Link>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
                 {autoAllowed && openNow && <div className="promo-row">
                     <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
@@ -352,30 +395,31 @@ export function Detail({ id }: { id: string }) {
             {recordable ? <button type="button" className="btn btn-primary status-btn" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>
                 : <StatusSeg post={post} onComplete={() => setTradeSheet(true)} />}
             {post.status !== 'closed' && bumpButton('owner-bar-bump')}
+            {post.status === 'closed' && canCopy && <Link to={copyHref} className="btn btn-line owner-bar-relist">다시 올리기</Link>}
             <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
                         {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
                         {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
-                        {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={() => setAppraise(true)}>가측 신청</DropdownMenu.Item>}
+                        {canCopy && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate(copyHref)}>복사해서 새 글</DropdownMenu.Item>}
+                        {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={findAppraiser}>{PROVIDER_TEXT.appraise}</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
             </DropdownMenu.Root>
         </div> : !withdrawnPost && <div className="mobile-cta">
             <PriceLine post={post} />
-            <button type="button" className={'icon-btn' + (post.favorite ? ' is-on' : '')} aria-label={post.favorite ? '찜 해제' : '찜하기'} onClick={favorite}><Heart size={22} fill={post.favorite ? 'currentColor' : 'none'} /></button>
+            <button type="button" className={'icon-btn cta-fav' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={favLabel} onClick={favorite}><Heart size={20} fill={post.favorite ? 'currentColor' : 'none'} /><span aria-hidden="true">{favs}</span></button>
             {canOffer && <button type="button" className="btn btn-line" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
             <button type="button" className="btn btn-primary" onClick={startChat}>채팅하기</button>
         </div>}
 
         <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
-        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => { setPost(prev => ({ ...p, auto: prev?.auto, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count })); if (p.auto?.drop?.on || post.auto?.drop?.on) void load(); }} />}
+        {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => { setPost(prev => ({ ...p, auto: prev?.auto, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count, fav_count: prev?.fav_count })); if (p.auto?.drop?.on || post.auto?.drop?.on) void load(); }} />}
         <ReportModal open={report} onClose={() => setReport(false)} target={{ postId: post.id }} />
         <ReportModal open={commentReport !== null} onClose={() => setCommentReport(null)} target={{ commentId: commentReport }} title="댓글 신고" />
-        {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
         <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="글 삭제" description="복구할 수 없습니다."
@@ -397,7 +441,7 @@ function AuthorBox({ post, own, className, onFollow, followBusy }: { post: Detai
     // '구독' sits beside the profile link (not inside it); it hides when the author takes no follows.
     const followable = !own && (post.author_follow_allowed !== false || !!post.author_followed);
     return <div className={'author-box ' + className}><Link to={'/profile/' + post.author_id} className="author-link">
-        <Avatar name={post.nickname} />
+        <Avatar name={post.nickname} src={post.author_avatar_thumb} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} />
         <span className="grow"><NameLine nickname={post.nickname} grade={post.author_grade} trial={post.author_grade_trial} role={post.role} badges={post.author_badges} />
             {seen && <span className="author-stats author-seen">{seen}</span>}
             <span className="author-stats author-trust">{tradeStatsText(trades, good, post.author_deal_sum ?? 0)}</span>
@@ -420,7 +464,7 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
     async function send() {
         if (won === null || Number.isNaN(won)) { toast.error('제시가를 만원 단위로 입력해 주세요. 예: 45'); return; }
         setBusy(true);
-        try { const d = await api<{ chatId: string }>('offers', 'POST', { postId: post.id, amount: won, note }); onClose(); toast('제시 완료'); void navigate('/chat/' + d.chatId); }
+        try { const d = await api<{ chatId: string }>('offers', 'POST', { postId: post.id, amount: won, note }); onClose(); toast('제시 완료'); void navigate('/chat/' + d.chatId); offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }

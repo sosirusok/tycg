@@ -11,8 +11,9 @@ import {
 // (1GB on R2, 100MB on KV, 30MB on D1).
 const UPLOAD_ROWS = SITE_RULES.openPosts * SITE_RULES.photosPerPost;
 
-// A photo is "in use" while a post, a chat message, a 댓글 (WP55) or one of the owner's drafts references it.
-export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM comments c WHERE c.image_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id)";
+// A photo is "in use" while a post, a chat message, a 댓글 (WP55), one of the owner's drafts or a member's
+// 프로필 사진 (WP59) references it.
+export const unused = "NOT EXISTS(SELECT 1 FROM post_images pi WHERE pi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM message_images mi WHERE mi.upload_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM comments c WHERE c.image_id=uploads.id) AND NOT EXISTS(SELECT 1 FROM drafts d,json_each(d.content,'$.images') j WHERE d.user_id=uploads.owner_id AND j.value=uploads.id) AND NOT EXISTS(SELECT 1 FROM users av WHERE av.avatar_id=uploads.id)";
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -179,12 +180,16 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     // compressed nor uploaded again, and the match counts as a use for the unused-photo cleanup.
     if (p[0] === 'uploads' && p[1] === 'lookup' && !p[2] && method === 'POST') {
         const u = await requireUser(req), b = await body(req);
-        // {ids}: the editor's photos restored with a draft; only the posts they are in (no touch).
+        // {ids}: the editor's photos restored with a draft; only the posts they are in (no touch), and which
+        // of them the member still owns (owned: '다시 올리기' and '복사해서 새 글' keep only those, WP58).
         if (Array.isArray(b.ids)) {
             const ids = [...new Set(b.ids.filter((v: unknown): v is string => typeof v === 'string' && v.length <= 64))].slice(0, 100);
-            if (!ids.length) return json({ usedIn: {} });
-            const used = await usedInStatement(u.id, 'SELECT value FROM json_each(?)', [JSON.stringify(ids)]).all<UsedRow>();
-            return json({ usedIn: usedInMap(used.results, u, Date.now()) });
+            if (!ids.length) return json({ usedIn: {}, owned: [] });
+            const [used, owned] = await db().batch([
+                usedInStatement(u.id, 'SELECT value FROM json_each(?)', [JSON.stringify(ids)]),
+                db().prepare('SELECT id FROM uploads WHERE owner_id=? AND id IN (SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(ids)),
+            ]);
+            return json({ usedIn: usedInMap(used.results as UsedRow[], u, Date.now()), owned: (owned.results as { id: string }[]).map(r => r.id) });
         }
         const hashes = Array.isArray(b.hashes) ? [...new Set(b.hashes.filter((h: unknown): h is string => typeof h === 'string' && HEX64.test(h)))].slice(0, 100) : [];
         if (!hashes.length) return json({ found: {}, usedIn: {} });
@@ -217,8 +222,8 @@ export async function filesHandler(req: Request, p: string[]): Promise<Response 
     if (p[0] === 'images' && p[1] && method === 'GET') {
         const m = await db().prepare('SELECT * FROM uploads WHERE id=?').bind(p[1]).first<any>();
         if (!m) fail(404, '사진을 찾을 수 없습니다.');
-        // A 댓글 photo (WP55) is public while its post is.
-        const publicImage = await db().prepare('SELECT 1 FROM post_images pi JOIN posts p ON p.id=pi.post_id WHERE pi.upload_id=? AND p.hidden=0 UNION ALL SELECT 1 FROM comments c JOIN posts p ON p.id=c.post_id WHERE c.image_id=? AND p.hidden=0 LIMIT 1').bind(p[1], p[1]).first();
+        // A 댓글 photo (WP55) is public while its post is, and a 프로필 사진 (WP59) while it is set.
+        const publicImage = await db().prepare('SELECT 1 FROM post_images pi JOIN posts p ON p.id=pi.post_id WHERE pi.upload_id=? AND p.hidden=0 UNION ALL SELECT 1 FROM comments c JOIN posts p ON p.id=c.post_id WHERE c.image_id=? AND p.hidden=0 UNION ALL SELECT 1 FROM users av WHERE av.avatar_id=? AND av.deleted_at IS NULL LIMIT 1').bind(p[1], p[1], p[1]).first();
         if (!publicImage) {
             const u = await currentUser(req);
             const allowed = u && (u.id === m.owner_id || u.role === 'manager' || await db().prepare('SELECT 1 FROM message_images mi JOIN messages msg ON msg.id=mi.message_id JOIN conversations c ON c.id=msg.conversation_id WHERE mi.upload_id=? AND (c.user_a=? OR c.user_b=?) LIMIT 1').bind(p[1], u.id, u.id).first());

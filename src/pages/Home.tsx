@@ -8,12 +8,13 @@ import { useApp } from '../app/state';
 import { CIcon } from '../components/ui';
 import { MiniCard } from '../components/PostCard';
 import { adHref } from '../components/AdCard';
-import { HomeAdCard } from '../components/HomeAdCard';
+import { HomeAdCard, type CardItem } from '../components/HomeAdCard';
 
 
 type Notice = { id: number; title: string; created_at: number };
 
-type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; notices: Notice[] };
+// card: the bottom card's items (WP66: ad posts and 엘리트·관리자 providers); cardAds the posts alone.
+type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; card?: CardItem[]; notices: Notice[] };
 
 // One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
 // the board list for that category.
@@ -114,7 +115,7 @@ export function Home() {
         <section className="container hero">
             <h1>어떤 거래를 찾으세요?</h1>
             <form className="hero-search" onSubmit={search} role="search">
-                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임 (예: 악주, 뱀동)" aria-label="거래 검색" /></label>
+                <label className="search-input grow"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)" aria-label="거래 검색" /></label>
             </form>
             <nav className="quick-row" aria-label="거래 종류">
                 {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><CIcon name={KIND_ICONS[kind]} size={40} /><span>{KIND_NAMES[kind]}</span></Link>)}
@@ -153,6 +154,6 @@ export function Home() {
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>
         </div>
-        <HomeAdCard ads={home ? home.cardAds || [] : null} />
+        <HomeAdCard items={home ? home.card || (home.cardAds || []).map(post => ({ post })) : null} />
     </div>;
 }
