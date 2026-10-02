@@ -9,14 +9,17 @@ import { CIcon } from './ui';
 import { adHref } from './AdCard';
 import { listPhoto, subjectLabel } from './PostCard';
 
-// The home bottom ad card (WP53): one 엘리트 ad from the '엘리트 매물' list GET /api/home already sent
-// (no extra request). Not a modal: no overlay, no focus trap, X closes it. The rules live in this
-// browser only (localStorage, every access in try/catch; blocked storage means no card):
+// The home bottom ad card (WP53): one 엘리트 ad from cardAds, which GET /api/home already sent (no extra
+// request) and which never holds a post of the '엘리트 매물' row. It shows only while that row is off
+// screen, so the two ad areas never share a screen and the card never covers the row. Not a modal: no
+// overlay, no focus trap, X closes it. The rules live in this browser only (localStorage, every access in
+// try/catch; blocked storage means no card):
 // - at most once per KST day, never on the first-ever visit's day or the member's sign-up day;
 // - never on a day a site modal showed ('modal-day', which the trial popup sets);
 // - 3 closes in a row rest it for 7 days; the same post not again within 3 days;
 // - never the viewer's own post, never for the manager, never the manager's posts.
-// It appears 5 seconds after the page opens or on the first scroll, and leaves with the home page.
+// It appears 5 seconds after the page opens or on the first scroll (once the row is off screen), and
+// leaves with the home page.
 const KEY = 'home-ad';
 const DAY = 86400000, REST_MS = 7 * DAY, SAME_POST_MS = 3 * DAY, CLOSES_TO_REST = 3, DELAY_MS = 5000;
 type State = { first?: string; day?: string; closes?: number; restUntil?: number; seen?: Record<string, number> };
@@ -29,6 +32,13 @@ function save(s: State) {
 }
 function modalDay() {
     try { return localStorage.getItem(MODAL_DAY_KEY); } catch { return null; }
+}
+// Whether the home '엘리트 매물' row (Home's EliteShelf) is on screen now.
+function rowInView() {
+    const row = document.querySelector('.elite-row');
+    if (!row) return false;
+    const r = row.getBoundingClientRect();
+    return r.bottom > 0 && r.top < window.innerHeight;
 }
 
 // The post to show today, or null (and the first-visit day stamped on the very first visit).
@@ -46,19 +56,20 @@ function choose(ads: Post[], me: { id: string; role: string; created_at: number 
 
 export function HomeAdCard({ ads }: { ads: Post[] | null }) {
     const { me, ready } = useApp();
-    const [pick, setPick] = useState<Post | null>(null), [shown, setShown] = useState(false);
+    const [pick, setPick] = useState<Post | null>(null), [shown, setShown] = useState(false), [covered, setCovered] = useState(false);
     useEffect(() => {
         if (!ready || !ads) return;
         setPick(choose(ads, me, Date.now()));
     }, [ready, !!ads, me?.id]);
-    // 5 seconds after the page opens or the first scroll, whichever comes first, while no dialog is open.
+    // 5 seconds after the page opens or the first scroll, whichever comes first, while no dialog is open
+    // and the '엘리트 매물' row is off screen.
     useEffect(() => {
         if (!pick || shown) return;
         let timer = 0;
         const show = () => {
             window.removeEventListener('scroll', show);
             clearTimeout(timer);
-            if (document.querySelector('[role=dialog]')) { timer = window.setTimeout(show, 1000); return; }
+            if (document.querySelector('[role=dialog]') || rowInView()) { timer = window.setTimeout(show, 1000); return; }
             const now = Date.now(), today = kstDate(now), state = load();
             // A modal opened meanwhile (the trial popup): no card today.
             if (!state || modalDay() === today) { setPick(null); return; }
@@ -70,6 +81,15 @@ export function HomeAdCard({ ads }: { ads: Post[] | null }) {
         window.addEventListener('scroll', show, { passive: true });
         return () => { clearTimeout(timer); window.removeEventListener('scroll', show); };
     }, [pick, shown]);
+    // Once shown, the card steps aside (hidden, not closed) while the row is back on screen.
+    useEffect(() => {
+        if (!shown) return;
+        const check = () => setCovered(rowInView());
+        check();
+        window.addEventListener('scroll', check, { passive: true });
+        window.addEventListener('resize', check);
+        return () => { window.removeEventListener('scroll', check); window.removeEventListener('resize', check); };
+    }, [shown]);
     if (!pick || !shown) return null;
     const close = () => {
         const state = load() || {}, closes = (state.closes || 0) + 1;
@@ -83,7 +103,7 @@ export function HomeAdCard({ ads }: { ads: Post[] | null }) {
         void navigate(adHref(pick.id));
     };
     const { thumbSrc } = listPhoto(pick);
-    return <aside className="home-ad" aria-label={AD_TEXT.home}>
+    return <aside className={'home-ad' + (covered ? ' is-covered' : '')} aria-label={AD_TEXT.home}>
         <button type="button" className="home-ad-body" onClick={open}>
             <span className="home-ad-media">
                 {thumbSrc ? <img src={thumbSrc} alt="" /> : <CIcon name={KIND_ICONS[pick.kind]} size={40} />}

@@ -11,7 +11,8 @@ const SHELF_SIZE = 6;
 // GET /api/home (WP42): the whole home page in one request and one batch, instead of five requests.
 // Each shelf is the board's first page in 최신순 (active posts in the 30-day window, size 6, no count);
 // '엘리트 매물' (WP53) is up to 6 ads of 엘리트 and above, one per advertiser, rotated every 10 minutes
-// (the home bottom card picks from the same list); and the 4 newest notices.
+// (the home bottom card picks from cardAds: up to 3 other slot posts, never a post of the row); and the
+// 4 newest notices.
 export async function homeHandler(req: Request, url: URL) {
     const now = Date.now(), u = await currentUser(req);
     const wanted = url.searchParams.get('category');
@@ -31,9 +32,12 @@ export async function homeHandler(req: Request, url: URL) {
     ])).slice(backfill.length);
     // One decorate for every post on the page (tags, 찜, price history in one batch).
     const rows = r.slice(0, SHELVES.length + 1).map(x => x.results as any[]);
-    rows[SHELVES.length] = stripAdRank(pickHome(rows[SHELVES.length], now));
+    const home = pickHome(rows[SHELVES.length], now);
+    rows[SHELVES.length] = stripAdRank(home.row);
+    rows.push(stripAdRank(home.card));
     const all = await decorate(rows.flat(), u);
     let at = 0;
-    const [sell, buy, proxy_offer, ads] = rows.map(list => all.slice(at, at += list.length));
-    return json({ shelves: { sell, buy, proxy_offer }, sellCategory, ads, notices: r[SHELVES.length + 1].results });
+    const [sell, buy, proxy_offer, ads, cardAds] = rows.map(list => all.slice(at, at += list.length));
+    // cardAds: for the home bottom card only (never a post of the row).
+    return json({ shelves: { sell, buy, proxy_offer }, sellCategory, ads, cardAds, notices: r[SHELVES.length + 1].results });
 }

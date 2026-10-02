@@ -17,19 +17,21 @@ import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, Skin
 const PAGE_SIZE = 16;
 
 // 같은 회원 글 접기 (WP53): on a board page each member shows 2 rows; the rest fold into one line
-// '이 회원 글 N개 더' at the 3rd row, which opens them in place. The manager's posts never fold, and
+// '좀비사냥꾼 글 N개 더' right under the 2nd row, which opens them in place. The manager's posts never fold, and
 // the server's order, counts and paging stay as they are.
-type Folded = { post: Post } | { more: string; count: number };
+type Folded = { post: Post } | { more: string; name: string; count: number };
 const FOLD_AFTER = 2;
 function foldRows(posts: Post[], open: Set<string>): Folded[] {
     const seen = new Map<string, number>(), total = new Map<string, number>();
     for (const p of posts) total.set(p.author_id, (total.get(p.author_id) || 0) + 1);
     const out: Folded[] = [];
     for (const p of posts) {
-        const n = (seen.get(p.author_id) || 0) + 1;
+        const n = (seen.get(p.author_id) || 0) + 1, keep = p.role === 'manager' || open.has(p.author_id);
         seen.set(p.author_id, n);
-        if (n <= FOLD_AFTER || p.role === 'manager' || open.has(p.author_id)) out.push({ post: p });
-        else if (n === FOLD_AFTER + 1) out.push({ more: p.author_id, count: total.get(p.author_id)! - FOLD_AFTER });
+        if (n <= FOLD_AFTER || keep) out.push({ post: p });
+        // The fold line sits right under the member's 2nd row and names them, so two folds in a row
+        // never read as the same member.
+        if (n === FOLD_AFTER && !keep && total.get(p.author_id)! > FOLD_AFTER) out.push({ more: p.author_id, name: p.nickname || '', count: total.get(p.author_id)! - FOLD_AFTER });
     }
     return out;
 }
@@ -270,7 +272,7 @@ export function Board() {
     const cached = fetched?.key === cacheKey ? undefined : cacheGet(cacheKey);
     const data = fetched?.key === cacheKey ? fetched : cached ? { key: cacheKey, ...cached, error: '' } : null;
     const [reload, setReload] = useState(0), [sheet, setSheet] = useState(false);
-    // Members whose folded rows were opened ('이 회원 글 N개 더'); a new list folds again.
+    // Members whose folded rows were opened ('좀비사냥꾼 글 N개 더'); a new list folds again.
     const [unfolded, setUnfolded] = useState<Set<string>>(() => new Set());
     useEffect(() => { setUnfolded(new Set()); }, [cacheKey]);
     const [saved, setSaved] = useState<Saved[]>(() => me && savedCache?.user === me.id ? savedCache.list : []), [savingSearch, setSavingSearch] = useState(false);
@@ -501,7 +503,7 @@ export function Board() {
                     : data!.error ? <EmptyState title="목록을 불러오지 못했습니다" text={data!.error} action={<div className="empty-actions"><button className="btn btn-line" onClick={() => setReload(n => n + 1)}>다시 시도</button><button className="btn btn-line" onClick={clearAll}>필터 초기화</button></div>} />
                     : data!.posts.length ? <div className="post-list">{foldRows(data!.posts, unfolded).map(row => 'post' in row
                         ? <PostCard key={row.post.id} post={row.post} showKind={kind === 'all'} highlight={highlight} onChange={() => setReload(n => n + 1)} />
-                        : <button type="button" key={'more-' + row.more} className="fold-more" onClick={() => setUnfolded(prev => new Set(prev).add(row.more))}>{AD_TEXT.more(row.count)}</button>)}</div>
+                        : <button type="button" key={'more-' + row.more} className="fold-more" onClick={() => setUnfolded(prev => new Set(prev).add(row.more))}>{AD_TEXT.more(row.name, row.count)}</button>)}</div>
                     : <EmptyState icon={chips.length ? 'search' : 'file'} title={chips.length ? '검색 결과가 없습니다' : '등록된 글이 없습니다'}
                         action={chips.length ? <button className="btn btn-line" onClick={clearAll}>필터 초기화</button> : <button className="btn btn-line" onClick={compose}>글쓰기</button>} />}
                 {totalPages > 1 && <nav className="pager" aria-label="페이지">

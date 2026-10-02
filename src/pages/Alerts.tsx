@@ -6,6 +6,7 @@ import { api, errorText, imageUrl } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { CIcon, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
+import { AlertCard } from './Auto';
 
 // 알림함 (WP50): GET notifications (20 a page, newest first). Tapping a row marks it read and opens its
 // target; '모두 읽음' marks every row read. The header bell's count comes from the shared poll.
@@ -58,7 +59,7 @@ export default function Alerts() {
     const { me, ready, requireLogin, alerts, setAlerts, refreshUnread, openApply } = useApp();
     const [list, setList] = useState<Alert[] | null>(null);
     const [page, setPage] = useState(1), [hasMore, setHasMore] = useState(false), [loading, setLoading] = useState(false);
-    const [follows, setFollows] = useState(false);
+    const [follows, setFollows] = useState(false), [searches, setSearches] = useState(false);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
@@ -121,11 +122,13 @@ export default function Alerts() {
         <div className="alerts-head">
             <h1 className="page-title">알림</h1>
             <div className="alerts-tools">
+                <button type="button" className="btn btn-text btn-sm" onClick={() => setSearches(true)}>{ALERT_TEXT.searches}</button>
                 <button type="button" className="btn btn-text btn-sm" onClick={() => setFollows(true)}>{ALERT_TEXT.manage}</button>
                 {unread && <button type="button" className="btn btn-line btn-sm" onClick={() => void readAll()}>모두 읽음</button>}
             </div>
         </div>
         <FollowsModal open={follows} onClose={() => setFollows(false)} />
+        <Modal open={searches} onClose={() => setSearches(false)} title={ALERT_TEXT.searches}>{searches && <AlertCard bare />}</Modal>
         <div className="mt-16">
             {list === null ? <SkeletonRows count={4} height={72} />
                 : list.length ? <>

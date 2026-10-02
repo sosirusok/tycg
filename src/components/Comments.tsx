@@ -198,7 +198,8 @@ export function Comments({ post, onReport }: { post: Post; onReport: (commentId:
             : <p className="comment-empty">댓글이 없습니다.</p>}
         {hasMore && <button type="button" className="btn btn-line more-btn" disabled={loading} onClick={() => void more()}>더 보기</button>}
         {open && <div className="comment-write">
-            {post.kind === 'sell' && !mine && <p className="comment-offer-line">가격은 제시하기로 보내면 판매자에게 바로 알림이 갑니다.</p>}
+            {/* Only where the page shows 제시하기 (Detail's canOffer). */}
+            {post.kind === 'sell' && !mine && !post.hidden && post.status === 'open' && (post.accepts_offers === 1 || post.price_mode === 'offer') && <p className="comment-offer-line">가격은 제시하기로 보내면 판매자에게 바로 알림이 갑니다.</p>}
             {me ? <Composer onSend={(b, img) => send(b, img, null)} />
                 : <button type="button" className="btn btn-line btn-block comment-login" onClick={() => requireLogin()}>로그인 후 댓글 등록</button>}
         </div>}

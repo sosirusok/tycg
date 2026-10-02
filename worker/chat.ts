@@ -3,7 +3,7 @@ import { CHAT_AUTO_TEXT, awayWindow, perksOf } from '../shared/membership';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
-import { assertNoBlockedLinks } from './unfurl';
+import { assertNoBlockedLinks, hasBlockedLinks } from './unfurl';
 import { ALERTS_COUNT_SQL } from './notifications';
 
 export async function blocked(a: string, b: string) {
@@ -103,19 +103,22 @@ async function chatListing(conversationId: string, u: User) {
 // - 자리 비움 (엘리트 and up): one per chat per away window (reference 'away:' + the window's start).
 // - 첫 문의 자동 안내 (프리미엄 and up): about one of the partner's open posts, once per post per chat, and
 //   only while the partner wrote nothing in the chat for 24 hours (an away reply in this batch counts, so
-//   one message gets at most one automatic answer).
+//   one message gets at most one automatic answer; a system line under the partner's name, such as
+//   '제시 자동 거절', does not).
+// A text that links a host on the manager's blocklist is not sent (checked on save and here).
 // Never in a chat with the manager or with an application, never from or to a member under 이용 정지,
 // and only here (a member's own message): system lines, 제시, post cards and automatic answers never get
 // one, so two members' automatic answers cannot set each other off. A block refuses the message before.
 type AutoPartner = { deleted_at: number | null; role: string; suspended_until: number | null; grade: string | null; first_on: number | null; first_text: string | null;
     away_on: number | null; away_from: number | null; away_to: number | null; away_text: string | null; away_until: number | null };
 const AUTO_GUARD = "NOT EXISTS(SELECT 1 FROM applications ap WHERE ap.conversation_id=?)";
-async function autoReplyStatements(conversationId: string, sender: User, partnerId: string, other: AutoPartner, post: any, now: number) {
+async function autoReplyStatements(req: Request, conversationId: string, sender: User, partnerId: string, other: AutoPartner, post: any, now: number) {
     if (isManager(sender) || other.role === 'manager' || isSuspended(other.suspended_until) || isSuspended(sender.suspended_until)) return [];
     const perks = perksOf({ role: other.role, grade: other.grade || 'normal' }), out: D1PreparedStatement[] = [];
     const away = perks.awayReply ? awayWindow(other, now) : null;
-    if (away !== null) {
-        out.push(...guardedMessageStatements(conversationId, partnerId, other.away_text || CHAT_AUTO_TEXT.awayDefault, 'auto', 'away:' + away,
+    const awayText = other.away_text || CHAT_AUTO_TEXT.awayDefault;
+    if (away !== null && !await hasBlockedLinks(req, awayText)) {
+        out.push(...guardedMessageStatements(conversationId, partnerId, awayText, 'auto', 'away:' + away,
             `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)`, [conversationId, conversationId, 'away:' + away], now));
     }
     if (perks.firstReply && other.first_on) {
@@ -124,9 +127,9 @@ async function autoReplyStatements(conversationId: string, sender: User, partner
         if (about && about.author_id === partnerId && about.status !== 'closed' && !about.hidden) {
             const details = parse(about.details, {} as Record<string, unknown>);
             const text = fillTemplate(other.first_text || CHAT_AUTO_TEXT.firstDefault, { title: about.title, kind: about.kind, price: about.price_mode === 'offer' ? null : about.price, currentOffer: Number(details.currentOffer) || null });
-            if (text) out.push(...guardedMessageStatements(conversationId, partnerId, text, 'auto', String(about.id),
+            if (text && !await hasBlockedLinks(req, text)) out.push(...guardedMessageStatements(conversationId, partnerId, text, 'auto', String(about.id),
                 `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)
-                    AND NOT EXISTS(SELECT 1 FROM messages sm WHERE sm.conversation_id=? AND sm.sender_id=? AND sm.created_at>?)`,
+                    AND NOT EXISTS(SELECT 1 FROM messages sm WHERE sm.conversation_id=? AND sm.sender_id=? AND sm.created_at>? AND sm.type!='system')`,
                 [conversationId, conversationId, String(about.id), conversationId, partnerId, now - 86400000], now));
         }
     }
@@ -264,7 +267,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
             }
             const now = Date.now(), ref = post ? String(post.id) : '';
-            const auto = other ? await autoReplyStatements(p[1], u, partnerId, other, post, now) : [];
+            const auto = other ? await autoReplyStatements(req, p[1], u, partnerId, other, post, now) : [];
             const r = await db().batch([
                 ...post ? [db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?")
                     .bind(p[1], u.id, post.title, ref, now, p[1], ref)] : [],

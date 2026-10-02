@@ -126,7 +126,7 @@ export async function cleanup(now = Date.now()) {
         // 완료 posts past 90 days that still have more than the 대표, without a pending report or a trade
         // recorded in the last 7 days.
         retain: db().prepare(`SELECT p.id FROM posts p WHERE p.status='closed' AND COALESCE(p.closed_at,p.updated_at)<? AND json_valid(p.images) AND json_array_length(p.images)>1
-            AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending')
+            AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending' AND r.comment_id IS NULL)
             AND NOT EXISTS(SELECT 1 FROM trades t WHERE t.post_id=p.id AND t.created_at>?) LIMIT ?`).bind(now - RETAIN_DAYS * DAY, now - 7 * DAY, RETENTION_PER_RUN),
         trash: db().prepare('SELECT id FROM kv_trash ORDER BY created_at LIMIT ?').bind(kv ? KV_DELETES_PER_RUN : 0),
         kvCount: db().prepare("SELECT value FROM settings WHERE key='sys:kv_deletes'"),

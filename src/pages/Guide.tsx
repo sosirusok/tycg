@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
-import { AD_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -29,6 +29,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['끌올 보관', g => `${PERKS[g.id].bumpMax}개`],
     ['끌올 충전', g => `${gapText(PERKS[g.id].bumpRefillMinutes)}마다 1개`],
     ['같은 글 끌올 간격', g => gapText(PERKS[g.id].bumpGapMinutes)],
+    // 자동 끌올 (WP52): how many posts take turns and how often, from PERKS (copy.md table cells with the
+    // owner's intervals): '-', '글 1개 · 4시간마다 1번', '글 5개 중 1개씩 · 1시간 30분마다', '전체 중 1개씩 · 30분마다'.
+    ['자동 끌올', g => { const k = PERKS[g.id], every = gapText(k.autoEveryMinutes); return !k.autoBumpPosts ? '-' : k.autoBumpPosts === 1 ? `글 1개 · ${every}마다 1번` : Number.isFinite(k.autoBumpPosts) ? `글 ${k.autoBumpPosts}개 중 1개씩 · ${every}마다` : `전체 중 1개씩 · ${every}마다`; }],
     // 광고 (WP53): where the member's own open posts can show as ads, from PERKS.adSlots.
     ['광고', g => { const n = PERKS[g.id].adSlots; return n ? [`게시판 상단 ${n}개`, '거래완료 글 하단', ...gradeInfo(g.id).rank >= 3 ? ['홈'] : []].join(' · ') : '-'; }],
     ['닉네임 표시', g => NAME_STYLE[g.id] || '-'],
@@ -128,6 +131,8 @@ export default function Guide() {
                 <li>관리자: 매니저가 지정. 이용 혜택은 엘리트와 같습니다. 인증/등급 지급은 매니저만 합니다.</li>
                 <li>{AD_TEXT.sortNote}</li>
                 <li>{AD_TEXT.orderNote}</li>
+                <li>{AUTO_TEXT.reserve}</li>
+                <li>{AUTO_TEXT.capped}</li>
                 <li>{DROP_TEXT.hold}</li>
                 <li>하루 새 글 {SITE_RULES.freshPerDay}개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.</li>
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>

@@ -4,7 +4,7 @@ import { cleanup } from './cleanup';
 import { db } from './http';
 import { meterOn, metered } from './meter';
 import { allowKvTestFailure } from './storage';
-import { bumpJob, dropJob, remindJob, TICK_A, TICK_B } from './automation';
+import { bumpJob, dropJob, remindJob, TICK_A, TICK_B, type TickShare } from './automation';
 import { alertJob } from './alerts';
 
 // Three cron triggers (wrangler.jsonc): tick A (자동 끌올), tick B ('끌올 가능' 알림 and 새 글 알림) and the daily cleanup
@@ -16,8 +16,10 @@ function job(cron: string, scheduledTime: number) {
     // tab caps; a failed drop run never undoes the bumps, and a failed bump run never stops the drops.
     if (cron === TICK_A) return async () => {
         const bump = await bumpJob(now).catch(e => ({ bumpError: e instanceof Error ? e.message : 'unknown' }));
-        const drop = await dropJob(now).catch(e => ({ dropError: e instanceof Error ? e.message : 'unknown' }));
-        return { ...bump, drop };
+        // The drop bumps share 자동 끌올's caps of this tick (per tab, per tick, one per member).
+        const { share, ...log } = bump as typeof bump & { share?: TickShare };
+        const drop = await dropJob(now, share).catch(e => ({ dropError: e instanceof Error ? e.message : 'unknown' }));
+        return { ...log, drop };
     };
     // Tick B also sends the 새 글 알림 (WP54); a failed reminder run never stops them.
     if (cron === TICK_B) return async () => {

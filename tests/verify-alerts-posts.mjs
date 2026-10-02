@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
 
 // 새 글 알림 (WP54) on the 8791 server (strict post rules, READ_BUDGET=on, TEST_HOOKS=on): 키워드 알림 and
 // its parity with the board search, 게시판 새 글 알림, the 60-second lag, the limits, 판매자 구독 and '구독
@@ -18,6 +19,8 @@ const run = randomBytes(4).toString('hex');
 const password = randomBytes(16).toString('hex');
 const HOUR = 3600000;
 const TICK_B = '5-59/10 * * * *';
+// Rows a tick B may read in the 300 조건 알림 step (about 3,300 measured; D1 Free: 5,000,000 rows a day).
+const ROWS_PER_TICK = 6000;
 let checks = 0;
 
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
@@ -304,6 +307,25 @@ for (const { c, id, q } of bellIds) {
     equal(got.map(x => [x.post_id, x.text]), board.length ? [[board[0], `‘q${bellIds.findIndex(b => b.id === id)}’ 조건 새 글`]] : [], `조건 '${decodeURIComponent(q)}': a row exactly when the board finds a window post (${board.length})`);
 }
 
+// ---- 9a. CPU: one tick's 조건 알림 filters build well inside a Free cron run's 10 ms ----
+// worker/alerts.ts bundled on the fly ('cloudflare:workers' stubbed; nothing here touches D1): the filter of
+// each 알림 a tick may read (BELLS_PER_TICK), the parity queries above, warm best of 5 (wrangler dev cannot
+// meter CPU). Measured about 1 ms warm and 6-7 ms on the very first run in Node.
+{
+    const bundle = await build({ configFile: false, logLevel: 'silent', root, resolve: { alias: { 'cloudflare:workers': fileURLToPath(new URL('./fixtures/cloudflare-workers.mjs', import.meta.url)) } },
+        build: { lib: { entry: 'worker/alerts.ts', formats: ['es'], fileName: 'alerts' }, write: false, minify: false, rollupOptions: { external: ['node:async_hooks'] } } });
+    const W = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(bundle) ? bundle[0] : bundle).output[0].code).toString('base64'));
+    const bells = Array.from({ length: W.BELLS_PER_TICK }, (_, i) => ({ user_id: `cpu${i % 15}${run}`, role: 'member', query: queries[i % queries.length] }));
+    const once = () => bells.map(b => W.bellFilter(b, true, 40, Date.now()));
+    let t = performance.now();
+    const built = once();
+    const first = performance.now() - t;
+    check(built.every(x => x && x.sql.includes('p.author_id!=')), `each of the ${W.BELLS_PER_TICK} filters a tick may build is SQL`);
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) { t = performance.now(); once(); best = Math.min(best, performance.now() - t); }
+    check(best < 4, `a tick's ${W.BELLS_PER_TICK} 조건 알림 filters build in ${best.toFixed(2)} ms warm (first run ${first.toFixed(2)} ms), inside the 10 ms of a Free cron run`);
+}
+
 // ---- 9. 300 조건 알림: every one gets its row, no tick over the budget ----
 const elites = [];
 for (let i = 0; i < 15; i++) elites.push(await register('m' + i));
@@ -313,17 +335,19 @@ const values = elites.flatMap((e, i) => Array.from({ length: 20 }, (_, j) => `('
 sql(`INSERT INTO saved_searches(id,user_id,name,query,created_at,alert,alert_kind,alert_category,keyword) VALUES ${values.join(',')}`);
 setCursor();
 const big = await post(A3, 'sell', 'account', `[QA] 대량 ${run}`, { price: 5000000 });
-let ticks = 0, done = 0;
-while (ticks < 6) {
+let ticks = 0, done = 0, maxRead = 0;
+while (ticks < 10) {
     const m = await tick();
     ticks++;
+    maxRead = Math.max(maxRead, m.rowsRead || 0);
     done = sql(`SELECT COUNT(*) AS n FROM notifications WHERE type='condition' AND post_id=${big.id} AND user_id IN (${elites.map(e => `'${e.user.id}'`).join(',')})`)[0].n;
-    console.log(`tick ${ticks}: ${done}/300 rows, ${m.d1Calls} calls, ${m.d1Statements} statements`);
+    console.log(`tick ${ticks}: ${done}/300 rows, ${m.d1Calls} calls, ${m.d1Statements} statements, ${m.rowsRead} rows read`);
     if (done === 300 && !cursor().et) break;
 }
 equal(done, 300, `all 300 조건 알림 got their row in ${ticks} ticks`);
 check(!cursor().et, 'and the window is closed');
 check(maxStatements <= 45 && maxCalls <= 8, `no tick exceeded 45 statements or 8 calls (max ${maxStatements}, ${maxCalls})`);
+check(maxRead <= ROWS_PER_TICK, `no tick read more than ${ROWS_PER_TICK} rows (max ${maxRead})`);
 sql(`UPDATE saved_searches SET alert=0 WHERE id LIKE '${run}-%'`);
 
 // ---- 10. 가격 내림: 프리미엄 (새 글 · 가격 내림) yes, 플러스 (새 글) no ----
@@ -370,5 +394,41 @@ equal(freshPost.relist, false, 'a different post is new');
 await tick();
 equal(subscribers(), [1, 1, 1, 1], 'a fresh new post sends all four');
 equal(rowsOf(R3, 'condition')[0].post_id, freshPost.id, 'about the new post');
+
+// ---- 12. A window whose runs keep failing (killed for CPU, a statement D1 refuses) never stops 새 글 알림:
+// after 3 runs that did not finish it goes on without its 조건 알림, after 6 without any 알림 ----
+const markTries = k => sql(`INSERT INTO settings(key,value,updated_at) SELECT 'sys:alert_try',json_object('c',value,'n',${k}),0 FROM settings WHERE key='sys:alert_cursor' ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+// One read: the four subscribers' unread rows (R1 keyword and 구독, R2 board, R3 조건), the cursor, the mark
+// and the post's creation time.
+const after12 = id => {
+    const unread = (c, type) => `(SELECT COUNT(*) FROM notifications WHERE user_id='${c.user.id}' AND type='${type}' AND read_at IS NULL)`;
+    const x = sql(`SELECT ${unread(R1, 'keyword')} AS k,${unread(R1, 'follow')} AS f,${unread(R2, 'board')} AS b,${unread(R3, 'condition')} AS c,
+        (SELECT value FROM settings WHERE key='sys:alert_cursor') AS cur,(SELECT value FROM settings WHERE key='sys:alert_try') AS mark,(SELECT created_at FROM posts WHERE id=${id}) AS at`)[0];
+    return { unread: [x.k, x.f, x.b, x.c], cursor: JSON.parse(x.cur), mark: JSON.parse(x.mark || 'null'), at: x.at };
+};
+const readAll = async () => { for (const c of [R1, R2, R3]) equal((await c('notifications/read-all', 'POST', {})).status, 200, 'a subscriber reads every row'); };
+await readAll();
+const liteFrom = setCursor();
+const litePost = await post(A4, 'sell', 'goods_coupon', `[QA] ${rw} 쿠폰 세 번째 글`, { price: 13000 });
+markTries(3);
+await tick();
+let st = after12(litePost.id);
+equal(st.unread, [1, 1, 1, 0], 'after 3 unfinished runs the window goes on without its 조건 알림 (keyword, 구독 and board 알림 still go out)');
+check(!st.cursor.et && st.cursor.t >= st.at, 'and the cursor moves past the window');
+equal(st.mark, { c: JSON.stringify({ t: liteFrom.t, i: liteFrom.id }), n: 4 }, 'the run marked itself before its work (the 4th run from that cursor)');
+await readAll();
+setCursor();
+const skipPost = await post(A4, 'sell', 'goods_coupon', `[QA] ${rw} 쿠폰 네 번째 글`, { price: 14000 });
+markTries(6);
+await tick();
+st = after12(skipPost.id);
+equal(st.unread, [0, 0, 0, 0], 'after 6 unfinished runs the window is skipped (no 알림 at all)');
+check(!st.cursor.et && st.cursor.t >= st.at, 'and the cursor moves past it');
+const nextFrom = setCursor();
+const nextPost = await post(A4, 'sell', 'goods_coupon', `[QA] ${rw} 쿠폰 다섯 번째 글`, { price: 15000 });
+await tick();
+st = after12(nextPost.id);
+equal(st.unread, [1, 1, 1, 1], 'the next window sends all four again');
+equal(st.mark, { c: JSON.stringify({ t: nextFrom.t, i: nextFrom.id }), n: 1 }, 'a new cursor starts the count again (1 run, finished)');
 
 console.log(`verify-alerts-posts: ${checks} checks passed (${users} members, ${n} posts, max ${maxStatements} statements a tick)`);

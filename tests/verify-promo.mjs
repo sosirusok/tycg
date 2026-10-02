@@ -161,6 +161,21 @@ check(!('ads' in (await guest('posts/' + N1s)).data.post), "n1's open 판매 pos
 const home = async () => (await guest('home')).data.ads;
 let h = await home();
 equal(authorsOf(h), [ids(e1), ids(e2)].sort(), "home '엘리트 매물' holds e1 and e2, one card each, no 프리미엄");
+{
+    // The home bottom card never holds a post of the row; with only e1 and e2 advertising it offers their
+    // other slot posts (e1 has 3, e2 2), so an 엘리트 keeps the card with few advertisers.
+    const full = (await guest('home')).data;
+    check(Array.isArray(full.cardAds) && full.cardAds.length > 0 && !full.cardAds.some(c => full.ads.some(a => a.id === c.id)), `the home bottom card never repeats a post of the row (${(full.cardAds || []).map(c => c.id)})`);
+    check(full.cardAds.every(c => [ids(e1), ids(e2)].includes(c.author_id)), 'and offers another slot post of an 엘리트 in the row');
+}
+
+// A pending 댓글 신고 is about the comment, not the post: e2's only 판매 ad stays in the box.
+{
+    const comment = await n1(`posts/${E2s}/comments`, 'POST', { body: '광고 글 댓글 신고 검증' });
+    equal(comment.status, 201, 'n1 comments on e2\'s 판매 ad');
+    equal((await p2('reports', 'POST', { commentId: comment.data.id, reason: '허위 매물', details: '자동 검증' })).status, 201, 'p2 reports the comment');
+    check(authorsOf((await board()).data.ads).includes(ids(e2)), 'e2 stays in the 광고 box while the 댓글 신고 waits');
+}
 
 // A pending report takes the post out of every placement.
 equal((await n1('reports', 'POST', { postId: E2b, reason: '허위 매물', details: '자동 검증' })).status, 200, "a report on e2's 구매 ad");

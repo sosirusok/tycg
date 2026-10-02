@@ -225,6 +225,9 @@
   .side-card:has(.side-actions) > .side-actions, .author-box-side { display: none; }
   .side-card .safety { margin-top: 0; }
   .side-card .promo-row { padding: 0 0 14px; border-top: 0; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  /* The 가격 내리기 line belongs to the automation block: the hairline goes under it, before the safety note. */
+  .side-card .promo-row:has(+ .owner-drop) { padding-bottom: 6px; margin-bottom: 0; border-bottom: 0; }
+  .side-card .owner-drop { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
   .mobile-cta, .owner-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 44; display: flex; align-items: center; gap: 8px; min-height: 64px; padding: 8px var(--gutter) calc(8px + env(safe-area-inset-bottom)); background: var(--white); border-top: 1px solid var(--line); }
   .mobile-cta .price-label, .mobile-cta .price-values del { display: none; }
   .mobile-cta .price-offer { font-size: var(--fs-12); margin: 0; }
@@ -744,6 +747,8 @@
 .auto-switches .switch { color: var(--ink); font-weight: 600; }
 .auto-stale { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
 .auto-stale .btn { flex: none; }
+.away-now { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-12); color: var(--ink); font-size: var(--fs-14); font-weight: 600; }
+.away-now .btn { flex: none; }
 .mine-stale { margin-bottom: 12px; }
 .auto-list-title { margin: 4px 0 0; color: var(--ink-2); font-size: var(--fs-14); font-weight: 700; }
 .auto-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }

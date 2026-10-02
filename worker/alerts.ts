@@ -22,10 +22,18 @@ export const ALERT_LAG = MIN;
 const WINDOW_POSTS = 40, FIRST_LOOK_BACK = 11 * MIN;
 // 조건 알림 read per tick, and the statements, bound parameters and SQL size of their reads.
 // D1 allows 100 result columns and 5 terms in a compound SELECT, so one read checks up to 90 알림 as
-// columns of one SELECT over the window's posts (no UNION).
-const BELLS_PER_TICK = 200, MATCH_STATEMENTS = 24, PARAMS_MAX = 100, SQL_MAX = 90000, BELLS_PER_READ = 90;
+// columns of one SELECT over the window's posts (no UNION). Building one 알림's filter costs about
+// 20-40 µs of CPU (buildPostFilter), so 60 a tick stay well inside the Free plan's 10 ms with tick B's
+// other work, even in a fresh isolate (verify-alerts-posts times it); more wait for the next tick.
+export const BELLS_PER_TICK = 60;
+const MATCH_STATEMENTS = 24, PARAMS_MAX = 100, SQL_MAX = 90000, BELLS_PER_READ = 90;
 const MAX_ID = Number.MAX_SAFE_INTEGER;
 const CURSOR_KEY = 'sys:alert_cursor';
+// Runs that started on a window and never wrote the cursor (killed for CPU, a statement D1 refuses):
+// {c: the cursor they started from, n: how many}. After LITE_AFTER such runs the window goes on without
+// its 조건 알림, after SKIP_AFTER without any 알림, so one bad window never stops 새 글 알림 for good.
+const TRY_KEY = 'sys:alert_try';
+const LITE_AFTER = 3, SKIP_AFTER = 6;
 
 // Query keys that never change which new posts match (the page, the order, 거래완료 포함, 오래된 글, the
 // 교환 구하는 대상 side, which every exchange board shows).
@@ -36,13 +44,16 @@ const KEYWORD_KEYS = ['kind', 'category', 'q'];
 
 type AlertFields = { keyword: number; kind: string; category: string; word: string; skins: string; tier: string; season: number | null };
 
+// Whether a saved query holds only the tab, the category and the word (a 키워드 or 게시판 알림, free for
+// every grade); any other filter makes it a 조건 알림.
+const keywordOnly = (s: URLSearchParams) => [...s.entries()].every(([k, v]) => v === '' || NEUTRAL_KEYS.includes(k) || KEYWORD_KEYS.includes(k));
+
 // What a saved query means for the cron: keyword=1 when it holds only the tab, the category and the
 // word (an empty word is the 게시판 새 글 알림, which needs a tab); otherwise a 조건 알림, whose filters
 // are checked here with the board's own rules (a bad value is the board's 400).
 async function alertFields(u: User, query: string): Promise<AlertFields> {
     const s = new URLSearchParams(query);
-    const used = [...s.entries()].filter(([k, v]) => v !== '' && !NEUTRAL_KEYS.includes(k)).map(([k]) => k);
-    const keyword = used.every(k => KEYWORD_KEYS.includes(k)) ? 1 : 0;
+    const keyword = keywordOnly(s) ? 1 : 0;
     const kind = TRADE_KINDS.includes(s.get('kind') as typeof TRADE_KINDS[number]) ? s.get('kind')! : '';
     const category = kind && categoriesForKind(kind as typeof TRADE_KINDS[number]).some(c => c.id === s.get('category')) ? s.get('category')! : '';
     const word = searchWord(s.get('q'));
@@ -63,6 +74,14 @@ async function assertRoom(u: User, keyword: number, except: string) {
     if (n >= max) fail(403, ALERT_TEXT.filterMax(max));
 }
 
+// The same room test inside the write, so two requests at once cannot pass the count together. Binds
+// (user, keyword, except, max); '1' when the grade has no limit.
+function roomGuard(u: User, keyword: number, except: string) {
+    const max = keyword ? SITE_RULES.keywordAlerts : perksOf(u).filterAlerts;
+    if (!Number.isFinite(max)) return { sql: '1', args: [] as unknown[] };
+    return { sql: '(SELECT COUNT(*) FROM saved_searches WHERE user_id=? AND alert=1 AND keyword=? AND id!=?)<?', args: [u.id, keyword, except, max] as unknown[] };
+}
+
 // The match columns (alert_word is lowered by SQLite's lower(), as the board's lower(?) does).
 const FIELD_SET = "alert_kind=?,alert_category=?,keyword=?,alert_word=lower(?),alert_word_ns=lower(replace(?,' ','')),alert_skins=?,alert_tier=?,alert_season=?";
 const fieldArgs = (f: AlertFields) => [f.kind, f.category, f.keyword, f.word, f.word, f.skins, f.tier, f.season];
@@ -72,7 +91,9 @@ export async function searchesHandler(req: Request, p: string[]): Promise<Respon
     const u = await requireUser(req), method = req.method;
     if (!p[1] && method === 'GET') {
         const r = await db().prepare('SELECT id,name,query,alert,keyword FROM saved_searches WHERE user_id=? ORDER BY created_at DESC').bind(u.id).all<any>();
-        return json({ searches: r.results.map(s => ({ ...s, alert: !!s.alert, keyword: !!s.keyword })), filterAlerts: finiteOrNull(perksOf(u).filterAlerts), keywordAlerts: SITE_RULES.keywordAlerts });
+        // keyword is stored when the 알림 is turned on; a search saved without one is read from its query.
+        return json({ searches: r.results.map(s => ({ ...s, alert: !!s.alert, keyword: s.alert ? !!s.keyword : keywordOnly(new URLSearchParams(s.query)) })),
+            filterAlerts: finiteOrNull(perksOf(u).filterAlerts), keywordAlerts: SITE_RULES.keywordAlerts });
     }
     if (!p[1] && method === 'POST') {
         const b = await body(req), name = textField(b.name, 1, 32, '검색 이름'), q = textField(b.query, 1, 12000, '검색 조건');
@@ -82,11 +103,22 @@ export async function searchesHandler(req: Request, p: string[]): Promise<Respon
         if (b.alert === true) {
             const f = await alertFields(u, q);
             await assertRoom(u, f.keyword, id);
-            await db().prepare(`INSERT INTO saved_searches(id,user_id,name,query,created_at,alert) VALUES(?,?,?,?,?,1)`).bind(id, u.id, name, q, Date.now()).run();
-            await db().prepare(`UPDATE saved_searches SET ${FIELD_SET} WHERE id=?`).bind(...fieldArgs(f), id).run();
+            // One write with every match column (a row with alert=1 and empty columns would match every
+            // new post for a tick), guarded by the room and the 20 saved searches.
+            const room = roomGuard(u, f.keyword, id);
+            const r = await db().prepare(`INSERT INTO saved_searches(id,user_id,name,query,created_at,alert,alert_kind,alert_category,keyword,alert_word,alert_word_ns,alert_skins,alert_tier,alert_season)
+                SELECT ?,?,?,?,?,1,?,?,?,lower(?),lower(replace(?,' ','')),?,?,? WHERE ${room.sql} AND (SELECT COUNT(*) FROM saved_searches WHERE user_id=?)<?`)
+                .bind(id, u.id, name, q, Date.now(), ...fieldArgs(f), ...room.args, u.id, SITE_RULES.savedSearches).run();
+            if (!r.meta.changes) {
+                await assertRoom(u, f.keyword, id);
+                fail(409, `검색은 최대 ${SITE_RULES.savedSearches}개까지 저장할 수 있습니다.`);
+            }
             return json({ ok: true, id, alert: true, keyword: !!f.keyword });
         }
-        await db().prepare('INSERT INTO saved_searches(id,user_id,name,query,created_at) VALUES(?,?,?,?,?)').bind(id, u.id, name, q, Date.now()).run();
+        // The 20-search cap is checked again inside the write (two saves at once).
+        const r = await db().prepare('INSERT INTO saved_searches(id,user_id,name,query,created_at) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM saved_searches WHERE user_id=?)<?')
+            .bind(id, u.id, name, q, Date.now(), u.id, SITE_RULES.savedSearches).run();
+        if (!r.meta.changes) fail(409, `검색은 최대 ${SITE_RULES.savedSearches}개까지 저장할 수 있습니다.`);
         return json({ ok: true, id, alert: false });
     }
     if (p[1] && !p[2] && method === 'PATCH') {
@@ -100,7 +132,9 @@ export async function searchesHandler(req: Request, p: string[]): Promise<Respon
         }
         const f = await alertFields(u, row.query);
         await assertRoom(u, f.keyword, row.id);
-        await db().prepare(`UPDATE saved_searches SET alert=1,${FIELD_SET} WHERE id=?`).bind(...fieldArgs(f), row.id).run();
+        const room = roomGuard(u, f.keyword, row.id);
+        const r = await db().prepare(`UPDATE saved_searches SET alert=1,${FIELD_SET} WHERE id=? AND ${room.sql}`).bind(...fieldArgs(f), row.id, ...room.args).run();
+        if (!r.meta.changes) { await assertRoom(u, f.keyword, row.id); fail(409, '설정을 확인해 주세요.'); }
         return json({ ok: true, alert: true, keyword: !!f.keyword });
     }
     if (p[1] && !p[2] && method === 'DELETE') {
@@ -182,6 +216,19 @@ function inline(sql: string, args: unknown[]) {
 }
 const literal = (id: string) => /^[\w-]{1,64}$/.test(id) ? `'${id}'` : null;
 
+// One 조건 알림's match SQL for tick B, with the board's own filters (buildPostFilter) for its owner: the
+// window's new posts, and for 'all' (프리미엄 and up) its price drops too. null when the stored query no
+// longer parses (the 알림 is skipped). Exported for the CPU timing in verify-alerts-posts.
+export function bellFilter(b: { user_id: string; role: string; query: string }, all: boolean, latest: number, now: number) {
+    const owner = literal(b.user_id);
+    if (!owner) return null;
+    try {
+        const f = buildPostFilter(new URLSearchParams(b.query), { id: b.user_id, role: b.role as User['role'] }, latest, now);
+        const scope = all ? '((p.id IN (SELECT id FROM n) AND p.relist=0) OR p.id IN (SELECT id FROM d))' : '(p.id IN (SELECT id FROM n) AND p.relist=0)';
+        return inline(`${scope} AND ${f.where.join(' AND ')} AND p.author_id!=${owner} AND NOT EXISTS(SELECT 1 FROM blocks bk WHERE bk.user_id=p.author_id AND bk.target_id=${owner})`, f.values);
+    } catch { return null; }
+}
+
 // ---- Tick B: alertJob ------------------------------------------------------------------------------
 
 // The cursor: the last post handled (t, i). While a window's 조건 알림 take more than one tick, the
@@ -218,22 +265,36 @@ const bellsStatement = (kinds: string[], pairs: string[], after: string, now: nu
 const key = (x: { kind: string; category: string }) => x.kind + '/' + x.category;
 const fits = (b: Bell, x: { kind: string; category: string }) => (!b.alert_kind || b.alert_kind === x.kind) && (!b.alert_category || b.alert_category === x.category);
 
-// Tick B's 새 글 알림. Calls: 1 the window (cursor, posts, drops); 2 the 조건 알림 and the latest season;
-// 3 their match reads (≤ 24 statements); 4 every write in one batch (keyword and board, 구독, 조건, the
-// cursor last), so a failed run writes nothing and the next tick reads the same window. An empty
-// window runs nothing more.
+// Tick B's 새 글 알림. Calls: 1 the window (cursor, the unfinished-run mark, posts, drops); 2 this run's
+// mark; 3 the 조건 알림 and the latest season; 4 their match reads (≤ 24 statements); 5 every write in
+// one batch (keyword and board, 구독, 조건, the cursor last), so a failed run writes nothing but its mark
+// and the next tick reads the same window. An empty window runs nothing more.
 export async function alertJob(now: number) {
     const until = now - ALERT_LAG;
     const [curR, postsR, dropsR] = await db().batch([
-        db().prepare('SELECT value FROM settings WHERE key=?').bind(CURSOR_KEY),
+        db().prepare('SELECT key,value FROM settings WHERE key IN (?,?)').bind(CURSOR_KEY, TRY_KEY),
         db().prepare(WINDOW_SQL).bind(until - FIRST_LOOK_BACK, until),
         db().prepare(DROPS_SQL).bind(until - FIRST_LOOK_BACK, until),
     ]);
-    const stored = parseCursor((curR.results[0] as { value?: string } | undefined)?.value);
+    const kept = new Map((curR.results as { key: string; value: string }[]).map(r => [r.key, r.value]));
+    const raw = kept.get(CURSOR_KEY) ?? '';
+    const stored = parseCursor(raw || undefined);
     const from: Cursor = stored || { t: until - FIRST_LOOK_BACK, i: 0 };
     const pending = from.et !== undefined;
     let posts = postsR.results as WindowPost[], drops = dropsR.results as Drop[];
     if (!posts.length && !drops.length && !pending) return { alerts: 0, posts: 0 };
+
+    // Runs that started from this very cursor and never finished. The mark is written before any work
+    // that may fail (its own call), and a finished run moves the cursor, which starts the count again.
+    let tried: { c?: unknown; n?: unknown } | null = null;
+    try { tried = JSON.parse(kept.get(TRY_KEY) || 'null'); } catch { tried = null; }
+    const tries = tried && tried.c === raw ? Number(tried.n) || 0 : 0;
+    const mode = tries >= SKIP_AFTER ? 'skip' : tries >= LITE_AFTER ? 'lite' : 'full';
+    if (mode !== 'full') console.error(`alertJob: ${tries} runs from cursor ${raw || '-'} did not finish; ${mode === 'skip' ? 'skipping the window' : 'the window goes on without filter alerts'}`);
+    if (mode !== 'skip') {
+        await db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
+            .bind(TRY_KEY, JSON.stringify({ c: raw, n: tries + 1 }), now).run();
+    }
 
     // The window's end: the 40th post when more wait, the 40th drop likewise, else now − 60 s.
     let end = pending ? { t: from.et!, i: from.ei! } : { t: until, i: MAX_ID };
@@ -245,10 +306,11 @@ export async function alertJob(now: number) {
     });
     let win = within(end);
 
-    // 조건 알림 for the tabs and categories of the window's new posts (and drops for 'all').
+    // 조건 알림 for the tabs and categories of the window's new posts (and drops for 'all'); none while the
+    // window goes on without them ('lite', 'skip').
     const fresh = () => win.posts.filter(p => !p.relist);
     let bells: Bell[] = [], latest = LATEST_SEASON, truncated = false;
-    const candidates = [...fresh(), ...win.drops];
+    const candidates = mode === 'full' ? [...fresh(), ...win.drops] : [];
     if (candidates.length) {
         const kinds = [...new Set(candidates.map(c => c.kind))], pairs = [...new Set(candidates.map(key))];
         const [bellsR, seasonR] = await db().batch([
@@ -262,6 +324,13 @@ export async function alertJob(now: number) {
         if (Number.isInteger(v) && v >= LATEST_SEASON && v <= 200) latest = v;
     }
 
+    // Each 알림's filter is built once per run (the halving loop below only changes which 알림 fit), so the
+    // JS work stays inside the Free plan's 10 ms CPU.
+    const built = new Map<string, { sql: string; args: unknown[] } | null>();
+    const build = (b: Bell, all: boolean) => {
+        if (!built.has(b.id)) built.set(b.id, bellFilter(b, all, latest, now));
+        return built.get(b.id)!;
+    };
     // Each 알림 that may send: the owner's grade now has room for it and it fits a candidate.
     const checksFor = (w: typeof win) => {
         const n = w.posts.filter(p => !p.relist);
@@ -271,14 +340,8 @@ export async function alertJob(now: number) {
             if (Number(b.ord) >= perks.filterAlerts) continue;
             const all = perks.filterAlertEvents === 'all';
             if (!n.some(p => fits(b, p)) && !(all && w.drops.some(d => fits(b, d)))) continue;
-            const owner = literal(b.user_id);
-            if (!owner) continue;
-            let f;
-            try { f = buildPostFilter(new URLSearchParams(b.query), { id: b.user_id, role: b.role as User['role'] }, latest, now); }
-            catch { continue; }
-            const scope = all ? '((p.id IN (SELECT id FROM n) AND p.relist=0) OR p.id IN (SELECT id FROM d))' : '(p.id IN (SELECT id FROM n) AND p.relist=0)';
-            const where = `${scope} AND ${f.where.join(' AND ')} AND p.author_id!=${owner} AND NOT EXISTS(SELECT 1 FROM blocks bk WHERE bk.user_id=p.author_id AND bk.target_id=${owner})`;
-            const x = inline(where, f.values);
+            const x = build(b, all);
+            if (!x) continue;
             out.push({ bell: b, sql: x.sql, args: x.args, all });
         }
         return out;
@@ -347,10 +410,11 @@ export async function alertJob(now: number) {
         });
     }
 
-    // Call 4: the writes. Keyword, board and 구독 알림 once per window (not again while its 조건 알림 continue).
+    // Call 5: the writes. Keyword, board and 구독 알림 once per window (not again while its 조건 알림 continue,
+    // and not for a window that is skipped).
     const ids = JSON.stringify(fresh().map(p => p.id));
     const writes: D1PreparedStatement[] = [];
-    if (!pending && fresh().length) {
+    if (!pending && fresh().length && mode !== 'skip') {
         writes.push(notifyStatement(null, `SELECT s.user_id,s.id AS ref,MIN(p.id) AS post_id,NULL AS actor_id,CASE WHEN s.alert_word='' THEN 'board' ELSE 'keyword' END AS type,${KEYWORD_TEXT} AS text
             FROM posts p JOIN users u ON u.id=p.author_id JOIN saved_searches s INDEXED BY saved_alerts ON s.alert=1 AND s.keyword=1 AND s.alert_kind IN (p.kind,'')
             WHERE p.id IN (SELECT value FROM json_each(?)) AND p.relist=0 AND ${reachable('s.user_id', '?')} AND ${keywordMatch()}
@@ -365,7 +429,7 @@ export async function alertJob(now: number) {
     writes.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(CURSOR_KEY, JSON.stringify(next), now));
     const r = await db().batch(writes);
     const written = r.slice(0, -1).reduce((n, x) => n + (Number(x.meta.changes) || 0), 0);
-    return { alerts: written, posts: win.posts.length, drops: win.drops.length, bells: checked.length, partial };
+    return { alerts: written, posts: win.posts.length, drops: win.drops.length, bells: checked.length, partial, ...mode === 'full' ? {} : { mode } };
 }
 
 function parseCursor(v: string | undefined): Cursor | null {
@@ -383,6 +447,9 @@ function parseCursor(v: string | undefined): Cursor | null {
 
 type AlertRow = { id: number; type: string; ref: string; post_id: number | null; read: boolean; text: string };
 const COUNT_CAP = 99;
+// Each count looks at most this many post ids after the row's first post (about 5 days of new posts), so an
+// old row with a rare word never walks the whole table (LIMIT caps matches, not rows read).
+const COUNT_SCAN = 600;
 // 새 글 알림 rows still unread show how many posts match now, from the row's first post on ('‘유루미’ 새
 // 글 3개'), and carry the board query to open (최신순). At most 20 rows, one count statement each.
 export async function alertCounts(rows: AlertRow[], u: User) {
@@ -395,7 +462,7 @@ export async function alertCounts(rows: AlertRow[], u: User) {
     const statements: D1PreparedStatement[] = [], order: AlertRow[] = [];
     let latest: number | null = null;
     for (const r of live) {
-        const tail = ` AND p.id>=? AND p.relist=0 AND p.status!='closed' LIMIT ${COUNT_CAP})`;
+        const tail = ` AND p.id>=? AND p.id<${Number(r.post_id) + COUNT_SCAN} AND p.relist=0 AND p.status!='closed' LIMIT ${COUNT_CAP})`;
         if (r.type === 'follow') {
             statements.push(db().prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM posts p JOIN users u ON u.id=p.author_id AND u.follow_allowed=1 WHERE p.author_id=? AND ${reachable('?', '?')}${tail}`).bind(r.ref, u.id, now, u.id, u.id, r.post_id));
         } else if (r.type === 'condition') {

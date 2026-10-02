@@ -2,6 +2,7 @@ import { db, fail, requireUser, requireActive, json, body, isManager, isSuspende
 import { notifyStatement } from './notifications';
 import { amount, walletJson } from './posts';
 import { adTrimManyStatement } from './ads';
+import { assertNoBlockedLinks } from './unfurl';
 import { TRADE_KINDS, categoriesForKind, priceText, type User } from '../shared/market';
 import { AUTO_REPLY_MAX, AUTO_RESERVE, AUTO_TEXT, AWAY_FROM, AWAY_NOW_MS, AWAY_TO, CHAT_AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, TEMPLATE_MAX, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
@@ -63,7 +64,9 @@ type Due = {
     id: string; next: number; auto_today: number; reason: string; paused_at: number | null; role: string; suspended_until: number | null;
     bump_tokens: number; bump_at: number; last_seen_at: number | null; rank: number; paying: number; proxy: number;
 };
-type Candidate = { id: number; author_id: string; kind: string; bumped_at: number; rn: number };
+// e 1: a real candidate; e 0: one row per member without one, carrying n (listed posts) and f (those
+// held back by page 1 or a top-5 place), so the card names the real reason.
+type Candidate = { id: number; author_id: string; kind: string; bumped_at: number; rn: number; e: number; n: number; f: number };
 type Plan = { u: string; n: number; s: string; pa: number | null; b: number | null };
 // One auto bump: post, member, the member's gap, wallet cap and refill, and ad slots (WP53).
 type Bump = { p: number; u: string; g: number; m: number; r: number; a: number };
@@ -122,26 +125,39 @@ function staleNotice(now: number) {
         WHERE pa.bump=1 AND p.status='open' AND p.hidden=0 AND COALESCE(p.touched_at,p.updated_at)<=? GROUP BY pa.user_id`, [kstDate(now), now - STALE_MS], now)];
 }
 
-// The candidate posts of the due members: listed, open, visible, not under a pending report, touched in
-// the last 7 days, past their own gap, not ahead of now (새 글 우선), off page 1 of their board (or
-// older than the board window), on a board where the member has nothing in the top 5. Oldest-bumped
-// first, at most 5 per member.
+// The candidate posts of the due members: listed, open, visible, not under a pending report on the post
+// itself (a 댓글 신고 does not count), touched in the last 7 days, past their own gap, not ahead of now
+// (새 글 우선), off page 1 of their board (or older than the board window), on a board where the member
+// has nothing in the top 5. Oldest-bumped first, at most 5 per member (e=1). A member with none gets one
+// e=0 row with n (listed open posts) and f (how many of them page 1 or the top 5 holds back).
 function candidatesStatement(members: { u: string; g: number; x: number }[], boards: string, now: number) {
     const k = "p.kind||'/'||p.category";
-    return db().prepare(`SELECT id,author_id,kind,bumped_at,rn FROM (SELECT p.id,p.author_id,p.kind,p.bumped_at,ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.bumped_at,p.id) AS rn
+    return db().prepare(`SELECT id,author_id,kind,bumped_at,rn,e,n,f FROM (
+        SELECT q.*,ROW_NUMBER() OVER (PARTITION BY q.author_id,q.e ORDER BY q.bumped_at,q.id) AS rn,COUNT(*) OVER (PARTITION BY q.author_id) AS n,SUM(1-q.off) OVER (PARTITION BY q.author_id) AS f
+        FROM (SELECT b0.*,b0.ok*b0.off AS e FROM (SELECT p.id,p.author_id,p.kind,p.bumped_at,
+            COALESCE(p.bumped_at<=? AND (CASE WHEN p.bump_count=0 THEN p.created_at ELSE p.bumped_at END)<=?-json_extract(d.value,'$.g')
+                AND COALESCE(p.touched_at,p.updated_at)>? AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending' AND r.comment_id IS NULL),0) AS ok,
+            COALESCE((p.bumped_at<=? OR p.bumped_at<(SELECT json_extract(b.value,'$.c') FROM json_each(?) b WHERE json_extract(b.value,'$.k')=${k}))
+                AND NOT EXISTS(SELECT 1 FROM json_each(?) b,json_each(json_extract(b.value,'$.t')) t WHERE json_extract(b.value,'$.k')=${k} AND t.value=p.author_id),0) AS off
         FROM json_each(?) d JOIN post_auto pa INDEXED BY post_auto_user ON pa.user_id=json_extract(d.value,'$.u') AND pa.bump=1
         JOIN posts p ON p.id=pa.post_id AND p.author_id=pa.user_id
-        WHERE p.status='open' AND p.hidden=0 AND p.bumped_at<=? AND (CASE WHEN p.bump_count=0 THEN p.created_at ELSE p.bumped_at END)<=?-json_extract(d.value,'$.g')
-            AND COALESCE(p.touched_at,p.updated_at)>? AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending')
-            AND (p.kind!='proxy_offer' OR json_extract(d.value,'$.x')=1)
-            AND (p.bumped_at<=? OR p.bumped_at<(SELECT json_extract(b.value,'$.c') FROM json_each(?) b WHERE json_extract(b.value,'$.k')=${k}))
-            AND NOT EXISTS(SELECT 1 FROM json_each(?) b,json_each(json_extract(b.value,'$.t')) t WHERE json_extract(b.value,'$.k')=${k} AND t.value=p.author_id))
-        WHERE rn<=${CANDIDATES}`).bind(JSON.stringify(members), now, now, now - STALE_MS, now - LIST_WINDOW, boards, boards);
+        WHERE p.status='open' AND p.hidden=0 AND (p.kind!='proxy_offer' OR json_extract(d.value,'$.x')=1)) b0) q)
+        WHERE (e=1 AND rn<=${CANDIDATES}) OR (e=0 AND rn=1)`).bind(now, now, now - STALE_MS, now - LIST_WINDOW, boards, boards, JSON.stringify(members));
+}
+
+// A member whose grade went down (a 6-month 엘리트 that ended, back to 프리미엄 or 플러스) keeps only the
+// grade's count listed: the most recently bumped open posts stay (as enrolStatements picks them), the
+// rest leave the list. s: the grade's count (finite only).
+function trimStatement(members: { u: string; s: number }[]) {
+    return db().prepare(`UPDATE post_auto SET bump=0 WHERE bump=1 AND post_id IN (SELECT id FROM (SELECT p.id,json_extract(d.value,'$.s') AS s,ROW_NUMBER() OVER (PARTITION BY pa.user_id ORDER BY p.bumped_at DESC,p.id DESC) AS rn
+        FROM json_each(?) d JOIN post_auto pa INDEXED BY post_auto_user ON pa.user_id=json_extract(d.value,'$.u') AND pa.bump=1 JOIN posts p ON p.id=pa.post_id WHERE p.status!='closed') WHERE rn>s)`).bind(JSON.stringify(members));
 }
 
 // How many different members wait for a reply in each due member's chats about their open posts: the
-// other side's last text is 24 hours to 7 days old, the member wrote nothing since (an 'auto' reply is not an answer), neither blocked the
-// other and the other has not left. 2 or more pause 자동 끌올; one reply or a block resumes it.
+// other side's last text is 24 hours to 7 days old, the member typed nothing since (only a typed message,
+// text or photo, answers: an 'auto' reply, a system line such as '제시 자동 거절', a card or a 제시 does
+// not), neither blocked the other and the other has not left. 2 or more pause 자동 끌올; one reply or a
+// block resumes it.
 function replyStatement(ids: string[], now: number) {
     return db().prepare(`WITH d(uid) AS (SELECT value FROM json_each(?)),
         cv AS (SELECT d.uid,c.id AS cid,c.user_b AS other FROM d JOIN conversations c INDEXED BY conversations_a_updated ON c.user_a=d.uid AND c.updated_at>?
@@ -149,7 +165,7 @@ function replyStatement(ids: string[], now: number) {
         w AS (SELECT cv.uid,cv.cid,cv.other,(SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id=cv.cid AND m.sender_id=cv.other AND m.type='text') AS last FROM cv)
         SELECT w.uid AS id,COUNT(DISTINCT w.other) AS n FROM w
         WHERE w.last<=? AND w.last>?
-            AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=w.cid AND m.sender_id=w.uid AND m.created_at>w.last AND m.type!='auto')
+            AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=w.cid AND m.sender_id=w.uid AND m.created_at>w.last AND m.type='text')
             AND EXISTS(SELECT 1 FROM posts p WHERE p.author_id=w.uid AND p.status!='closed' AND p.id=(SELECT CASE WHEN m.type='listing' THEN CAST(m.reference_id AS INTEGER) ELSE (SELECT o.post_id FROM offers o WHERE o.id=m.reference_id) END
                 FROM messages m WHERE m.conversation_id=w.cid AND m.type IN ('listing','offer') ORDER BY m.id DESC LIMIT 1))
             AND NOT EXISTS(SELECT 1 FROM blocks k WHERE (k.user_id=w.uid AND k.target_id=w.other) OR (k.user_id=w.other AND k.target_id=w.uid))
@@ -198,9 +214,16 @@ export async function bumpJob(now: number) {
     if (looked.length) {
         const members = looked.map(d => ({ u: d.id, g: walletArgs(perksFor(num(d.rank), d.role === 'manager')).g, x: d.proxy ? 1 : 0 }));
         const waitIds = looked.filter(d => d.role !== 'manager').map(d => d.id);
-        const r2 = await db().batch([candidatesStatement(members, boards, now), ...waitIds.length ? [replyStatement(waitIds, now)] : []]);
-        candidates = r2[0].results as Candidate[];
-        if (r2[1]) replies = new Map((r2[1].results as { id: string; n: number }[]).map(x => [x.id, num(x.n)]));
+        // A lower grade's count first (the trim runs before the candidates read, in the same batch).
+        const trim = looked.flatMap(d => {
+            const slots = perksFor(num(d.rank), d.role === 'manager').autoBumpPosts;
+            return Number.isFinite(slots) ? [{ u: d.id, s: slots }] : [];
+        });
+        const head2 = trim.length ? [trimStatement(trim)] : [];
+        const r2 = await db().batch([...head2, candidatesStatement(members, boards, now), ...waitIds.length ? [replyStatement(waitIds, now)] : []]);
+        candidates = r2[head2.length].results as Candidate[];
+        const rr = r2[head2.length + 1];
+        if (rr) replies = new Map((rr.results as { id: string; n: number }[]).map(x => [x.id, num(x.n)]));
     }
 
     // Paying members before trial members; then the fewest auto bumps today for the grade's day, then
@@ -227,8 +250,15 @@ export async function bumpJob(now: number) {
                 continue;
             }
         }
-        const mine = candidates.filter(c => c.author_id === d.id).sort((a, b) => a.rn - b.rn);
-        if (!mine.length) { plans.set(d.id, { u: d.id, n: now + IDLE_MS, s: 'idle', pa: null, b: null }); continue; }
+        const mine = candidates.filter(c => c.author_id === d.id && num(c.e) === 1).sort((a, b) => a.rn - b.rn);
+        if (!mine.length) {
+            // 'idle' ('모든 글이 1페이지에 있습니다') only when page 1 or a top-5 place holds back every listed
+            // post; any other reason (the gap, 새 글 우선, a report, 7 days unchanged) reads as 'wait'.
+            const sum = candidates.find(c => c.author_id === d.id);
+            const page1 = !!sum && num(sum.n) > 0 && num(sum.f) === num(sum.n);
+            plans.set(d.id, { u: d.id, n: now + IDLE_MS, s: page1 ? 'idle' : 'wait', pa: null, b: null });
+            continue;
+        }
         const pick = mine.find(c => allowed(c.kind));
         if (!pick) { delayed++; plans.set(d.id, { u: d.id, n: now + BUSY_MS, s: 'busy', pa: null, b: null }); continue; }
         perTab.set(pick.kind, (perTab.get(pick.kind) || 0) + 1);
@@ -237,8 +267,12 @@ export async function bumpJob(now: number) {
         plans.set(d.id, { u: d.id, n: now + perks.autoEveryMinutes * MIN, s: '', pa: null, b: pick.id });
     }
     await db().batch(writeStatements(bumps, [...plans.values()], notices, now, day, delayed));
-    return { window: true, bumped: bumps.length, delayed, members: due.length };
+    return { window: true, bumped: bumps.length, delayed, members: due.length, share: { perTab, by: new Set(bumps.map(b => b.u)), n: bumps.length } as TickShare };
 }
+
+// What tick A's 자동 끌올 used, so the bump on a price drop in the same tick stays inside the same caps
+// (1 per tab, 5 site-wide, one per member).
+export type TickShare = { perTab: Map<string, number>; by: Set<string>; n: number };
 
 const moved = (col: string) => `EXISTS(SELECT 1 FROM posts mp WHERE mp.id=${col} AND mp.bumped_at=?)`;
 // The guarded auto 끌올 writes (tick A and the bump on a price drop): the posts move only while the post
@@ -271,14 +305,19 @@ function writeStatements(bumps: Bump[], plans: Plan[], notices: { u: string; f: 
         FROM (SELECT json_extract(value,'$.u') AS u,json_extract(value,'$.n') AS n,json_extract(value,'$.s') AS s,json_extract(value,'$.pa') AS pa,json_extract(value,'$.b') AS b FROM json_each(?)) j
         WHERE automation.user_id=j.u`).bind(now, now + BUSY_MS, now, now, JSON.stringify(plans)));
     if (notices.length) out.push(notifyStatement('auto_paused', "SELECT json_extract(value,'$.u') AS user_id,json_extract(value,'$.f') AS ref,NULL AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(notices)], now));
-    // The window's counters {day, done, delayed}; the daily cron copies them to 'sys:auto_stats'.
+    out.push(countStatement(list, now, day, delayed));
+    return out;
+}
+
+// The window's counters {day, done, delayed}; the daily cron copies them to 'sys:auto_stats'. done counts
+// the bumps of the list that landed at exactly this time.
+function countStatement(list: string, now: number, day: string, delayed: number) {
     const done = `(SELECT COUNT(*) FROM json_each(?) WHERE EXISTS(SELECT 1 FROM posts mp WHERE mp.id=json_extract(value,'$.p') AND mp.bumped_at=?))`;
-    out.push(db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:auto_count',json_object('day',?,'done',${done},'delayed',?),?)
+    return db().prepare(`INSERT INTO settings(key,value,updated_at) VALUES('sys:auto_count',json_object('day',?,'done',${done},'delayed',?),?)
         ON CONFLICT(key) DO UPDATE SET value=json_object('day',json_extract(excluded.value,'$.day'),
             'done',CASE WHEN json_extract(settings.value,'$.day')=json_extract(excluded.value,'$.day') THEN COALESCE(json_extract(settings.value,'$.done'),0) ELSE 0 END+json_extract(excluded.value,'$.done'),
             'delayed',CASE WHEN json_extract(settings.value,'$.day')=json_extract(excluded.value,'$.day') THEN COALESCE(json_extract(settings.value,'$.delayed'),0) ELSE 0 END+json_extract(excluded.value,'$.delayed')),
-            updated_at=excluded.updated_at`).bind(day, list, now, delayed, now));
-    return out;
+            updated_at=excluded.updated_at`).bind(day, list, now, delayed, now);
 }
 
 // Tick B: '‘제목’ 글 끌올 가능' for the posts whose reminder time came, once the post can really be bumped
@@ -356,7 +395,9 @@ type DropPlan = { p: number; on: number; n: number; k: number; o: number | null;
 // The due setups with everything the tick decides on: the post, the owner (rank, wallet, last visit),
 // their settings, the setup's place among the owner's running ones (newest switch first, for a lower
 // grade's allowance), an accepted 제시, and whether another member sent a 제시 or wrote in a chat about
-// the post since the last look (an auto-declined 제시 does not count). Bind now ×2.
+// the post since the last look (an auto-declined 제시 does not count; a chat message counts only when the
+// chat's latest post card or 제시 before it is this post, as the room's pinned bar reads it, and only a
+// typed message, so a 제시 card is judged by the offers test alone). Bind now ×2.
 function dropDueSelect(now: number) {
     const since = 'COALESCE(pa.drop_checked_at,pa.drop_set_at,0)';
     return db().prepare(`SELECT pa.post_id AS id,pa.user_id AS u,pa.drop_floor AS floor,pa.drop_next_at AS due,pa.drop_count AS cnt,
@@ -366,9 +407,11 @@ function dropDueSelect(now: number) {
             (SELECT COUNT(*) FROM post_auto x WHERE x.user_id=pa.user_id AND x.drop_on=1 AND (x.drop_set_at>pa.drop_set_at OR (x.drop_set_at=pa.drop_set_at AND x.post_id>pa.post_id))) AS pos,
             EXISTS(SELECT 1 FROM offers o WHERE o.post_id=pa.post_id AND o.status='accepted') AS accepted,
             (EXISTS(SELECT 1 FROM offers o WHERE o.post_id=pa.post_id AND o.sender_id!=pa.user_id AND o.created_at>${since} AND NOT (o.status='declined' AND o.updated_at=o.created_at))
-                OR EXISTS(SELECT 1 FROM messages l JOIN conversations c ON c.id=l.conversation_id
-                    WHERE l.reference_id=CAST(pa.post_id AS TEXT) AND l.type='listing' AND c.updated_at>${since}
-                    AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=l.conversation_id AND m.sender_id!=pa.user_id AND m.type!='system' AND m.created_at>${since}))) AS asked
+                OR EXISTS(SELECT 1 FROM conversations c WHERE c.updated_at>${since}
+                    AND c.id IN (SELECT l.conversation_id FROM messages l WHERE l.reference_id=CAST(pa.post_id AS TEXT) AND l.type='listing' UNION SELECT o.conversation_id FROM offers o WHERE o.post_id=pa.post_id)
+                    AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.sender_id!=pa.user_id AND m.type='text' AND m.created_at>${since}
+                        AND (SELECT CASE WHEN k.type='listing' THEN CAST(k.reference_id AS INTEGER) ELSE (SELECT o.post_id FROM offers o WHERE o.id=k.reference_id) END
+                            FROM messages k WHERE k.conversation_id=m.conversation_id AND k.type IN ('listing','offer') AND k.id<m.id ORDER BY k.id DESC LIMIT 1)=pa.post_id))) AS asked
         FROM post_auto pa INDEXED BY post_auto_drop_due JOIN posts p ON p.id=pa.post_id JOIN users u ON u.id=pa.user_id LEFT JOIN automation a ON a.user_id=pa.user_id
         WHERE pa.drop_on=1 AND pa.drop_next_at<=? ORDER BY pa.drop_next_at LIMIT ${DROP_TICK}`).bind(now, now);
 }
@@ -383,14 +426,20 @@ function dropDueSelect(now: number) {
 // - 10 drops done, the price at the floor, or a 현젯 at or above the next price: the setup ends with an 알림;
 // - else the price drops (history, 찜 가격 내림 알림 and 조건 알림 via the history) and, while the wallet
 //   holds 3 and the tab's hourly cap allows, the post is bumped with 1 끌올 (an auto=1 event).
-export async function dropJob(now: number) {
-    const [dueR, capR] = await db().batch([dropDueSelect(now), capStatement(now)]);
+export async function dropJob(now: number, share?: TickShare) {
+    const [dueR, capR, settingsR] = await db().batch([dropDueSelect(now), capStatement(now), settingsStatement()]);
     const rows = dueR.results as DropRow[];
     if (!rows.length) return { dropped: 0, held: 0, ended: 0, bumped: 0 };
     const a60 = new Map<string, number>(), o60 = new Map<string, number>();
     for (const row of capR.results as { kind: string; a60: number; o60: number }[]) { a60.set(row.kind, num(row.a60)); o60.set(row.kind, num(row.o60)); }
+    // The daily cap and today's count (자동 끌올's bumps of this tick are already in it).
+    const settings = new Map((settingsR.results as { key: string; value: string }[]).map(s => [s.key, s.value]));
+    const day = autoDay(now), counter = parseJson(settings.get('sys:auto_count'));
+    const doneToday = counter?.day === day ? num(counter.done) : 0;
+    const cap = Math.max(0, num(settings.get('sys:auto_bump_cap'), AUTO_DAILY_CAP));
     const plans: DropPlan[] = [], notices: { u: string; ty: string; p: number; t: string }[] = [], drops: { p: number; u: string; o: number; n: number; t: string }[] = [];
-    const bumps: Bump[] = [], bumpedBy = new Set<string>(), perTab = new Map<string, number>();
+    // The tick's 자동 끌올 counts against the same caps: per tab, site-wide per tick, one per member.
+    const bumps: Bump[] = [], bumpedBy = new Set<string>(share?.by), perTab = new Map<string, number>(share?.perTab), before = share?.n ?? 0;
     let held = 0, ended = 0;
     for (const r of rows) {
         const manager = r.role === 'manager', rank = num(r.rank), perks = perksFor(rank, manager);
@@ -416,14 +465,14 @@ export async function dropJob(now: number) {
         const wallet = w.m ? walletOf(num(r.bump_tokens), num(r.bump_at), perks, now).tokens : Infinity;
         const gapOk = r.bumped_at <= now && (r.bump_count ? r.bumped_at : r.created_at) <= now - w.g;
         if (!bumpedBy.has(r.u) && inAutoWindow(now) && gapOk && wallet > AUTO_RESERVE
-            && (perTab.get(kind) || 0) < PER_TAB && (a60.get(kind) || 0) < tabLimit(o60.get(kind) || 0) && bumps.length < PER_TICK) {
+            && (perTab.get(kind) || 0) < PER_TAB && (a60.get(kind) || 0) < tabLimit(o60.get(kind) || 0) && before + bumps.length < PER_TICK && doneToday + bumps.length < cap) {
             bumpedBy.add(r.u);
             perTab.set(kind, (perTab.get(kind) || 0) + 1);
             a60.set(kind, (a60.get(kind) || 0) + 1);
             bumps.push({ p: r.id, u: r.u, ...w, a: perks.adSlots });
         }
     }
-    await db().batch(dropWrites(plans, drops, notices, bumps, now));
+    await db().batch(dropWrites(plans, drops, notices, bumps, now, day));
     return { dropped: drops.length, held, ended, bumped: bumps.length };
 }
 
@@ -431,7 +480,7 @@ export async function dropJob(now: number) {
 // replaces) and are written only while the post still holds the price the tick read (a manual edit in
 // between wins). drop_count grows only where this very drop landed. The UPDATE's '+' terms keep the
 // planner on the posts primary key (with the json bound, it otherwise scanned every 판매 post by kind).
-function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number; n: number; t: string }[], notices: { u: string; ty: string; p: number; t: string }[], bumps: Bump[], now: number) {
+function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number; n: number; t: string }[], notices: { u: string; ty: string; p: number; t: string }[], bumps: Bump[], now: number, day: string) {
     const out: D1PreparedStatement[] = [];
     if (drops.length) {
         const list = JSON.stringify(drops);
@@ -450,7 +499,13 @@ function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number;
         FROM (SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.on') AS on_,json_extract(value,'$.n') AS n,json_extract(value,'$.k') AS k,json_extract(value,'$.np') AS np FROM json_each(?)) j
         WHERE post_auto.post_id=j.p AND post_auto.drop_on=1`).bind(now, now, JSON.stringify(plans)));
     if (notices.length) out.push(notifyStatement(null, "SELECT json_extract(value,'$.u') AS user_id,json_extract(value,'$.ty') AS type,CAST(json_extract(value,'$.p') AS TEXT) AS ref,json_extract(value,'$.p') AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(notices)], now));
-    out.push(...bumpStatements(bumps, now));
+    if (bumps.length) {
+        // Counted like 자동 끌올's own bumps: auto_today (the fair-share order) and the day's counter.
+        const list = JSON.stringify(bumps);
+        out.push(...bumpStatements(bumps, now),
+            db().prepare(`UPDATE automation SET auto_today=auto_today+1 WHERE user_id IN (SELECT json_extract(value,'$.u') FROM json_each(?) WHERE ${moved("json_extract(value,'$.p')")})`).bind(list, now),
+            countStatement(list, now, day, 0));
+    }
     return out;
 }
 
@@ -615,6 +670,8 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
     // The chat fields (WP57) are checked first, so a member without a grade hears which grade they need.
     const put = !p[2] && method === 'PUT' ? await body(req) : null;
     const chat = put ? chatSets(put, perksOf(u), now) : null;
+    // The two automatic answers go out by themselves, so a blocked host is refused on save (WP48).
+    if (put) await assertNoBlockedLinks(req, typeof put.firstText === 'string' ? put.firstText : null, typeof put.awayText === 'string' ? put.awayText : null);
     if (!autoAllowed(u)) fail(403, AUTO_TEXT.off);
     if (!p[2] && method === 'GET') return json(await automationState(u));
     if (put && chat) {
@@ -675,7 +732,7 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
     if (p[2] === 'continue' && !p[3] && method === 'POST') {
         const r = await db().batch([
             db().prepare(`UPDATE posts SET touched_at=? WHERE author_id=? AND status!='closed' AND COALESCE(touched_at,updated_at)<=? AND id IN (SELECT post_id FROM post_auto WHERE user_id=? AND bump=1)`).bind(now, u.id, now - STALE_MS, u.id),
-            db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason='idle'").bind(now, u.id),
+            db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason IN ('idle','wait')").bind(now, u.id),
         ]);
         return json({ ok: true, count: r[0].meta.changes });
     }
@@ -710,7 +767,7 @@ export async function postAutoHandler(req: Request, u: User, post: any) {
     const slots = slotsOf(perks);
     const row = db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, isManager(u) ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now);
     // A member resting ('쉬는 중') is looked at on the next tick.
-    const wake = db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason='idle'").bind(now, u.id);
+    const wake = db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason IN ('idle','wait')").bind(now, u.id);
     const upsert = (guard: string, args: unknown[]) => db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT ?,?,1 WHERE ${guard} ON CONFLICT(post_id) DO UPDATE SET bump=1 WHERE ${guard}`)
         .bind(post.id, u.id, ...args, ...args);
     if (slots === 1) {

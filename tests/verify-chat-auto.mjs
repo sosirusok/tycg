@@ -129,7 +129,7 @@ check(xNow.status === 200 && xNow.data.chat.awayUntil > Date.now() + 11 * 360000
 equal([xNow.data.chat.awayOn, xNow.data.chat.awayFrom, xNow.data.chat.awayTo], [false, 2, 10], 'the schedule stays off (02:00-10:00 by default)');
 const hChat = await ask(H, X, '계정 아직 있나요');
 list = await autos(H.call, hChat);
-equal(list.map(m => [m.sender_id, m.body]), [[X.user.id, '지금은 자리를 비웠습니다. 10시 이후 답장 드립니다.']], 'H\'s message → the away text once');
+equal(list.map(m => [m.sender_id, m.body]), [[X.user.id, '지금은 자리를 비웠습니다. 확인 후 답장 드립니다.']], 'H\'s message → the away text once');
 await say(H, hChat, '답장 부탁드립니다');
 equal((await autos(H.call, hChat)).length, 1, 'a second message → none');
 sql(`UPDATE automation SET away_until=away_until+3600000 WHERE user_id='${X.user.id}'`);
@@ -165,6 +165,18 @@ await say(Y, yz, '스펙 보내드릴게요');
 await say(Z, yz, '확인했습니다');
 list = await autos(Y.call, yz);
 equal([list.filter(m => m.sender_id === Y.user.id).length, list.filter(m => m.sender_id === Z.user.id).length], [1, 1], 'each side has exactly one automatic answer');
+
+// 4b. Links on the manager's blocklist: refused when the text is saved; a text saved before its host
+// was blocked is no longer sent (the member's own message still goes through).
+const prevLinks = (await manager('manage/links')).data.domains || [];
+equal((await manager('manage/links', 'PUT', { domains: [...prevLinks, `auto-${run}.example`].join('\n') })).status, 200, 'manager blocks a host');
+refused(await X.call('me/automation', 'PUT', { awayText: `여기로 연락 https://auto-${run}.example/x` }), 400, '등록할 수 없는 링크가 있습니다.', 'an away text with a blocked link is refused on save');
+sql(`UPDATE automation SET away_text='연락처 https://auto-${run}.example/x',away_until=${Date.now() + 3600000} WHERE user_id='${X.user.id}'`);
+const K = await member('k');
+const kChat = await ask(K, X, '문의드립니다');
+equal((await autos(K.call, kChat)).length, 0, 'a stored away text with a host blocked later is not sent');
+equal((await manager('manage/links', 'PUT', { domains: prevLinks.join('\n') })).status, 200, 'the blocklist is restored');
+sql(`UPDATE automation SET away_text='',away_until=NULL WHERE user_id='${X.user.id}'`);
 
 // 5. A grade that ends keeps the settings but stops the automatic answers.
 sql(`UPDATE user_grades SET expires_at=${Date.now() - 1000} WHERE user_id='${S.user.id}'`);

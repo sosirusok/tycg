@@ -11,7 +11,8 @@ import { CIcon, SkeletonRows } from '../components/ui';
 import { WalletGauge, kstClock, useMinuteClock, type Usage, type Wallet } from '../components/Wallet';
 import { useAutoToggle } from '../components/AutoSheet';
 
-// GET me/automation (WP52). state: '' running, 'idle' 쉬는 중, 'busy' delayed, 'reply' / 'away' paused,
+// GET me/automation (WP52). state: '' running, 'idle' 쉬는 중 (every post on page 1), 'wait' 쉬는 중 (another
+// reason), 'busy' delayed, 'reply' / 'away' paused,
 // 'wallet' waiting for 3 끌올. nextAt: the tick that looks next (null: parked). slots null: every post.
 // drop (WP56): the post's 가격 내리기 (null: not a priced 판매 post).
 export type PostDrop = { on: boolean; floor: number; nextAt: number | null; nextPrice: number | null; count: number };
@@ -32,6 +33,7 @@ function statusLine(s: AutoState) {
     if (s.state === 'away') return AUTO_TEXT.away(s.pauseDays || 3);
     if (s.listed > 0 && s.stale === s.listed) return AUTO_TEXT.stale;
     if (s.state === 'idle') return AUTO_TEXT.idle;
+    if (s.state === 'wait') return s.listed > 0 && s.nextAt ? AUTO_TEXT.rest(kstClock(s.nextAt)) : null;
     if (s.state === 'busy' && s.nextAt) return AUTO_TEXT.busy(kstClock(s.nextAt));
     if (s.listed > 0 && s.nextAt) return AUTO_TEXT.running(s.everyMin, kstClock(s.nextAt));
     return null;
@@ -223,6 +225,10 @@ function ChatCard({ chat, setChat }: { chat: ChatAuto; setChat: (c: ChatAuto) =>
             <textarea className="textarea" rows={2} maxLength={AUTO_REPLY_MAX} value={away} disabled={busy} aria-label={`${CHAT_AUTO_TEXT.away} 문구`}
                 onChange={e => setAway(e.target.value)} onBlur={() => { if (away.trim() && away.trim() !== chat.awayText) void save({ awayText: away }, '저장 완료'); else setAway(chat.awayText); }} />
             <p className="auto-sub">자리 비움 시간에 온 채팅에 1번 · 채팅 목록 &lsquo;지금 자리 비움&rsquo; 12시간 유지</p>
+            {chat.awayUntil && <div className="away-now" role="status">
+                <span>{CHAT_AUTO_TEXT.awayUntil(kstClock(chat.awayUntil))}</span>
+                <button type="button" className="btn btn-line btn-sm" disabled={busy} onClick={() => void save({ awayNow: false }, '자리 비움 해제')}>해제</button>
+            </div>}
         </div>}
     </section>;
 }
@@ -231,7 +237,9 @@ function ChatCard({ chat, setChat }: { chat: ChatAuto; setChat: (c: ChatAuto) =>
 // grade (SITE_RULES.keywordAlerts); 조건 알림 count against the grade ('조건 알림 3/10').
 type SavedAlert = { id: string; name: string; query: string; alert: boolean; keyword: boolean };
 type SavedList = { searches: SavedAlert[]; filterAlerts: number | null; keywordAlerts: number };
-export function AlertCard() {
+// bare: inside the 알림 page's '검색 알림' modal (every grade, so a 일반 member sees every saved search with
+// its switch too); the modal gives the title.
+export function AlertCard({ bare = false }: { bare?: boolean }) {
     const [d, setD] = useState<SavedList | null>(null), [busy, setBusy] = useState(false);
     const load = () => api<SavedList>('searches').then(setD).catch(e => toast.error(errorText(e)));
     useEffect(() => { void load(); }, []);
@@ -244,15 +252,18 @@ export function AlertCard() {
         finally { setBusy(false); }
     }
     const used = d.searches.filter(v => v.alert && !v.keyword).length;
-    return <section className="card card-pad auto-card alert-card" aria-labelledby="auto-alert-title">
-        <div className="card-title-row"><h2 className="card-title" id="auto-alert-title">알림</h2>
-            {d.filterAlerts !== null && <span className="alert-count">{ALERT_TEXT.filterCount(used, d.filterAlerts)}</span>}</div>
+    // A 조건 알림 needs 플러스 (filterAlerts 0): its switch stays off with the reason, not a refused tap.
+    const locked = (v: SavedAlert) => !v.keyword && !v.alert && d.filterAlerts === 0;
+    const count = d.filterAlerts !== null && (!bare || d.filterAlerts > 0) && <span className="alert-count">{ALERT_TEXT.filterCount(used, d.filterAlerts)}</span>;
+    return <section className={bare ? 'auto-card alert-card is-bare' : 'card card-pad auto-card alert-card'} aria-labelledby={bare ? undefined : 'auto-alert-title'} aria-label={bare ? ALERT_TEXT.searches : undefined}>
+        {bare ? count && <div className="card-title-row">{count}</div>
+            : <div className="card-title-row"><h2 className="card-title" id="auto-alert-title">알림</h2>{count}</div>}
         {d.searches.length ? <ul className="auto-list">{d.searches.map(v => <li key={v.id} className={v.alert ? 'is-on' : ''}>
             <span className="auto-main">
                 <button type="button" className="auto-title" onClick={() => void navigate('/trade?' + v.query)}>{v.name}</button>
-                <span className="auto-sub">{v.keyword ? (new URLSearchParams(v.query).get('q') ? '키워드 알림' : '게시판 알림') : '조건 알림'}</span>
+                <span className="auto-sub">{v.keyword ? (new URLSearchParams(v.query).get('q') ? '키워드 알림' : '게시판 알림') : locked(v) ? ALERT_TEXT.filterLocked : '조건 알림'}</span>
             </span>
-            <label className="switch auto-post-switch"><input type="checkbox" role="switch" aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} checked={v.alert} disabled={busy} onChange={e => void toggle(v, e.target.checked)} /></label>
+            <label className="switch auto-post-switch"><input type="checkbox" role="switch" aria-label={`${v.name} ${ALERT_TEXT.boardBell}`} checked={v.alert} disabled={busy || locked(v)} onChange={e => void toggle(v, e.target.checked)} /></label>
         </li>)}</ul> : <p className="auto-empty">저장한 검색이 없습니다. 게시판에서 검색 조건을 저장하면 여기서 알림을 켤 수 있습니다.</p>}
     </section>;
 }

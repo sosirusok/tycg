@@ -304,19 +304,29 @@ await ask(b1, '아직 판매중인가요');
 sql(dueAt(a8) + `UPDATE users SET last_seen_at=${at(16)} WHERE id='${a8.user.id}';`);
 await tick(at(16, 10));
 check(autoRow(a8).pause_reason !== 'reply', 'one buyer unanswered for 25 hours: not paused');
-await ask(b2, '구매하고 싶습니다');
+const chat2 = await ask(b2, '구매하고 싶습니다');
 sql(dueAt(a8));
 await tick(at(16, 20));
 equal(autoRow(a8).pause_reason, 'reply', 'two different buyers unanswered for 25 hours: paused (reply)');
 check((await a8('notifications')).data.alerts.some(a => a.type === 'auto_paused' && a.text.startsWith('답장하지 않은 채팅이 있어')), 'with its 알림');
+// Only a typed message answers: a system line under the seller's name ('제시 자동 거절 · 25만원') or an
+// automatic answer does not.
+sql(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) VALUES('${chat2}','${a8.user.id}','제시 자동 거절 · 25만원','system',NULL,'[]',${at(16, 21)}),('${chat2}','${a8.user.id}','문의 감사합니다.','auto','${p8}','[]',${at(16, 22)});` + dueAt(a8));
+await tick(at(16, 25));
+equal(autoRow(a8).pause_reason, 'reply', 'a system line and an automatic answer from the seller are no reply: still paused');
 equal((await a8('blocks', 'POST', { userId: b2.user.id, active: true })).status, 200, 'the seller blocks one of them');
-sql(place([p8], 'buy', 'account', at(15)));
+// (The paused member is looked at again at 16:30.)
+sql(place([p8], 'buy', 'account', at(15)) + `UPDATE automation SET bump_next_at=${at(16, 30)} WHERE user_id='${a8.user.id}';`);
 await tick(at(16, 30));
 equal([autoRow(a8).pause_reason, autoEvents(a8).length], ['', 1], 'the next tick resumes and bumps');
 // 7 days untouched: skipped; '모두 계속' resumes.
 sql(`UPDATE posts SET touched_at=${Date.now() - 8 * DAY},updated_at=${Date.now() - 8 * DAY},bumped_at=${at(15)} WHERE id=${p8};` + dueAt(a8));
 await tick(at(21));
-equal([autoEvents(a8).length, autoRow(a8).pause_reason], [1, 'idle'], 'a post untouched for 8 days is skipped');
+equal([autoEvents(a8).length, autoRow(a8).pause_reason], [1, 'wait'], "a post untouched for 8 days is skipped ('wait': not the page-1 line)");
+{
+    const st = (await a8('me/automation')).data;
+    equal([st.state, typeof st.nextAt], ['wait', 'number'], "GET me/automation says 'wait' with the next look (the card: '자동 끌올 쉬는 중 · 다음 15:40')");
+}
 equal((await a8(`posts?author=${a8.user.id}&stale=1`)).data.posts.map(p => p.id), [p8], '내 글 stale=1 lists it');
 equal((await a8('me/automation/continue', 'POST', {})).data.count, 1, "'모두 계속' touches it");
 await tick(at(21, 10));
@@ -337,6 +347,30 @@ sql(fill('exchange', 'account', at(16, 50)) + place([ppx], 'exchange', 'account'
 only(px);
 await tick(at(17));
 equal([autoEvents(px).length, autoRow(px).bump_next_at], [0, null], 'an expired 6-month 프리미엄 is not bumped (its row is parked)');
+// An ended 6-month 엘리트 over a permanent 프리미엄: the tick keeps only 프리미엄's 5 posts listed (the
+// most recently bumped), and a pending 댓글 신고 on a post does not hold the post back (only a report on
+// the post itself does).
+const down = await register('down'), reporter = await register('reporter');
+const downPosts = [];
+for (let i = 0; i < 7; i++) downPosts.push(await created(down));
+await grant(down, 'premium');
+await grant(down, 'elite', '6m');
+equal(listed(down).length, 7, 'the 6-month 엘리트 lists all 7 open posts');
+const oldest = downPosts[0];
+const comment = await reporter(`posts/${oldest}/comments`, 'POST', { body: '댓글 신고 검증' });
+equal(comment.status, 201, 'a member comments on the oldest post');
+equal((await down('reports', 'POST', { commentId: comment.data.id, reason: '허위 매물', details: '자동 검증' })).status, 201, 'and the comment is reported');
+sql(downPosts.map((id, i) => place([id], 'sell', 'goods_coupon', at(16, 30) + i * MIN)).join('')
+    + `UPDATE user_grades SET expires_at=${Date.now() + HOUR} WHERE user_id='${down.user.id}' AND grade='elite';` + dueAt(down));
+sql(fill('sell', 'goods_coupon', at(16, 50)));
+only(down);
+await tick(at(17));
+equal(listed(down), downPosts.slice(2).sort((a, b) => a - b), 'back to 프리미엄: the 5 most recently bumped posts stay listed');
+equal(autoEvents(down).map(e => e.post_id), [downPosts[2]], 'and the tick bumps the oldest of those 5');
+sql(`UPDATE posts SET bumped_at=${at(16, 20)} WHERE id=${downPosts[3]};` + fill('sell', 'goods_coupon', at(17, 10)) + dueAt(down));
+sql(`INSERT INTO reports(post_id,comment_id,comment_body,reporter_id,reason,details,created_at) SELECT ${downPosts[3]},${comment.data.id},'x','${reporter.user.id}','허위 매물','x',${Date.now()};`);
+await tick(at(18, 40));
+check(autoEvents(down).length === 2 && autoEvents(down)[1].post_id === downPosts[3], 'a pending 댓글 신고 stored on a post keeps that post a candidate');
 const capm = await register('capm');
 const pcap = await created(capm);
 await grant(capm, 'plus');

@@ -44,6 +44,14 @@ export async function assertNoBlockedLinks(req: Request, ...texts: (string | nul
     if (texts.some(t => t && blockedIn(t, blocked, selfHostOf(req)).length)) fail(400, BLOCKED_LINK_ERROR);
 }
 
+// true when the text links a blocked host (the automatic chat answers skip themselves instead of failing
+// the member's message, so a domain blocked later also stops texts already saved).
+export async function hasBlockedLinks(req: Request, text: string) {
+    if (!/https?:\/\/|www\./i.test(text)) return false;
+    const blocked = await blockedDomains();
+    return blocked.length > 0 && blockedIn(text, blocked, selfHostOf(req)).length > 0;
+}
+
 // The cards GET /posts/:id returns: only while the author's current grade allows previews and the
 // post's switch is on, and only cards whose address still occurs (as a live link) in the body. Cards of
 // this site's own posts are rebuilt from the linked posts now (one read of at most 3 ids), so a post that

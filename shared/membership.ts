@@ -165,7 +165,7 @@ export const PERKS: Record<GradeId, Perks> = {
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
 };
-export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGapMinutes: 0, pauseDays: 0, filterAlerts: Infinity };
+export const MANAGER_PERKS: Perks = { ...ELITE_PERKS, bumpMax: Infinity, bumpGapMinutes: 0, pauseDays: 0 };
 
 export function perksOf(u: { role?: string | null; grade?: string | null }): Perks {
     if (u.role === 'manager') return MANAGER_PERKS;
@@ -228,7 +228,8 @@ export const AD_TEXT = {
     hint: '광고는 본인 인증 필요',
     off: '광고 제외',
     noIdentity: '본인 인증 없음 · 광고 제외',
-    more: (n: number) => `이 회원 글 ${n}개 더`,
+    // The member's nickname with a fixed noun (no particle to pick): '좀비사냥꾼 글 3개 더'.
+    more: (name: string, n: number) => name ? `${name} 글 ${n}개 더` : `이 회원 글 ${n}개 더`,
     sortNote: '정렬은 등급과 관계없습니다.',
     orderNote: '광고는 목록 순서를 바꾸지 않습니다.',
 };
@@ -250,6 +251,8 @@ export const AUTO_TEXT = {
     grant: '자동 끌올이 켜졌습니다. 설정은 내 거래의 자동화 탭에 있습니다.',
     running: (min: number, at: string) => `자동 끌올 ${gapText(min)}마다 1개 · 다음 ${at}`,
     idle: '자동 끌올 쉬는 중 · 모든 글이 1페이지에 있습니다',
+    // Nothing to bump for another reason (the same-post gap, 새 글 우선, a report): no cause named.
+    rest: (at: string) => `자동 끌올 쉬는 중 · 다음 ${at}`,
     busy: (at: string) => `게시판이 붐벼 자동 끌올을 미뤘습니다. (${at} 예정)`,
     reply: '답장하지 않은 채팅이 있어 자동 끌올을 멈췄습니다. 답장하면 다시 시작됩니다.',
     away: (days: number) => `${days}일 동안 접속하지 않아 자동 끌올을 멈췄습니다. 접속하면 다시 시작됩니다.`,
@@ -301,10 +304,11 @@ export const CHAT_AUTO_TEXT = {
     first: '첫 문의 자동 안내',
     away: '자리 비움',
     awayNow: '지금 자리 비움',
+    awayUntil: (at: string) => `지금 자리 비움 · ${at}까지`,
     // copy-lint-ignore-next-line
     firstDefault: '문의 감사합니다. {제목} 즉거가 {즉거가}입니다. 전번·계좌 인증 가능합니다.',
     // copy-lint-ignore-next-line
-    awayDefault: '지금은 자리를 비웠습니다. 10시 이후 답장 드립니다.',
+    awayDefault: '지금은 자리를 비웠습니다. 확인 후 답장 드립니다.',
 };
 // Own quick replies hold at most this many characters; the two auto texts at most AUTO_REPLY_MAX.
 export const TEMPLATE_MAX = 100, AUTO_REPLY_MAX = 300;
@@ -356,6 +360,8 @@ export const ALERT_TEXT = {
     off: '알림 해제',
     keywordMax: (n: number) => `키워드 알림은 ${n}개까지입니다.`,
     filterOff: '조건 알림은 플러스부터 가능합니다.',
+    // A saved search with filters, for a member below 플러스 (the switch stays off).
+    filterLocked: '조건 알림 · 플러스부터',
     filterMax: (n: number) => `조건 알림은 ${n}개까지입니다.`,
     filterCount: (used: number, max: number) => `조건 알림 ${used}/${max}`,
     follow: '구독',
@@ -366,6 +372,8 @@ export const ALERT_TEXT = {
     followMax: (n: number) => `구독은 ${n}명까지입니다.`,
     followClosed: '구독을 받지 않는 회원입니다.',
     manage: '구독 관리',
+    // The 알림 page's button and modal with every saved search and its switch (every grade).
+    searches: '검색 알림',
     noFollows: '구독한 회원이 없습니다.',
     keyword: (name: string) => `‘${name}’ 새 글`,
     filter: (name: string) => `‘${name}’ 조건 새 글`,
@@ -413,10 +421,10 @@ export type TrialState = { endsAt: number | null; popup: boolean; ended: boolean
 export type TrialRow = { icon: string; title: string; text: string };
 export const TRIAL_ROWS: TrialRow[] = [
     { icon: 'megaphone', title: `끌올 ${PERKS.plus.bumpMax}개 · ${gapText(PERKS.plus.bumpRefillMinutes)}마다 충전`, text: `같은 글 ${gapText(PERKS.plus.bumpGapMinutes)}마다 끌올 (일반 ${gapText(PERKS.normal.bumpGapMinutes)})` },
+    // 자동 끌올 (WP52): on from the first post, one post every autoEveryMinutes (copy.md order: second).
+    { icon: 'alarm-clock', title: `자동 끌올 글 ${PERKS.plus.autoBumpPosts}개`, text: `${gapText(PERKS.plus.autoEveryMinutes)}마다 1번 · 첫 글부터 바로 켜짐` },
     // 제목 강조 검정 (WP48), the 플러스 글자 꾸미기 with 글자색 (WP49) and 링크 미리보기 (WP48).
     { icon: 'artist-palette', title: '진한 제목 · 글자색', text: '링크 미리보기 포함' },
-    // 자동 끌올 (WP52): on from the first post, one post every autoEveryMinutes.
-    { icon: 'alarm-clock', title: `자동 끌올 글 ${PERKS.plus.autoBumpPosts}개`, text: `${gapText(PERKS.plus.autoEveryMinutes)}마다 1번 · 첫 글부터 바로 켜짐` },
 ];
 
 // 알림함 rows for the trial (WP50), written by the daily cleanup: one in the last 24 hours ('10월 9일

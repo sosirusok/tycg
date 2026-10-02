@@ -478,9 +478,10 @@ export const QUICK_REPLIES: Record<TradeKind, { writer: string[]; author: string
     },
 };
 // The board chips for a chat: by the post's board and side; after 완료 only a sale's author keeps
-// '판완됐습니다'.
+// '판완됐습니다'. A chat about no post (started from a profile) has no side to pick, so only the
+// member's own quick replies show.
 export function quickReplies(listing: { kind: string; status: string } | null, own: boolean): string[] {
-    if (!listing || !isTradeKind(listing.kind)) return QUICK_REPLIES.sell.writer;
+    if (!listing || !isTradeKind(listing.kind)) return [];
     const set = QUICK_REPLIES[listing.kind];
     if (listing.status === 'closed') return own && listing.kind === 'sell' ? set.author.slice(1) : [];
     return own ? set.author : set.writer;

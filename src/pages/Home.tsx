@@ -13,7 +13,7 @@ import { HomeAdCard } from '../components/HomeAdCard';
 
 type Notice = { id: number; title: string; created_at: number };
 
-type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; notices: Notice[] };
+type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; notices: Notice[] };
 
 // One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
 // the board list for that category.
@@ -52,7 +52,7 @@ function Shelf({ title, kind, withCategories = false, empty, initial, initialCat
 // minutes by the server. The row is left out while there are none.
 function EliteShelf({ posts }: { posts: Post[] }) {
     if (!posts.length) return null;
-    return <section className="section" aria-label={AD_TEXT.home}>
+    return <section className="section elite-row" aria-label={AD_TEXT.home}>
         <div className="section-head"><h2 className="section-title">{AD_TEXT.home}</h2><span className="ad-label">{AD_TEXT.label}</span></div>
         <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} href={adHref(p.id)} />)}</div>
     </section>;
@@ -153,6 +153,6 @@ export function Home() {
                     : <p className="muted">등록된 공지가 없습니다.</p>}
             </section>
         </div>
-        <HomeAdCard ads={home ? home.ads || [] : null} />
+        <HomeAdCard ads={home ? home.cardAds || [] : null} />
     </div>;
 }

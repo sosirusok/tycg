@@ -147,6 +147,9 @@ r1 = row(p1);
 const wallet = sql(`SELECT bump_tokens FROM users WHERE id='${plus.user.id}'`)[0].bump_tokens;
 const events = sql(`SELECT post_id,auto FROM post_events WHERE post_id=${p1} AND kind='bump' AND created_at=${eight(1)}`);
 equal([r1.price, r1.history, r1.bumped_at, wallet, events], [280000, [300000, 290000], eight(1), 4, [{ post_id: p1, auto: 1 }]], 'a drop with 5 끌올: 28만원, bumped, 4 left, an auto=1 event');
+const counted = JSON.parse(sql("SELECT value FROM settings WHERE key='sys:auto_count'")[0]?.value || '{}');
+check(counted.day === new Date(eight(1) - 4 * HOUR + KST).toISOString().slice(0, 10) && counted.done >= 1, `the drop's bump counts in the day's 자동 끌올 counter (${JSON.stringify(counted)})`);
+check(sql(`SELECT auto_today FROM automation WHERE user_id='${plus.user.id}'`)[0]?.auto_today >= 1, "and in the member's auto_today (the fair-share order)");
 await tick(eight(2), due(p1));
 r1 = row(p1);
 equal([r1.price, r1.drop_on], [280000, 0], 'at the 최저가 the next tick ends it');
@@ -178,6 +181,19 @@ equal([r3.price, r3.drop_on], [290000, 1], 'last visit 4 days ago: not dropped (
 // 완료 ends it.
 equal((await plus(`posts/${p3}/status`, 'PATCH', { status: 'closed' })).status, 200, 'the post is completed');
 equal(row(p3).drop_on, 0, '완료 ends the setup');
+
+// 4b. The hold follows the post the chat is about now: a buyer who asked about q1 and has since moved on to
+// q2 in the same chat (one chat per pair) does not hold q1's drop.
+const plus2 = await register('plus2');
+const q1 = await created(plus2), q2 = await created(plus2);
+await grant(plus2, 'plus');
+equal((await drop(plus2, q1, true, 250000)).status, 200, 'a setup on q1');
+const pairChat = (await buyer('chats', 'POST', { userId: plus2.user.id, postId: q1 })).data.id;
+equal((await buyer(`chats/${pairChat}/messages`, 'POST', { body: '아직 판매중인가요', postId: q1 })).status, 201, 'the buyer asks about q1');
+sql(`UPDATE post_auto SET drop_checked_at=${Date.now()} WHERE post_id=${q1};`);
+equal((await buyer(`chats/${pairChat}/messages`, 'POST', { body: '이 글도 판매중인가요', postId: q2 })).status, 201, 'later, in the same chat, about q2');
+await tick(eight(5, 10), due(q1));
+equal(row(q1).price, 290000, 'a message about q2 does not hold q1: dropped');
 
 // 5. 프리미엄: 12시간 and 5%.
 const premium = await register('premium');
