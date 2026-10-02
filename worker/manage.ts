@@ -1,6 +1,6 @@
-import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
+import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, paidRankSql, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
 import { REPORT_REASONS } from '../shared/market';
-import { kstDayStart } from '../shared/membership';
+import { REPORT_DEMOTE, URGENT_REPORT_REASONS, kstDayStart, reportOrder } from '../shared/membership';
 import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
 import { notifyOne } from './notifications';
@@ -9,6 +9,33 @@ import { clearBlockedCache } from './unfurl';
 import { BLOCKED_DOMAINS_MAX, parseBlockedDomains } from '../shared/links';
 import { deleteReview, deleteTrade } from './reviews';
 import { storageMode, counterValue, DB_LIMIT_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, D1_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, R2_WARN_BYTES } from './storage';
+
+// 신고 (WP60): the waiting reports (at most PENDING_MAX, the most pressing first) and the last DECIDED_MAX
+// decided ones. A waiting row also carries what orders it: the reporter's paid rank (paidRankSql, never
+// the reported member's grade), the reporter's reports and 기각 of the last 30 days.
+const PENDING_MAX = 200, DECIDED_MAX = 50;
+const MONTH = 30 * 86400000;
+const reportSelect = (pending: boolean) => `SELECT r.*,p.title,p.hidden,CASE WHEN r.comment_id IS NOT NULL THEN EXISTS(SELECT 1 FROM comments c WHERE c.id=r.comment_id AND c.deleted_at IS NULL) END AS comment_live,u.nickname,${memberColumns('u')},
+    t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
+    ${pending ? `,${paidRankSql('u')} AS reporter_rank,(SELECT COUNT(*) FROM reports x WHERE x.reporter_id=r.reporter_id AND x.created_at>?1) AS reporter_reports_30d,
+        (SELECT COUNT(*) FROM reports x WHERE x.reporter_id=r.reporter_id AND x.status='dismissed' AND x.decided_at>?1) AS reporter_dismissed_30d` : ''}
+    FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id LEFT JOIN users t ON t.id=r.target_user_id`;
+// The order of reportOrder in SQL, so the PENDING_MAX rows read are the most pressing ones; the page
+// order itself is reportOrder's (the same rule, in JS).
+const URGENT_SQL = `(reason IN (${URGENT_REPORT_REASONS.map(v => `'${v}'`).join(',')}) AND reporter_dismissed_30d<${REPORT_DEMOTE})`;
+const RANK_SQL = `(CASE WHEN reporter_dismissed_30d>=${REPORT_DEMOTE} OR reporter_id='${MANAGER_ID}' THEN 0 ELSE reporter_rank END)`;
+function reportStatements(now: number) {
+    return [
+        db().prepare(`SELECT * FROM (${reportSelect(true)} WHERE r.status='pending') ORDER BY ${URGENT_SQL} DESC,${RANK_SQL} DESC,created_at,id LIMIT ${PENDING_MAX}`).bind(now - MONTH),
+        db().prepare(`${reportSelect(false)} WHERE r.status!='pending' ORDER BY r.decided_at DESC,r.id DESC LIMIT ${DECIDED_MAX}`),
+        db().prepare("SELECT COUNT(*) AS n FROM reports WHERE status='pending'"),
+    ];
+}
+function reportRows(pending: D1Result, decided: D1Result) {
+    const waiting: any[] = (pending.results as any[]).map(row => ({ ...reportRow(row), auto: row.reporter_id === MANAGER_ID }));
+    waiting.sort(reportOrder);
+    return [...waiting, ...(decided.results as any[]).map(row => reportRow(row))];
+}
 
 // One 신고 row: the reporter's name line, and for a member report the reported member's (탈퇴회원 once
 // they left, with whether they are under 이용 정지 now).
@@ -56,8 +83,8 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         const r = await db().batch([
             // A member report (WP22) also names the reported member (target_*) and the chat it came from; a 댓글
             // report (WP55) carries the reported text (comment_body) and whether the 댓글 is still up.
-            db().prepare(`SELECT r.*,p.title,p.hidden,CASE WHEN r.comment_id IS NOT NULL THEN EXISTS(SELECT 1 FROM comments c WHERE c.id=r.comment_id AND c.deleted_at IS NULL) END AS comment_live,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
-                FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id LEFT JOIN users t ON t.id=r.target_user_id ORDER BY r.created_at DESC LIMIT 100`),
+            // The waiting ones come first in 신고 처리 순서 (WP60), then the decided ones (reports, pendingReports).
+            ...reportStatements(Date.now()),
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),
             db().prepare("SELECT COUNT(*) AS n FROM applications WHERE status='pending'"),
@@ -69,10 +96,12 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
             // The '비밀번호 재설정' tab's count (WP59).
             db().prepare("SELECT COUNT(*) AS n FROM reset_requests WHERE status='pending'"),
         ]);
+        // After the three report statements: hidden posts, applications, relists, the auto stats and the resets.
+        const [pending, decided, pendingCount] = r.splice(0, 3);
         let auto: { done: number; delayed: number } | null = null;
-        try { const v = JSON.parse((r[4].results[0] as { value: string } | undefined)?.value || 'null'); if (v) auto = { done: Number(v.done) || 0, delayed: Number(v.delayed) || 0 }; } catch { /* none yet */ }
-        return json({ reports: r[0].results.map(row => reportRow(row)), hidden: await decorate(r[1].results, u), pendingApplications: (r[2].results[0] as any).n, pendingResets: (r[5].results[0] as any).n,
-            usage: { relistsYesterday: (r[3].results[0] as any).n, autoYesterday: auto } });
+        try { const v = JSON.parse((r[3].results[0] as { value: string } | undefined)?.value || 'null'); if (v) auto = { done: Number(v.done) || 0, delayed: Number(v.delayed) || 0 }; } catch { /* none yet */ }
+        return json({ reports: reportRows(pending, decided), pendingReports: (pendingCount.results[0] as any).n, hidden: await decorate(r[0].results, u), pendingApplications: (r[1].results[0] as any).n, pendingResets: (r[4].results[0] as any).n,
+            usage: { relistsYesterday: (r[2].results[0] as any).n, autoYesterday: auto } });
     }
     // The chat a member report names, read-only, as the evidence: the latest 200 messages with who sent each.
     if (p[1] === 'reports' && p[2] && p[3] === 'messages' && !p[4] && method === 'GET') {
@@ -136,9 +165,15 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     // A 후기 or a whole trade the manager removes (WP23), from the member panel.
     if (p[1] === 'reviews' && p[2] && !p[3] && method === 'DELETE') return deleteReview(p[2]);
     if (p[1] === 'trades' && p[2] && !p[3] && method === 'DELETE') return deleteTrade(p[2]);
+    // 처리 완료 (resolved), 기각 (dismissed) or 되돌리기 (pending) of one 신고 (WP60). decided_at stamps the
+    // decision (2 기각 in 30 days end the reporter's priority) and is cleared by 되돌리기. Deciding a report
+    // never hides a post or suspends anyone: those stay the manager's own buttons.
     if (p[1] === 'report' && method === 'POST') {
         const b = await body(req);
-        await db().prepare('UPDATE reports SET status=? WHERE id=?').bind(b.status === 'pending' ? 'pending' : 'resolved', b.id).run();
+        if (!['pending', 'resolved', 'dismissed'].includes(b.status)) fail(400, '처리 상태를 확인해 주세요.');
+        if (typeof b.id !== 'number' && typeof b.id !== 'string') fail(404, '신고를 찾을 수 없습니다.');
+        const r = await db().prepare('UPDATE reports SET status=?,decided_at=? WHERE id=?').bind(b.status, b.status === 'pending' ? null : Date.now(), b.id).run();
+        if (!r.meta.changes) fail(404, '신고를 찾을 수 없습니다.');
         return json({ ok: true });
     }
     if (p[1] === 'notice') {

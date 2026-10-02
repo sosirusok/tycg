@@ -12,6 +12,7 @@ import { kstDate, publicRank, type TrialState } from '../shared/membership';
 import { manageHandler } from './manage';
 import { allowKvTestFailure } from './storage';
 import { usageHandler } from './perks';
+import { statsHandler } from './stats';
 import { reviewsHandler } from './reviews';
 import { homeHandler } from './home';
 import { providersHandler } from './providers';
@@ -372,6 +373,8 @@ async function route(req: Request): Promise<Response> {
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
             case 'me': {
                 if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
+                // 판매 통계 (WP63): me/stats?post=<id>.
+                if (p[1] === 'stats' && !p[2] && method === 'GET') return await statsHandler(req, url);
                 // 자동화 tab (WP52).
                 if (p[1] === 'automation') { const a = await automationHandler(req, p); if (a) return a; break; }
                 // 구독 관리 (WP54).

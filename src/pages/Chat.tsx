@@ -6,7 +6,7 @@ import {
     KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, closedLabel, fillTemplate, isTradeKind, quickReplies, statusName, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
     type Post, type Review, type User,
 } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, PROVIDER_TEXT, TEMPLATE_MAX, applicationTitle, gradeInfo, perksOf, type Application } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, PROVIDER_TEXT, TEMPLATE_MAX, applicationTitle, gradeInfo, managerChatOrder, perksOf, type Application } from '../../shared/membership';
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -18,9 +18,11 @@ import { MemberReportModal } from '../components/MemberReport';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { RichBody } from '../components/RichBody';
 
+// priority and unread_since come only in the manager's list (WP60: unread chats by the member's paid rank,
+// then the oldest unread message; read chats newest first).
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null;
     // 프로필 사진 (WP59): the 64px copy, inline.
-    avatar_thumb?: string };
+    avatar_thumb?: string; priority?: number; unread_since?: number | null };
 type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean; avatar_thumb?: string };
@@ -89,6 +91,9 @@ export default function Chat({ id }: { id?: string }) {
     // for clock drift) and merges them in. The manager's 신청 대기 view always reloads whole, since its
     // rows also leave when an application is handled.
     const since = useRef<number | null>(null);
+    // The manager's full list keeps the server's order (managerChatOrder) when it merges, and its unread
+    // chats beyond the 100 newest.
+    const managerList = me?.role === 'manager' && view === 'all';
     const loadChats = useCallback((full = false) => {
         const merge = !full && view === 'all' && since.current !== null;
         const path = view === 'applications' ? 'chats?filter=applications' : merge ? `chats?since=${since.current}` : 'chats';
@@ -97,11 +102,12 @@ export default function Chat({ id }: { id?: string }) {
             setChats(prev => {
                 if (!merge || !prev) return d.chats;
                 const fresh = new Map(d.chats.map(c => [c.id, c]));
-                return [...d.chats, ...prev.filter(c => !fresh.has(c.id))].sort((a, b) => b.updated_at - a.updated_at).slice(0, 100);
+                const merged = [...d.chats, ...prev.filter(c => !fresh.has(c.id))];
+                return managerList ? merged.sort(managerChatOrder).slice(0, 300) : merged.sort((a, b) => b.updated_at - a.updated_at).slice(0, 100);
             });
             setListError(null);
         }).catch(e => setListError(e instanceof ApiError ? e.status : 0));
-    }, [view]);
+    }, [view, managerList]);
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
     useEffect(() => {
         if (!me) return;
@@ -127,7 +133,11 @@ export default function Chat({ id }: { id?: string }) {
     }
     // The open room marked its messages read: its row shows none at once, then the list catches up.
     const roomActivity = () => {
-        if (id) setChats(list => list && list.map(c => c.id === id ? { ...c, unread: 0 } : c));
+        if (id) setChats(list => {
+            if (!list) return list;
+            const next = list.map(c => c.id === id ? { ...c, unread: 0 } : c);
+            return managerList ? next.sort(managerChatOrder) : next;
+        });
         loadChats();
         refreshUnread();
     };
@@ -190,6 +200,9 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // server puts its card right before it. The param is then dropped from the address.
     const { params } = useLocation();
     const aboutPost = useRef(params.get('post'));
+    // '채팅 보내기' from a 자동 매칭 (WP58, /chat/:id?post=N&match=1): the post is the member's own, sent as a
+    // match with the first message (엘리트 and up, 20 a day).
+    const matchSend = useRef(params.get('match') === '1');
     const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), idle = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
     // The application template ApplyModal left for this room goes into the composer once.
     const takeDraft = () => {
@@ -298,14 +311,15 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         setSending(true);
         const postId = aboutPost.current && /^\d+$/.test(aboutPost.current) ? Number(aboutPost.current) : undefined;
         try {
-            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId });
+            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId, ...postId !== undefined && matchSend.current ? { match: true } : {} });
             if (postId !== undefined) forgetPost();
             setText(''); setPhotos([]); stick.current = true;
             await poll(); activity.current();
         } catch (err) {
             // A post that is gone (or not the partner's) must not block the chat: the next try goes
             // without it. Other errors, such as a message that is too long, keep the post for the retry.
-            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH)) forgetPost();
+            // A match send over the day's limit (429) or without the grade (403) goes on as a plain chat.
+            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH || (matchSend.current && (err.status === 429 || err.status === 403)))) forgetPost();
             toast.error(errorText(err));
         }
         finally { setSending(false); input.current?.focus(); }
@@ -313,8 +327,13 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // The post goes with one message only; the address loses the param too.
     function forgetPost() {
         aboutPost.current = null;
+        matchSend.current = false;
         const url = new URL(location.href);
-        if (url.searchParams.has('post')) { url.searchParams.delete('post'); history.replaceState(history.state, '', url.pathname + url.search + url.hash); }
+        if (url.searchParams.has('post') || url.searchParams.has('match')) {
+            url.searchParams.delete('post');
+            url.searchParams.delete('match');
+            history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+        }
     }
     function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send(); }

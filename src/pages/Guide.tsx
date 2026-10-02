@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { dateText, wonText } from '../../shared/market';
-import { AD_TEXT, AUTO_TEXT, BADGES, DROP_TEXT, PERKS, PROVIDER_TEXT, SITE_RULES, gapText, gradeInfo } from '../../shared/membership';
+import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, DROP_TEXT, PERKS, PROVIDER_TEXT, REPORT_TEXT, SITE_RULES, gapText, gradeInfo } from '../../shared/membership';
 import { BENEFIT_ROWS, PAID_GRADES, TABLE_GRADES, gradeExtras, gradeHook, monthly, vsNormal, type PaidGrade } from '../../shared/benefits';
 import { api } from '../lib/api';
 import { Link } from '../lib/router';
@@ -33,7 +33,11 @@ const FREE_ITEMS = [
     '링크 자동 연결',
     '거래 기록·후기',
     '공유·카톡 미리보기',
-    '모두 끌올 · 일괄 변경',
+    // WP58 and WP63: every grade.
+    `모두 끌올 · 일괄 변경 ${BULK_MAX}개`,
+    '다시 올리기 · 복사해서 새 글',
+    '맞는 구매 글·판매 글 링크',
+    '인기순 정렬',
 ];
 // What the site does better than a cafe board, for every grade.
 const CAFE_ITEMS = ['끌올 버튼 (링크 다시 올리기 없음)', '끌올 가능 알림', '가격 내림 표시', '제시 기록', '상대가 확인한 거래 기록', '인증 표시', '같은 회원 글 접기', '광고는 목록 순서와 별개'];
@@ -139,6 +143,8 @@ export default function Guide() {
                 <li>같은 매물을 다시 올리면 끌올 1개로 칩니다. 끌올 간격 안이면 이전 자리에 올라갑니다.</li>
                 <li>같은 매물: 같은 제목, 절반 넘게 같은 사진, 또는 래더·스킨·팬텀 등 매물 정보 3가지 이상이 같은 글입니다.</li>
                 <li>중개/가측 탭의 같은 등급 안 순서는 접속 중인 회원 먼저, 그다음 3시간마다 바뀌는 무작위 순서입니다.</li>
+                <li>{REPORT_TEXT.urgentNote}</li>
+                <li>{REPORT_TEXT.demoteNote}</li>
                 <li>{config.paymentNotice ? `입금 안내: ${config.paymentNotice}` : '입금 계좌는 신청 후 채팅으로 안내합니다.'} 입금 확인 후 매니저가 지급합니다.</li>
             </ul>
         </section>

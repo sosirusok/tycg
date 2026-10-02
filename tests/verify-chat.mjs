@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 // Chat API from WP16: the post a chat is about (GET /chats/:id listing, list rows' post title and
 // photo), offer rows with their post's price, and the manager-only ?filter=applications list.
@@ -12,17 +15,34 @@ const run = randomBytes(4).toString('hex');
 const password = randomBytes(16).toString('hex');
 let checks = 0;
 
+const root = fileURLToPath(new URL('..', import.meta.url));
+function sql(command) {
+    const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
+        '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+    return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+}
+
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
 function equal(actual, expected, name) { assert.deepEqual(actual, expected, name); checks++; console.log('PASS ' + name); }
 
+// A pooled keep-alive socket can be closed by the local dev server while the suite waits on
+// `wrangler d1 execute` (about 1.7 s per call). The request never reached the Worker then, so it is
+// sent once more on a new connection.
+async function send(url, init) {
+    try { return await fetch(url, init()); }
+    catch (error) {
+        if (error?.cause?.code !== 'UND_ERR_SOCKET') throw error;
+        return fetch(url, init());
+    }
+}
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data, raw) => {
-        const response = await fetch(base + '/api/' + path, {
+        const response = await send(base + '/api/' + path, () => ({
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(raw ? { 'Content-Type': raw.type } : data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: raw ? raw.bytes : data === undefined ? undefined : JSON.stringify(data),
-        });
+        }));
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         const text = await response.text();
@@ -129,6 +149,49 @@ equal(readerPost.status, 201, 'A writes a post');
 equal((await writer(`chats/${pairChat}/messages`, 'POST', { body: '이 글 문의', postId: readerPost.data.id })).status, 201, 'B asks about it (card and text)');
 equal((await reader('chats/unread')).data.unread, 1, 'A: 1 unread (the card does not count)');
 await reader('posts/' + readerPost.data.id, 'DELETE');
+
+// The manager's list (WP60): unread chats first, by the member's grade (grants the manager made, so a
+// 플러스 체험 counts as 일반), then the oldest unread message; read chats follow newest first.
+const DAY = 86400000;
+const t0 = Date.now() - 1;
+const plainA = await register('qa'), eliteB = await register('qb'), readC = await register('qc');
+equal((await manager(`manage/users/${eliteB.user.id}/grades`, 'POST', { grade: 'elite', plan: 'permanent' })).status, 201, 'manager grants 엘리트');
+sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+equal((await manager('manage/trial', 'PUT', { end: Date.now() + DAY })).status, 200, 'the trial window opens for one sign-up');
+const trialT = await register('qt');
+equal((await manager('manage/trial', 'PUT', { close: true })).status, 200, 'the window closes again');
+sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");
+sql("DELETE FROM rate_limits WHERE key LIKE 'trial-ip:%'");
+equal([trialT.user.grade, trialT.user.grade_trial], ['plus', true], 'the 체험 member holds 플러스 체험');
+async function toManager(c, text) {
+    const id = (await c('chats', 'POST', { userId: managerId })).data.id;
+    equal((await c(`chats/${id}/messages`, 'POST', { body: text })).status, 201, 'to the manager: ' + text);
+    await delay(5);
+    return id;
+}
+const chatA = await toManager(plainA, '일반 회원 문의');
+const chatT = await toManager(trialT, '체험 회원 문의');
+const chatB = await toManager(eliteB, '엘리트 회원 문의');
+const chatC = await toManager(readC, '읽을 문의');
+const lastC = (await manager(`chats/${chatC}/messages`)).data.messages.at(-1).id;
+equal((await manager(`chats/${chatC}/read`, 'POST', { lastId: lastC })).status, 200, "the manager reads C's chat");
+for (const [name, list] of [['?since', (await manager('chats?since=' + t0)).data.chats], ['full', (await manager('chats')).data.chats]]) {
+    const at = id => list.findIndex(c => c.id === id);
+    check([chatA, chatT, chatB, chatC].every(id => at(id) >= 0), `${name}: the four chats are listed`);
+    check(at(chatB) < at(chatA), `${name}: an unread chat from a 엘리트 is above an older unread chat from a 일반`);
+    check(at(chatA) < at(chatT), `${name}: an unread chat from a 체험 member is not above a 일반 one that waited longer`);
+    const firstRead = list.findIndex(c => !c.unread);
+    check(at(chatT) < firstRead && at(chatC) >= firstRead, `${name}: read chats come after every unread one`);
+    const read = list.slice(firstRead);
+    check(read.every(c => !c.unread) && read.every((c, i) => i === 0 || read[i - 1].updated_at >= c.updated_at), `${name}: read chats follow by updated_at, newest first`);
+    equal([chatB, chatA, chatT].map(id => list[at(id)].priority), [3, 0, 0], `${name}: priority 엘리트 3, 일반 0, 체험 0`);
+}
+check(!('priority' in (await plainA('chats')).data.chats[0]), "a member's own list carries no priority");
+// Tidy: the manager reads the three chats.
+for (const id of [chatA, chatT, chatB]) {
+    const last = (await manager(`chats/${id}/messages`)).data.messages.at(-1).id;
+    await manager(`chats/${id}/read`, 'POST', { lastId: last });
+}
 
 for (const id of created) await manager('posts/' + id, 'DELETE');
 console.log(`\n${checks} chat checks passed`);

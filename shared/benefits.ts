@@ -1,15 +1,15 @@
 import { TEMPLATE_VARS, priceText, wonText } from './market';
 import {
-    AD_TEXT, CHAT_AUTO_TEXT, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, introShown, linkPreviewAllowed, titleTier,
-    type GradeId, type Perks,
+    AD_TEXT, CHAT_AUTO_TEXT, MATCH_TEXT, PERKS, REPORT_TEXT, SITE_RULES, STATS_GUIDE, STATS_TEXT, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, introShown,
+    linkPreviewAllowed, matchGuideText, priorityCell, titleTier, type GradeId, type Perks,
 } from './membership';
 import { styleRank } from './richtext';
 
 // 등급 혜택 표시 (WP61). Every row of the Guide table, the counts and '일반 대비' lines on the grade cards and the
 // apply modal's lines come from PERKS, SITE_RULES and GRADES only, so no screen can drift from what the Worker
-// enforces and every word stays true (no hand-typed numbers). Rows of features other packages ship read their
-// PERKS field when it is there (자동 매칭: matchPosts and matchChats; 판매 통계: stats; 대표 글: profilePins) and
-// are left out while it is not. Rows are split into specific items, so '혜택 N가지' counts honestly.
+// enforces and every word stays true (no hand-typed numbers). 자동 매칭 (matchPosts, matchChats: WP58), 판매 통계
+// (stats) and 대표 글 (profilePins: WP63) and the order rows (WP60) use the helpers of the packages that ship them.
+// Rows are split into specific items, so '혜택 N가지' counts honestly.
 export type BenefitCell = string | string[];
 export type BenefitRow = { label: string; cell: (g: GradeId) => BenefitCell; price?: boolean };
 // The table's columns; 관리자 has every 엘리트 benefit, so its column would repeat 엘리트.
@@ -19,20 +19,16 @@ export type PaidGrade = typeof PAID_GRADES[number];
 export const isPaidGrade = (g: unknown): g is PaidGrade => typeof g === 'string' && (PAID_GRADES as readonly string[]).includes(g);
 
 const rank = (g: GradeId) => gradeInfo(g).rank;
-// A PERKS field another package adds (undefined until it ships).
-const later = <T>(g: GradeId, key: string) => (PERKS[g] as unknown as Record<string, T | undefined>)[key];
-const shipped = (key: string) => TABLE_GRADES.some(g => later(g, key) !== undefined);
 // 6개월 plans: '월 환산 1만원' (the price divided by the months, rounded down to 100원).
 export const monthly = (price: number, months: number) => priceText(Math.floor(price / months / 100) * 100);
 // The tier table's daily formula: the 3 new posts on top, then the full wallet and a day of refills.
 export const dailyTops = (k: Perks) => SITE_RULES.freshPerDay + k.bumpMax + Math.floor(1440 / k.bumpRefillMinutes);
-const STATS_CELL: Record<string, string> = { basic: '내 글 줄 수치', trend: '+ 글별 통계 창', full: '+ 시간대별 조회 · 시세 · 주간 요약' };
 // The grade chips and avatar rings in the grade metals (WP66).
 const NAME_STYLE: Record<string, string> = { normal: '-', plus: '동색 테두리', premium: '은색 바탕', elite: '금색 바탕' };
 const RING_STYLE: Record<string, string> = { normal: '회색', plus: '동색', premium: '은색', elite: '금색 (반짝임)' };
 const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
 
-const ROWS: (BenefitRow & { needs?: string })[] = [
+export const BENEFIT_ROWS: BenefitRow[] = [
     { label: '가격', price: true, cell: g => gradeInfo(g).plans.length ? gradeInfo(g).plans.map(p => `${p.label} ${wonText(p.price)}${p.months ? ` · 월 환산 ${monthly(p.price, p.months)}` : ''}`) : '무료' },
     { label: '끌올 보관', cell: g => `${PERKS[g].bumpMax}개` },
     { label: '끌올 충전', cell: g => `${gapText(PERKS[g].bumpRefillMinutes)}마다 1개` },
@@ -42,7 +38,8 @@ const ROWS: (BenefitRow & { needs?: string })[] = [
     { label: '자동 끌올', cell: g => { const k = PERKS[g], every = gapText(k.autoEveryMinutes); return !k.autoBumpPosts ? '-' : k.autoBumpPosts === 1 ? `글 1개 · ${every}마다 1번` : Number.isFinite(k.autoBumpPosts) ? `글 ${k.autoBumpPosts}개 중 1개씩 · ${every}마다` : `전체 중 1개씩 · ${every}마다`; } },
     { label: '자동 가격 내리기', cell: g => dropGuideText(PERKS[g]) },
     { label: '조건 알림', cell: g => filterAlertText(PERKS[g]) },
-    { label: '자동 매칭', needs: 'matchPosts', cell: g => { const n = later<number>(g, 'matchPosts') || 0, chats = later<number>(g, 'matchChats') || 0; return !n ? '-' : `${Number.isFinite(n) ? `내 글 ${n}개` : '내 글 전체'}${chats ? ` · 채팅 보내기 하루 ${chats}번` : ''}`; } },
+    // '-', '내 글 3개', '내 글 전체 · 채팅 보내기 하루 20번'.
+    { label: MATCH_TEXT.switch, cell: g => matchGuideText(PERKS[g]) },
     { label: '내 빠른 답장', cell: g => { const k = PERKS[g]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (rank(g) >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; } },
     { label: CHAT_AUTO_TEXT.first, cell: g => PERKS[g].firstReply ? 'O' : '-' },
     { label: '자리 비움 자동 응답', cell: g => PERKS[g].awayReply ? 'O' : '-' },
@@ -55,16 +52,17 @@ const ROWS: (BenefitRow & { needs?: string })[] = [
     { label: `홈 ${AD_TEXT.home}`, cell: g => rank(g) >= 3 ? 'O' : '-' },
     { label: '홈 하단 광고 카드', cell: g => rank(g) >= 3 ? 'O' : '-' },
     { label: '광고 유입 수 · 광고 고정', cell: g => PERKS[g].adSlots ? 'O' : '-' },
-    { label: '신고 처리 순서', cell: g => `${gradePriority(g)}순위${g === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}` },
-    { label: '대표 글', needs: 'profilePins', cell: g => { const n = later<number>(g, 'profilePins') || 0; return n ? `${n}개` : '-'; } },
-    { label: '판매 통계', needs: 'stats', cell: g => STATS_CELL[later<string>(g, 'stats') || ''] || '-' },
+    // 신고 처리 순서 and the manager's unread chats (WP60): the same order by grade, the 체험 as 일반.
+    { label: REPORT_TEXT.order, cell: g => priorityCell(g) },
+    { label: REPORT_TEXT.chatOrder, cell: g => priorityCell(g) },
+    { label: '대표 글', cell: g => PERKS[g].profilePins ? `${PERKS[g].profilePins}개` : '-' },
+    { label: STATS_TEXT.title, cell: g => STATS_GUIDE[PERKS[g].stats] },
     { label: '중개·가측 인증 신청', cell: g => rank(g) < 1 ? '-' : g === 'plus' ? 'O (체험 제외)' : 'O' },
     { label: '중개/가측 탭 노출', cell: g => { const r = rank(g); return r >= 3 ? `골드 카드 · 최상단 + 소개 ${introShown(r)}자` : r === 2 ? `큰 프로필 + 소개 ${introShown(r)}자` : r === 1 ? '작은 프로필 · 하단' : '-'; } },
     { label: '중개·가측 광고 팝업', cell: g => rank(g) >= 3 ? 'O' : '-' },
     { label: '프로필 테두리', cell: g => RING_STYLE[g] || '-' },
     { label: '닉네임 칩', cell: g => NAME_STYLE[g] || '-' },
 ];
-export const BENEFIT_ROWS: BenefitRow[] = ROWS.filter(r => !r.needs || shipped(r.needs));
 
 const same = (a: BenefitCell, b: BenefitCell) => JSON.stringify(a) === JSON.stringify(b);
 // The benefits a paid grade adds: every row (the price aside) whose cell is not '-' and differs from 일반.

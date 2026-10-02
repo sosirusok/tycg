@@ -2,6 +2,7 @@ import { db, fail, requireUser, json, body, textField, memberColumns } from './h
 import { notifyStatement } from './notifications';
 import { buildPostFilter, latestSeason, needsSeason, qClause, searchWord, tierSearch } from './posts';
 import { publicMember } from './community';
+import { matchAlertStatement, matchCountStatement, reachable } from './match';
 import { KIND_NAMES, LATEST_SEASON, TRADE_KINDS, categoriesForKind, categoryName, skinsForWord, type User } from '../shared/market';
 import { ALERT_TEXT, MANAGER_PERKS, SITE_RULES, perksOf, perksOfRank, type Perks } from '../shared/membership';
 
@@ -183,12 +184,8 @@ export async function followsList(req: Request) {
 
 // ---- Matching SQL shared by the cron and the 알림함 counts -------------------------------------------
 
-// A post the subscriber may hear about: visible, not their own, no block either way, its author not
-// under 이용 정지, and the 대리(진행) rule. Aliases: p (post), u (its author); bind nothing but `owner`
-// (an SQL expression) twice is inlined.
-const reachable = (owner: string, now: string) => `p.hidden=0 AND p.author_id!=${owner} AND (u.suspended_until IS NULL OR u.suspended_until<=${now})
-    AND (p.kind!='proxy_offer' OR u.role='manager' OR EXISTS(SELECT 1 FROM user_badges bd WHERE bd.user_id=p.author_id AND bd.badge='proxy'))
-    AND NOT EXISTS(SELECT 1 FROM blocks bk WHERE (bk.user_id=${owner} AND bk.target_id=p.author_id) OR (bk.user_id=p.author_id AND bk.target_id=${owner}))`;
+// reachable (worker/match.ts): a post the subscriber may hear about (visible, not their own, no block
+// either way, its author not under 이용 정지, the 대리(진행) rule); aliases p and u.
 // A 키워드 or 게시판 알림 s (alias s) matches post p: its tab (or any tab), its category (or any) and the
 // board's search SQL with the stored word, skins and ladder.
 const keywordMatch = () => `(s.alert_kind=p.kind OR s.alert_kind='') AND (s.alert_category='' OR s.alert_category=p.category)
@@ -425,6 +422,10 @@ export async function alertJob(now: number) {
             GROUP BY f.user_id,p.author_id`, [ids, now], now));
     }
     if (matches.length) writes.push(notifyStatement('condition', "SELECT json_extract(value,'$.u') AS user_id,json_extract(value,'$.r') AS ref,json_extract(value,'$.p') AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(matches)], now));
+    // 자동 매칭 (WP58): the window's new 판매·구매 posts against the own posts of members with '자동 매칭' on,
+    // once per window and, like 조건 알림, only in a full run (one set-based statement, worker/match.ts).
+    const sides = fresh().filter(p => p.kind === 'sell' || p.kind === 'buy');
+    if (!pending && mode === 'full' && sides.length) writes.push(matchAlertStatement(JSON.stringify(sides.map(p => p.id)), now));
     const next: Cursor = partial ? { t: from.t, i: from.i, et: end.t, ei: end.i, b: lastBell } : { t: end.t, i: end.i };
     writes.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(CURSOR_KEY, JSON.stringify(next), now));
     const r = await db().batch(writes);
@@ -453,9 +454,9 @@ const COUNT_SCAN = 600;
 // 새 글 알림 rows still unread show how many posts match now, from the row's first post on ('‘유루미’ 새
 // 글 3개'), and carry the board query to open (최신순). At most 20 rows, one count statement each.
 export async function alertCounts(rows: AlertRow[], u: User) {
-    const live = rows.filter(r => !r.read && r.post_id !== null && ['keyword', 'board', 'follow', 'condition'].includes(r.type));
+    const live = rows.filter(r => !r.read && r.post_id !== null && ['keyword', 'board', 'follow', 'condition', 'match'].includes(r.type));
     if (!live.length) return new Map<number, { count: number; query: string | null }>();
-    const searchIds = [...new Set(live.filter(r => r.type !== 'follow').map(r => r.ref))];
+    const searchIds = [...new Set(live.filter(r => r.type !== 'follow' && r.type !== 'match').map(r => r.ref))];
     const saved = searchIds.length ? (await db().prepare('SELECT id,query FROM saved_searches WHERE user_id=? AND id IN (SELECT value FROM json_each(?))').bind(u.id, JSON.stringify(searchIds)).all<{ id: string; query: string }>()).results : [];
     const queries = new Map(saved.map(s => [s.id, s.query]));
     const now = Date.now();
@@ -465,6 +466,9 @@ export async function alertCounts(rows: AlertRow[], u: User) {
         const tail = ` AND p.id>=? AND p.id<${Number(r.post_id) + COUNT_SCAN} AND p.relist=0 AND p.status!='closed' LIMIT ${COUNT_CAP})`;
         if (r.type === 'follow') {
             statements.push(db().prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM posts p JOIN users u ON u.id=p.author_id AND u.follow_allowed=1 WHERE p.author_id=? AND ${reachable('?', '?')}${tail}`).bind(r.ref, u.id, now, u.id, u.id, r.post_id));
+        } else if (r.type === 'match') {
+            // 자동 매칭 (WP58): the posts of the other side that match the own post (ref) from the row's first one on.
+            statements.push(matchCountStatement(r.ref, u.id, Number(r.post_id), now, COUNT_SCAN, COUNT_CAP));
         } else if (r.type === 'condition') {
             const q = queries.get(r.ref);
             if (q === undefined) continue;
@@ -482,7 +486,7 @@ export async function alertCounts(rows: AlertRow[], u: User) {
     const out = new Map<number, { count: number; query: string | null }>();
     const res = statements.length ? await db().batch(statements) : [];
     order.forEach((r, i) => {
-        const query = r.type === 'follow' ? null : queries.get(r.ref) ?? null;
+        const query = r.type === 'follow' || r.type === 'match' ? null : queries.get(r.ref) ?? null;
         out.set(r.id, { count: Number((res[i].results[0] as { n?: number })?.n) || 0, query });
     });
     return out;

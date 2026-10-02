@@ -1,10 +1,11 @@
+import { MARKET_SQL, marketOf, marketSince, weeklyDone, weeklyStatements, type MarketTrade } from './stats';
 import { db, fail, requireUser, requireActive, json, body, isManager, isSuspended } from './http';
 import { notifyStatement } from './notifications';
 import { amount, walletJson } from './posts';
 import { adTrimManyStatement } from './ads';
 import { assertNoBlockedLinks } from './unfurl';
 import { TRADE_KINDS, categoriesForKind, priceText, type User } from '../shared/market';
-import { AUTO_REPLY_MAX, AUTO_RESERVE, AUTO_TEXT, AWAY_FROM, AWAY_NOW_MS, AWAY_TO, CHAT_AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, TEMPLATE_MAX, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
+import { AUTO_REPLY_MAX, AUTO_RESERVE, AUTO_TEXT, AWAY_FROM, AWAY_NOW_MS, AWAY_TO, CHAT_AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, MATCH_TEXT, TEMPLATE_MAX, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
 // 자동 끌올 (WP52). Two cron ticks share the work:
 // - tick A (every 10 minutes, ':00') moves at most one post per due member, only 09:00-02:00 KST;
@@ -323,11 +324,14 @@ function countStatement(list: string, now: number, day: string, delayed: number)
 // Tick B: '‘제목’ 글 끌올 가능' for the posts whose reminder time came, once the post can really be bumped
 // (its gap, 새 글 우선 and 1 끌올 in the wallet). Not yet: the reminder moves to the new time. A post that
 // was completed, hidden or deleted drops its reminder. Two calls, at most 100 rows.
+// The 엘리트 주간 요약 (WP63, stats.ts) rides the first call while the week is not known to be done.
 export async function remindJob(now: number) {
-    const rows = (await db().prepare(`SELECT pa.post_id,p.title,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
+    const weekly = weeklyStatements(now);
+    const [read, ...weeklyR] = await db().batch([db().prepare(`SELECT pa.post_id,p.title,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
         FROM post_auto pa INDEXED BY post_auto_remind JOIN posts p ON p.id=pa.post_id JOIN users u ON u.id=pa.user_id
-        WHERE pa.bump_remind>0 AND pa.bump_remind<=? ORDER BY pa.bump_remind LIMIT ${REMINDS_PER_TICK}`).bind(now, now).all<any>()).results;
-    if (!rows.length) return { reminded: 0 };
+        WHERE pa.bump_remind>0 AND pa.bump_remind<=? ORDER BY pa.bump_remind LIMIT ${REMINDS_PER_TICK}`).bind(now, now), ...weekly]);
+    const rows = read.results as any[], weeklySent = weeklyDone(weeklyR, now);
+    if (!rows.length) return { reminded: 0, ...weekly.length ? { weekly: weeklySent } : {} };
     const send: { u: string; p: number; t: string }[] = [], next: { p: number; t: number }[] = [];
     for (const r of rows) {
         if (r.status !== 'open' || r.hidden) { next.push({ p: r.post_id, t: 0 }); continue; }
@@ -340,7 +344,7 @@ export async function remindJob(now: number) {
         ...send.length ? [notifyStatement('bump_ready', "SELECT json_extract(value,'$.u') AS user_id,CAST(json_extract(value,'$.p') AS TEXT) AS ref,json_extract(value,'$.p') AS post_id,NULL AS actor_id,json_extract(value,'$.t') AS text FROM json_each(?)", [JSON.stringify(send)], now)] : [],
         db().prepare(`UPDATE post_auto SET bump_remind=j.t FROM (SELECT json_extract(value,'$.p') AS p,json_extract(value,'$.t') AS t FROM json_each(?)) j WHERE post_auto.post_id=j.p`).bind(JSON.stringify(next)),
     ]);
-    return { reminded: send.length };
+    return { reminded: send.length, ...weekly.length ? { weekly: weeklySent } : {} };
 }
 
 // When a post can be bumped: the latest of its gap, 새 글 우선 (bumped_at ahead of now) and, with an
@@ -517,13 +521,14 @@ const slotsOf = (perks: Perks) => perks.autoBumpPosts;
 // A grant or the trial: the member's automation row (on, due now, 새 글 자동 포함 for 엘리트 and above)
 // and their most recently bumped open posts up to the grade's count. Written only when `guard` holds
 // (the grant row was written at this time). force: a manager grant turns 자동 끌올 on again.
+// 자동 매칭 (WP58) is on from a 프리미엄 or higher grant too (match_on), and a manager grant turns it on again.
 export function enrolStatements(userId: string, grade: GradeId, now: number, guard: string, guardArgs: unknown[], force: boolean) {
-    const perks = PERKS[grade], slots = slotsOf(perks), elite = gradeInfo(grade).rank >= 3 ? 1 : 0;
+    const perks = PERKS[grade], slots = slotsOf(perks), elite = gradeInfo(grade).rank >= 3 ? 1 : 0, match = perks.matchPosts ? 1 : 0;
     const limit = Number.isFinite(slots) ? `MAX(0,${slots}-(SELECT COUNT(*) FROM post_auto pa JOIN posts q ON q.id=pa.post_id WHERE pa.user_id=? AND pa.bump=1 AND q.status!='closed'))` : '-1';
     return [
-        db().prepare(`INSERT INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) SELECT ?,1,?,?,? WHERE ${guard}
-            ON CONFLICT(user_id) DO UPDATE SET ${force ? 'bump_on=1,' : ''}bump_new=MAX(automation.bump_new,excluded.bump_new),bump_next_at=MIN(COALESCE(automation.bump_next_at,excluded.bump_next_at),excluded.bump_next_at),updated_at=excluded.updated_at`)
-            .bind(userId, elite, now, now, ...guardArgs),
+        db().prepare(`INSERT INTO automation(user_id,bump_on,bump_new,bump_next_at,match_on,updated_at) SELECT ?,1,?,?,?,? WHERE ${guard}
+            ON CONFLICT(user_id) DO UPDATE SET ${force ? 'bump_on=1,' : ''}${force && match ? 'match_on=1,' : ''}bump_new=MAX(automation.bump_new,excluded.bump_new),bump_next_at=MIN(COALESCE(automation.bump_next_at,excluded.bump_next_at),excluded.bump_next_at),updated_at=excluded.updated_at`)
+            .bind(userId, elite, now, match, now, ...guardArgs),
         db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT p.id,p.author_id,1 FROM posts p WHERE p.author_id=? AND p.status!='closed' AND p.hidden=0 AND ${guard}
             AND NOT EXISTS(SELECT 1 FROM post_auto x WHERE x.post_id=p.id AND x.bump=1) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${limit}
             ON CONFLICT(post_id) DO UPDATE SET bump=1`).bind(userId, ...guardArgs, ...Number.isFinite(slots) ? [userId] : []),
@@ -540,7 +545,7 @@ export function newPostEnrolStatements(u: User, newPost: string, newArgs: unknow
         ? `(SELECT COUNT(*) FROM post_auto pa JOIN posts q ON q.id=pa.post_id WHERE pa.user_id=? AND pa.bump=1 AND q.status!='closed' AND q.id!=n.id)<${slots}`
         : 'EXISTS(SELECT 1 FROM automation WHERE user_id=? AND bump_new=1)';
     return [
-        ...manager ? [] : [db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,1,?,?,?)').bind(u.id, rank >= 3 ? 1 : 0, now, now)],
+        ...manager ? [] : [rowStatement(u, now)],
         db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT n.id,?,1 FROM ${newPost} n WHERE n.id IS NOT NULL AND EXISTS(SELECT 1 FROM posts WHERE id=n.id AND hidden=0) AND ${room}
             ON CONFLICT(post_id) DO UPDATE SET bump=1`).bind(u.id, ...newArgs, u.id),
     ];
@@ -550,25 +555,35 @@ export function newPostEnrolStatements(u: User, newPost: string, newArgs: unknow
 
 const autoAllowed = (u: User) => isManager(u) || gradeInfo(u.grade).rank >= 1;
 
+// The member's automation row, made on first use when a grade exists without one (a grant the previous
+// Worker wrote): 자동 끌올 on (off for the manager), 새 글 자동 포함 for 엘리트 and up, and 자동 매칭 on for
+// 프리미엄 and up (WP58; off for the manager, like 자동 끌올).
+function rowStatement(u: User, now: number) {
+    const manager = isManager(u);
+    return db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,match_on,updated_at) VALUES(?,?,?,?,?,?)')
+        .bind(u.id, manager ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, !manager && perksOf(u).matchPosts ? 1 : 0, now);
+}
+
 // GET me/automation: the 자동화 tab. The manager's row is made on first use, off; a member with a grade
 // but no row (a grant the previous Worker wrote) gets one, on.
 async function automationState(u: User) {
     const now = Date.now(), manager = isManager(u), perks = perksOf(u);
     const r = await db().batch([
-        db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, manager ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now),
-        db().prepare(`SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at,drop_step,drop_pct,drop_every_h,decline_on,${CHAT_COLUMNS} FROM automation WHERE user_id=?`).bind(u.id),
+        rowStatement(u, now),
+        db().prepare(`SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at,drop_step,drop_pct,drop_every_h,decline_on,match_on,${CHAT_COLUMNS} FROM automation WHERE user_id=?`).bind(u.id),
         db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
         db().prepare(`SELECT p.id,p.title,p.kind,p.category,p.thumb,CASE WHEN json_valid(p.images) THEN json_extract(p.images,'$[0]') END AS image,p.bumped_at,p.hidden,COALESCE(pa.bump,0) AS auto,
                 COALESCE(p.touched_at,p.updated_at)<=? AS stale,p.price,p.price_mode,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS current_offer,
-                COALESCE(pa.drop_on,0) AS drop_on,pa.drop_floor,pa.drop_next_at,COALESCE(pa.drop_count,0) AS drop_count
+                COALESCE(pa.drop_on,0) AS drop_on,pa.drop_floor,pa.drop_next_at,COALESCE(pa.drop_count,0) AS drop_count,COALESCE(pa.match,0) AS match_pick
             FROM posts p LEFT JOIN post_auto pa ON pa.post_id=p.id WHERE p.author_id=? AND p.status!='closed' ORDER BY COALESCE(pa.bump,0) DESC,p.bumped_at DESC LIMIT 100`).bind(now - STALE_MS, u.id),
         db().prepare(`SELECT ${PAYING('?')} AS paying`).bind(u.id, now),
     ]);
-    const a = r[1].results[0] as { bump_on: number; bump_new: number; bump_next_at: number | null; pause_reason: string; paused_at: number | null; drop_step: number | null; drop_pct: number | null; drop_every_h: number | null; decline_on: number };
+    const a = r[1].results[0] as { bump_on: number; bump_new: number; bump_next_at: number | null; pause_reason: string; paused_at: number | null; drop_step: number | null; drop_pct: number | null; drop_every_h: number | null; decline_on: number; match_on: number };
     const { step, pct } = dropStepOf(a, perks);
+    const matched = new Set(matchedPosts(r[3].results as any[], perks));
     const posts = (r[3].results as any[]).map(p => {
-        const { drop_on, drop_floor, drop_next_at, drop_count, ...rest } = p;
-        return { ...rest, auto: !!p.auto, stale: !!p.stale, hidden: !!p.hidden, drop: dropJson(p, step, pct) };
+        const { drop_on, drop_floor, drop_next_at, drop_count, match_pick, ...rest } = p;
+        return { ...rest, auto: !!p.auto, stale: !!p.stale, hidden: !!p.hidden, drop: dropJson(p, step, pct), ...(p.kind === 'sell' || p.kind === 'buy') && !p.hidden ? { match: matched.has(p.id) } : {} };
     });
     const listed = posts.filter(p => p.auto && !p.hidden);
     // The tick that will look: the first ':00, :10, …' at or after the stored time, inside the window.
@@ -588,7 +603,20 @@ async function automationState(u: User) {
         },
         // 채팅 자동화 (WP57): the '채팅' card.
         chat: chatJson(r[1].results[0] as ChatRow, perks, now, manager),
+        // 자동 매칭 (WP58), on the '알림' card: the switch, how many posts (null: every one) and '채팅 보내기'.
+        match: { on: !!perks.matchPosts && !!a.match_on, slots: Number.isFinite(perks.matchPosts) ? perks.matchPosts : null, chats: perks.matchChats, count: matched.size },
     };
+}
+
+// The own posts 자동 매칭 looks at now (worker/match.ts decides the same in SQL): every open 판매·구매 post
+// for 엘리트 and up; for 프리미엄 the picked ones (match_pick 1, a post switched off is -1), else the most
+// recently bumped. rows: the 자동화 tab's posts (any order).
+function matchedPosts(rows: { id: number; kind: string; hidden: number; bumped_at: number; match_pick: number }[], perks: Perks) {
+    if (!perks.matchPosts) return [];
+    const open = rows.filter(p => !p.hidden && (p.kind === 'sell' || p.kind === 'buy')).sort((x, y) => y.bumped_at - x.bumped_at || y.id - x.id);
+    if (!Number.isFinite(perks.matchPosts)) return open.map(p => p.id);
+    const chosen = open.some(p => p.match_pick !== 0);
+    return (chosen ? open.filter(p => p.match_pick === 1) : open).slice(0, perks.matchPosts).map(p => p.id);
 }
 
 // 채팅 자동화 (WP57): own quick replies, '첫 문의 자동 안내' and '자리 비움', all in the member's automation
@@ -684,9 +712,16 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
     const u = await requireUser(req), method = req.method, now = Date.now();
     if (p[2] === 'chat' && !p[3] && method === 'GET') return json(await chatState(u));
     if (p[2] === 'recommended' && !p[3] && method === 'POST') return recommended(u, now);
-    // The chat fields (WP57) are checked first, so a member without a grade hears which grade they need.
+    // The chat fields (WP57) and '자동 매칭' (WP58) are checked first, so a member without a grade hears
+    // which grade they need.
     const put = !p[2] && method === 'PUT' ? await body(req) : null;
     const chat = put ? chatSets(put, perksOf(u), now) : null;
+    if (put && put.matchOn !== undefined) {
+        if (typeof put.matchOn !== 'boolean') fail(400, '설정을 확인해 주세요.');
+        if (!perksOf(u).matchPosts) fail(403, MATCH_TEXT.off);
+        chat!.sets.push('match_on=?');
+        chat!.args.push(put.matchOn ? 1 : 0);
+    }
     // The two automatic answers go out by themselves, so a blocked host is refused on save (WP48).
     if (put) await assertNoBlockedLinks(req, typeof put.firstText === 'string' ? put.firstText : null, typeof put.awayText === 'string' ? put.awayText : null);
     if (!autoAllowed(u)) fail(403, AUTO_TEXT.off);
@@ -722,7 +757,7 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
         // Only chat settings (the chat page's '+' and '지금 자리 비움', the '채팅' card): the row and the chat part.
         if (Object.keys(b).every(k => CHAT_KEYS.includes(k))) {
             await db().batch([
-                db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, isManager(u) ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now),
+                rowStatement(u, now),
                 db().prepare(`UPDATE automation SET ${sets.join(',')},updated_at=? WHERE user_id=?`).bind(...args, now, u.id),
             ]);
             return json({ chat: await chatState(u) });
@@ -737,13 +772,28 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
         const perks = perksOf(u);
         if (Number.isFinite(perks.autoPricePosts)) fail(403, '판매 글 전체는 엘리트부터 가능합니다.');
         requireActive(u);
-        const a = await db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id).first<{ drop_every_h: number | null }>();
-        const every = dropEvery(a?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every), floor = '(p.price*4/5)/10000*10000';
+        // The 최저가: 90% of the post's 시세 (WP63, the median of comparable confirmed trades) rounded down to
+        // 만원 where there is one, else 80% of the 즉거가 rounded down to 만원.
+        const mine = "p.author_id=? AND p.kind='sell' AND p.status='open' AND p.hidden=0 AND p.price IS NOT NULL AND p.price_mode!='offer'";
+        const [a, own, market] = await db().batch([
+            db().prepare('SELECT drop_every_h FROM automation WHERE user_id=?').bind(u.id),
+            db().prepare(`SELECT p.id,p.category,p.price,(SELECT json_group_array(json_object('tier',s.tier,'season',s.season)) FROM post_seasons s WHERE s.post_id=p.id) AS tags FROM posts p WHERE ${mine}`).bind(u.id),
+            db().prepare(`${MARKET_SQL} AND t.category IN (SELECT DISTINCT p.category FROM posts p WHERE ${mine})`).bind(marketSince(now), u.id),
+        ]);
+        const trades = market.results as (MarketTrade & { category: string })[];
+        // A 시세 floor at or above the 즉거가 (or under 1,000원) falls back to the 80% one.
+        const floors = (own.results as { id: number; category: string; price: number; tags: string }[]).flatMap(p => {
+            const m = marketOf(trades.filter(t => t.category === p.category), JSON.parse(p.tags || '[]'));
+            const f = m ? Math.floor(m.median * 0.9 / 10000) * 10000 : 0;
+            return f >= 1000 && f < p.price ? [{ p: p.id, f }] : [];
+        });
+        const every = dropEvery((a.results[0] as { drop_every_h: number | null } | undefined)?.drop_every_h, perks), next = dropSlotAt(now + every * HOUR, every);
         const r = await db().prepare(`INSERT INTO post_auto(post_id,user_id,drop_on,drop_floor,drop_next_at,drop_count,drop_set_at,drop_checked_at)
-            SELECT p.id,p.author_id,1,${floor},?,0,?,? FROM posts p WHERE p.author_id=? AND p.kind='sell' AND p.status='open' AND p.hidden=0 AND p.price IS NOT NULL AND p.price_mode!='offer'
-                AND ${floor}>=1000 AND ${floor}<p.price
+            SELECT x.id,x.author_id,1,x.floor,?,0,?,? FROM (SELECT p.id,p.author_id,p.price,COALESCE(m.f,(p.price*4/5)/10000*10000) AS floor FROM posts p
+                LEFT JOIN (SELECT json_extract(value,'$.p') AS pid,json_extract(value,'$.f') AS f FROM json_each(?)) m ON m.pid=p.id WHERE ${mine}) x
+            WHERE x.floor>=1000 AND x.floor<x.price
             ON CONFLICT(post_id) DO UPDATE SET drop_on=1,drop_floor=excluded.drop_floor,drop_next_at=excluded.drop_next_at,drop_count=0,drop_set_at=excluded.drop_set_at,drop_checked_at=excluded.drop_checked_at
-            WHERE post_auto.drop_on=0`).bind(next, now, now, u.id).run();
+            WHERE post_auto.drop_on=0`).bind(next, now, now, JSON.stringify(floors), u.id).run();
         return json({ ok: true, count: r.meta.changes, ...await automationState(u) });
     }
     if (p[2] === 'continue' && !p[3] && method === 'POST') {
@@ -762,6 +812,7 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
 export async function postAutoHandler(req: Request, u: User, post: any) {
     const b = await body(req), now = Date.now(), perks = perksOf(u);
     if (b.drop !== undefined) return dropSwitch(u, post, b.drop, now);
+    if (b.match !== undefined) return matchSwitch(u, post, b.match, now);
     if (typeof b.remind === 'boolean') {
         let at = 0;
         if (b.remind) {
@@ -782,7 +833,7 @@ export async function postAutoHandler(req: Request, u: User, post: any) {
     if (!autoAllowed(u)) fail(403, AUTO_TEXT.off);
     if (post.status === 'closed' || post.hidden) fail(409, '거래중인 글만 자동 끌올할 수 있습니다.');
     const slots = slotsOf(perks);
-    const row = db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, isManager(u) ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now);
+    const row = rowStatement(u, now);
     // A member resting ('쉬는 중') is looked at on the next tick.
     const wake = db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason IN ('idle','wait')").bind(now, u.id);
     const upsert = (guard: string, args: unknown[]) => db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT ?,?,1 WHERE ${guard} ON CONFLICT(post_id) DO UPDATE SET bump=1 WHERE ${guard}`)
@@ -856,4 +907,48 @@ async function dropSwitch(u: User, post: any, d: any, now: number) {
     ]);
     if (!(r[1].results[0] as any)?.drop_on) fail(409, DROP_TEXT.full(slots));
     return json({ drop: (await postAutoOf(post, u)).drop });
+}
+
+// PUT posts/:id/auto {match} (WP58): a 프리미엄 member picks the posts 자동 매칭 looks at ('n/3' chips).
+// Until the first pick the 3 most recently bumped open 판매·구매 posts are used; the first change makes
+// those picks first, so switching one of them off keeps the other two (a post switched off is -1).
+// 엘리트 and up match every open post (nothing to pick).
+async function matchSwitch(u: User, post: any, on: unknown, now: number) {
+    if (typeof on !== 'boolean') fail(400, '설정을 확인해 주세요.');
+    const perks = perksOf(u), slots = perks.matchPosts;
+    if (!slots) fail(403, MATCH_TEXT.off);
+    if (post.kind !== 'sell' && post.kind !== 'buy') fail(400, MATCH_TEXT.kinds);
+    if (!Number.isFinite(slots)) return json({ match: true });
+    if (on && (post.status === 'closed' || post.hidden)) fail(409, MATCH_TEXT.open);
+    const open = "q.author_id=? AND q.status='open' AND q.hidden=0 AND q.kind IN ('sell','buy')";
+    const picks = (sign: string) => `(SELECT COUNT(*) FROM posts q INDEXED BY posts_author_status JOIN post_auto x ON x.post_id=q.id WHERE ${open} AND x.match${sign})`;
+    const room = `${picks('=1 AND q.id!=?')}<?`, roomArgs = [u.id, post.id, slots];
+    const r = await db().batch([
+        db().prepare(`INSERT INTO post_auto(post_id,user_id,match) SELECT q.id,q.author_id,1 FROM posts q INDEXED BY posts_author_status WHERE ${open} AND ${picks('!=0')}=0
+            ORDER BY q.bumped_at DESC,q.id DESC LIMIT ? ON CONFLICT(post_id) DO UPDATE SET match=1`).bind(u.id, u.id, slots),
+        on ? db().prepare(`INSERT INTO post_auto(post_id,user_id,match) SELECT ?,?,1 WHERE ${room} ON CONFLICT(post_id) DO UPDATE SET match=1 WHERE ${room}`).bind(post.id, u.id, ...roomArgs, ...roomArgs)
+            : db().prepare('INSERT INTO post_auto(post_id,user_id,match) VALUES(?,?,-1) ON CONFLICT(post_id) DO UPDATE SET match=-1').bind(post.id, u.id),
+        db().prepare('SELECT match FROM post_auto WHERE post_id=?').bind(post.id),
+    ]);
+    const stored = Number((r[2].results[0] as { match?: number } | undefined)?.match) || 0;
+    if (on && stored !== 1) fail(409, MATCH_TEXT.full(slots));
+    return json({ match: stored === 1 });
+}
+
+// POST posts/bulk {action:'auto', ids, on} (WP58, the 선택 bar's [자동 끌올]): 엘리트 and up (every post can
+// be listed) put the chosen open posts in their 자동 끌올 list, or take them out. Returns the ids changed.
+export async function bulkAuto(u: User, ids: string, on: boolean, now: number) {
+    if (!autoAllowed(u)) fail(403, AUTO_TEXT.off);
+    const slots = slotsOf(perksOf(u));
+    if (Number.isFinite(slots)) fail(403, AUTO_TEXT.full(slots));
+    const mine = "SELECT id FROM posts WHERE id IN (SELECT value FROM json_each(?)) AND author_id=? AND status!='closed' AND hidden=0";
+    const r = await db().batch([
+        rowStatement(u, now),
+        on ? db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT id,?,1 FROM (${mine}) WHERE 1 ON CONFLICT(post_id) DO UPDATE SET bump=1`).bind(u.id, ids, u.id)
+            : db().prepare(`UPDATE post_auto SET bump=0 WHERE post_id IN (${mine}) AND bump=1`).bind(ids, u.id),
+        // A member resting ('쉬는 중') is looked at on the next tick.
+        db().prepare("UPDATE automation SET bump_next_at=? WHERE user_id=? AND pause_reason IN ('idle','wait')").bind(now, u.id),
+        db().prepare(`${mine}`).bind(ids, u.id),
+    ]);
+    return (r[3].results as { id: number }[]).map(x => x.id);
 }

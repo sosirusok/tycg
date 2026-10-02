@@ -3,7 +3,7 @@ import { Bell, BellRing, ChevronRight, Flag, Heart, MessageCircle, MoreHorizonta
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -18,7 +18,7 @@ import { Lightbox } from '../components/Lightbox';
 import { CompleteSheet } from '../components/CompleteSheet';
 import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
-import { AD_TEXT, ALERT_TEXT, DROP_TEXT, PROVIDER_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
+import { AD_TEXT, ALERT_TEXT, DROP_TEXT, MATCH_TEXT, PROVIDER_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
 
@@ -211,6 +211,11 @@ export function Detail({ id }: { id: string }) {
         : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
     // 자동 끌올 (WP52): 플러스 and up (the 체험 too) and the manager, on an open post.
     const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
+    // WP58: '다시 올리기' on a completed post and '복사해서 새 글' on any own post open the editor with this post
+    // (/write?from=); an open 판매 or 구매 post links to the other side's board ('맞는 구매 글').
+    const canCopy = mine && !suspended && !lostProxy;
+    const copyHref = '/write?from=' + post.id;
+    const match = mine && openNow ? matchQuery(post) : null;
 
     async function startChat() {
         requireLogin(async () => {
@@ -325,9 +330,11 @@ export function Detail({ id }: { id: string }) {
                         {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
                         {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     </>}
-                    {/* Wide screens have no 더보기 menu, so '가측 받기' is a quiet text button here. */}
+                    {post.status === 'closed' && canCopy && <Link to={copyHref} className="btn btn-line btn-block">다시 올리기</Link>}
+                    {/* Wide screens have no 더보기 menu, so '가측 받기' and 복사해서 새 글 are quiet text buttons here. */}
                     <div className="owner-more">
                         {canAppraise && <button type="button" className="btn btn-text owner-service" onClick={findAppraiser}>{PROVIDER_TEXT.appraise}</button>}
+                        {canCopy && <Link to={copyHref} className="btn btn-text owner-service">복사해서 새 글</Link>}
                         <button type="button" className="btn btn-text owner-delete" onClick={() => setConfirmDelete(true)}>삭제</button>
                     </div>
                 </div> : !withdrawnPost && <div className={'side-actions' + (canOffer ? ' with-offer' : '')}>
@@ -335,6 +342,7 @@ export function Detail({ id }: { id: string }) {
                     {canOffer && <button type="button" className="btn btn-line btn-lg" onClick={() => requireLogin(() => setOffer(true))}>제시하기</button>}
                     <button type="button" className={'btn btn-line btn-lg side-fav' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={favLabel} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /><span>찜 {favs}</span></button>
                 </div>}
+                {match && <Link to={'/trade?' + match.query} className="owner-match">{MATCH_TEXT.link(post.kind)}<ChevronRight size={16} aria-hidden="true" /></Link>}
                 {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
                 {autoAllowed && openNow && <div className="promo-row">
                     <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
@@ -354,12 +362,14 @@ export function Detail({ id }: { id: string }) {
             {recordable ? <button type="button" className="btn btn-primary status-btn" onClick={() => setTradeSheet(true)}>거래 기록 요청</button>
                 : <StatusSeg post={post} onComplete={() => setTradeSheet(true)} />}
             {post.status !== 'closed' && bumpButton('owner-bar-bump')}
+            {post.status === 'closed' && canCopy && <Link to={copyHref} className="btn btn-line owner-bar-relist">다시 올리기</Link>}
             <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="더보기"><MoreHorizontal size={22} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
                         {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
                         {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
+                        {canCopy && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate(copyHref)}>복사해서 새 글</DropdownMenu.Item>}
                         {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={findAppraiser}>{PROVIDER_TEXT.appraise}</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>
                     </DropdownMenu.Content>

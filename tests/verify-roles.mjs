@@ -116,6 +116,8 @@ const calls = [
     ['POST', 'manage/notice', notice],
     ['POST', 'manage/visibility', { postId: post.data.id, hidden: true, reason: '허위 매물' }],
     ['POST', 'manage/report', { id: report.id, status: 'resolved' }],
+    // 기각 (WP60) is the manager's decision too.
+    ['POST', 'manage/report', { id: report.id, status: 'dismissed' }],
     // 중개·가측 인증 (WP66): granted by the manager alone, like every 인증.
     ['POST', `manage/users/${C}/badges`, { badge: 'broker', active: true }],
     ['POST', `manage/users/${C}/badges`, { badge: 'appraiser', active: true }],
@@ -221,6 +223,19 @@ equal((await manager(`manage/users/${A}/grades/${aPremium.id}`, 'DELETE')).statu
     ok(await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: true, reason: '허위 매물' }), 200, 'POST manage/visibility');
     equal((await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: false })).status, 200, 'the post is shown again');
     ok(await manager('manage/report', 'POST', { id: report.id, status: 'resolved' }), 200, 'POST manage/report');
+    // 신고 처리 (WP60): '기각' stamps decided_at, '되돌리기' (pending) clears it; other statuses are refused.
+    const reportRow = async () => (await manager('manage')).data.reports.find(r => r.id === report.id);
+    const resolved = await reportRow();
+    check(resolved?.status === 'resolved' && resolved.decided_at > 0, "'resolved' sets decided_at");
+    ok(await manager('manage/report', 'POST', { id: report.id, status: 'dismissed' }), 200, "POST manage/report 'dismissed'");
+    const dismissed = await reportRow();
+    check(dismissed?.status === 'dismissed' && dismissed.decided_at >= resolved.decided_at, "'dismissed' sets decided_at");
+    ok(await manager('manage/report', 'POST', { id: report.id, status: 'pending' }), 200, "POST manage/report 'pending'");
+    const back = await reportRow();
+    equal([back?.status, back?.decided_at], ['pending', null], "'pending' clears decided_at");
+    equal((await manager('manage/report', 'POST', { id: report.id, status: 'deleted' })).status, 400, 'an unknown status is 400');
+    equal((await manager('manage/report', 'POST', { id: 999999999, status: 'resolved' })).status, 404, 'an unknown report is 404');
+    ok(await manager('manage/report', 'POST', { id: report.id, status: 'resolved' }), 200, 'the report is handled again');
     const temp = await manager(`manage/users/${C}/password`, 'POST', {});
     ok(temp, 200, 'POST manage/users/:C/password');
     equal((await c('auth/me')).data.user, null, "the temporary password ends C's sessions");

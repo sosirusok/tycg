@@ -157,28 +157,35 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // whether '최저가 미만 제시 자동 거절' is available.
 // 채팅 자동화 (WP57): replyTemplates own quick replies (내 빠른 답장), templateVars whether they can hold
 // {제목} {즉거가} {현젯}, firstReply '첫 문의 자동 안내' and awayReply '자리 비움' (both off by default).
+// 자동 매칭 (WP58): matchPosts own 판매·구매 posts get 'match' 알림 for new posts of the other side
+// (0: none, Infinity: every open post), and matchChats '채팅 보내기' a day from a match (엘리트 and up).
+// 판매 통계 (WP63): stats 'basic' (the counts on 내 글 rows), 'trend' (+ the per-post 통계 sheet, and counted
+// views kept by the hour) or 'full' (+ views by hour of day, 시세 and the 주간 요약); profilePins 대표 글.
+export type StatsLevel = 'basic' | 'trend' | 'full';
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
     filterAlerts: number; filterAlertEvents: 'new' | 'all';
     autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
     replyTemplates: number; templateVars: boolean; firstReply: boolean; awayReply: boolean;
+    matchPosts: number; matchChats: number;
+    stats: StatsLevel; profilePins: number;
 };
 
 const PRICE_PERIODS = [12, 24, 48, 72];
 const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, filterAlerts: 20, filterAlertEvents: 'all',
     autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true,
-    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true };
+    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true, matchPosts: Infinity, matchChats: 20, stats: 'full', profilePins: 5 };
 export const PERKS: Record<GradeId, Perks> = {
     normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, filterAlerts: 0, filterAlertEvents: 'new',
         autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false,
-        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false },
+        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0, stats: 'basic', profilePins: 0 },
     plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, filterAlerts: 3, filterAlertEvents: 'new',
         autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false,
-        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false },
+        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false, matchPosts: 0, matchChats: 0, stats: 'basic', profilePins: 1 },
     premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, filterAlerts: 10, filterAlertEvents: 'all',
         autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false,
-        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false },
+        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false, matchPosts: 3, matchChats: 0, stats: 'trend', profilePins: 3 },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -190,13 +197,61 @@ export function perksOf(u: { role?: string | null; grade?: string | null }): Per
     return PERKS[u.grade as GradeId] || PERKS.normal;
 }
 
-// Handling order by grade (1순위 first): 엘리트·관리자 1, 프리미엄 2, 플러스 3, 일반 and the 플러스 체험 4. The
-// report ordering (WP60) is meant to reuse this helper.
+// The paid rank that orders the manager's work (신고 and unread chats, WP60): 3 for 엘리트 and 관리자
+// (rank 3 and up, the owner rule), 2 프리미엄, 1 플러스, 0 for 일반 and the 플러스 체험.
+export function priorityRank(grade: string | null | undefined, trial?: boolean | null) {
+    return trial ? 0 : Math.max(0, Math.min(3, gradeInfo(grade).rank));
+}
+// Handling order (1순위 first) for 신고 and the manager's chats: 엘리트·관리자 1, 프리미엄 2, 플러스 3,
+// 일반 and the 플러스 체험 4.
 export function gradePriority(grade: string | null | undefined, trial?: boolean | null) {
-    if (gradeInfo(grade).rank >= 3) return 1;
-    if (grade === 'premium') return 2;
-    if (grade === 'plus' && !trial) return 3;
-    return 4;
+    return 4 - priorityRank(grade, trial);
+}
+// The Guide cell for an order by grade: '1순위', and for 플러스 '3순위 (체험 4순위)'.
+export const priorityCell = (grade: GradeId) => `${gradePriority(grade)}순위${grade === 'plus' ? ` (체험 ${gradePriority('plus', true)}순위)` : ''}`;
+
+// 신고 처리 순서 (WP60, decisions item 5g): 사기·먹튀 and 회수·해킹 계정 first whoever reports, then the
+// reporter's paid rank (reporter_rank, from the grades the manager granted, so the 체험 counts as 일반), then
+// the oldest. A reporter with REPORT_DEMOTE or more 기각 in 30 days loses both. The reported member's
+// grade is never read, and an automatic '같은 매물 (자동)' report (auto, filed as the manager) is rank 0.
+export const URGENT_REPORT_REASONS: readonly string[] = ['사기·먹튀', '회수·해킹 계정'];
+export const REPORT_DEMOTE = 2;
+export type ReportRank = { id?: number; reason: string; reporter_rank: number; reporter_dismissed_30d: number; created_at: number; auto?: boolean };
+export function reportRank(r: ReportRank) {
+    const demoted = r.reporter_dismissed_30d >= REPORT_DEMOTE;
+    return { urgent: !demoted && URGENT_REPORT_REASONS.includes(r.reason), rank: demoted || r.auto ? 0 : Math.max(0, Math.min(3, r.reporter_rank || 0)) };
+}
+export function reportOrder(a: ReportRank, b: ReportRank) {
+    const x = reportRank(a), y = reportRank(b);
+    return Number(y.urgent) - Number(x.urgent) || y.rank - x.rank || a.created_at - b.created_at || (a.id ?? 0) - (b.id ?? 0);
+}
+// '20분', '3시간', '2일' (how long a report has waited).
+export function waitText(ms: number) {
+    const min = Math.max(1, Math.floor(ms / 60000));
+    return min < 60 ? `${min}분` : min < 1440 ? `${Math.floor(min / 60)}시간` : `${Math.floor(min / 1440)}일`;
+}
+export const REPORT_TEXT = {
+    order: '신고 처리 순서',
+    resolve: '처리 완료',
+    dismiss: '기각',
+    undo: '되돌리기',
+    pending: (n: number) => `대기 ${n}`,
+    decided: '처리',
+    waited: (ms: number) => `${waitText(ms)} 대기`,
+    counts: (n: number, dismissed: number) => `신고 30일 ${n} · 기각 ${dismissed}`,
+    urgentNote: '사기·먹튀, 회수·해킹 계정 신고는 등급과 관계없이 먼저 확인합니다.',
+    demoteNote: `기각된 신고가 30일에 ${REPORT_DEMOTE}건 이상이면 신고 우선 순위가 적용되지 않습니다.`,
+    chatOrder: '매니저 채팅 순서',
+};
+
+// The manager's chat list (WP60): unread chats first, by the member's paid rank (priority, 체험 = 0), then
+// the oldest unread message (unread_since); read chats newest first. The '신청 대기' view keeps newest first.
+export type ChatRank = { unread: number; updated_at: number; priority?: number | null; unread_since?: number | null };
+export function managerChatOrder(a: ChatRank, b: ChatRank) {
+    const ua = a.unread > 0, ub = b.unread > 0;
+    if (ua !== ub) return ua ? -1 : 1;
+    if (!ua) return b.updated_at - a.updated_at;
+    return (b.priority ?? 0) - (a.priority ?? 0) || (a.unread_since ?? a.updated_at) - (b.unread_since ?? b.updated_at) || b.updated_at - a.updated_at;
 }
 
 // 중개/가측 (WP66). Members holding 중개 인증 or 가측 인증 are listed on the '중개/가측' tab while canProvide holds,
@@ -466,6 +521,90 @@ export const ALERT_TEXT = {
     member: (nickname: string) => `${nickname} 새 글`,
     count: (n: number) => ` ${n >= 99 ? '99+' : n}개`,
 };
+// 자동 매칭 and 맞는 글 (WP58, round-3 copy.md 매칭). The links are for every grade; the 알림 for
+// 프리미엄 (3 own posts) and up (every own post), '채팅 보내기' for 엘리트 and up.
+export const MATCH_TEXT = {
+    buyLink: '맞는 구매 글',
+    sellLink: '맞는 판매 글',
+    switch: '자동 매칭',
+    chat: '채팅 보내기',
+    off: '자동 매칭은 프리미엄부터 가능합니다.',
+    locked: '자동 매칭 · 프리미엄부터',
+    full: (n: number) => `자동 매칭은 글 ${n}개까지입니다.`,
+    kinds: '판매·구매 글만 자동 매칭할 수 있습니다.',
+    open: '거래중인 글만 자동 매칭할 수 있습니다.',
+    chatOff: '채팅 보내기는 엘리트부터 가능합니다.',
+    chatMax: (n: number) => `맞는 글 채팅은 하루 ${n}번까지입니다.`,
+    // The own post's side decides the other side's word: a 판매 post is matched with 구매 글.
+    link: (kind: string) => kind === 'sell' ? '맞는 구매 글' : '맞는 판매 글',
+    alert: (title: string, kind: string) => `‘${title}’ 글과 맞는 ${kind === 'sell' ? '구매' : '판매'} 글`,
+    // User voice: the member's own first message, prefilled in the composer (sent only by the member).
+    prefill: (kind: string) => kind === 'sell' ? '구매 글 보고 연락드립니다.' : '판매 글 보고 연락드립니다.',
+    all: '내 글 전체',
+    empty: '맞는 글이 없습니다.',
+    board: '게시판에서 보기',
+};
+// The guide cell: '-', '내 글 3개', '내 글 전체 · 채팅 보내기 하루 20번'.
+export function matchGuideText(perks: Perks) {
+    if (!perks.matchPosts) return '-';
+    const posts = Number.isFinite(perks.matchPosts) ? `내 글 ${perks.matchPosts}개` : MATCH_TEXT.all;
+    return perks.matchChats ? `${posts} · ${MATCH_TEXT.chat} 하루 ${perks.matchChats}번` : posts;
+}
+
+// 판매 통계 and 대표 글 (WP63, round-3 WP38 copy). STATS_RANK orders the levels ('trend' and up keep views by hour).
+export const STATS_RANK: Record<StatsLevel, number> = { basic: 0, trend: 1, full: 2 };
+export const STATS_TEXT = {
+    button: '통계',
+    title: '판매 통계',
+    off: '판매 통계는 프리미엄부터 가능합니다.',
+    days: '최근 7일',
+    views: '조회',
+    favorites: '찜',
+    chats: '채팅',
+    effect: '끌올 효과',
+    // The placements '끌올 효과' compares (views in the 2 hours before and after).
+    manual: '직접 끌올',
+    auto: '자동 끌올',
+    relist: '다시 올리기',
+    before: '전 2시간',
+    after: '후 2시간',
+    times: (n: number) => `${n}번`,
+    average: '조회 평균',
+    noEffect: '최근 14일 끌올이 없습니다.',
+    hours: '시간대별 조회 (14일)',
+    market: '시세',
+    marketLine: (n: number, price: string) => `확인 거래 기준 · ${n}건 · 중간값 ${price}`,
+    // The 엘리트 주간 요약 알림 (tick B, Monday 10:00 KST).
+    weekly: (views: number, chats: number, bumps: number) => `지난주 조회 ${views} · 채팅 ${chats} · 끌올 ${bumps}`,
+};
+export const PIN_TEXT = {
+    tag: '대표',
+    pin: '대표 글 고정',
+    unpin: '대표 글 해제',
+    pinned: '대표 글 고정 완료',
+    unpinned: '대표 글 해제',
+    off: '대표 글은 플러스부터 가능합니다.',
+    full: (n: number) => `대표 글은 ${n}개까지입니다.`,
+};
+// The Guide cells: '내 글 줄 수치', '+ 글별 통계 창', '+ 시간대별 조회 · 시세 · 주간 요약'; '-', '1개', '5개'.
+export const STATS_GUIDE: Record<StatsLevel, string> = { basic: '내 글 줄 수치', trend: '+ 글별 통계 창', full: '+ 시간대별 조회 · 시세 · 주간 요약' };
+
+// 내 글 일괄 변경 (WP58): every grade, at most BULK_MAX posts a request.
+export const BULK_MAX = 30;
+export const BULK_TEXT = {
+    max: `한 번에 ${BULK_MAX}개까지 선택할 수 있습니다.`,
+    none: '글을 선택해 주세요.',
+    action: '일괄 변경을 확인해 주세요.',
+    closeAsk: (n: number) => `선택한 글 ${n}개를 거래완료로 바꿉니다. 되돌릴 수 없습니다.`,
+    deleteAsk: (n: number) => `선택한 글 ${n}개를 삭제합니다. 복구할 수 없습니다.`,
+    bumped: (n: number) => `끌올 완료 · ${n}개`,
+    closed: (n: number) => `상태 변경: 거래완료 · ${n}개`,
+    deleted: (n: number) => `삭제 완료 · ${n}개`,
+    selected: (n: number) => `${n}개 선택`,
+    bumpAll: '모두 끌올',
+    select: '선택',
+};
+
 // The 조건 알림 cell of the guide table: '-', '3개 (새 글)', '10개 (새 글 · 가격 내림)'.
 export function filterAlertText(perks: Perks) {
     if (!perks.filterAlerts) return '-';

@@ -9,8 +9,10 @@ import { alertCounts } from './alerts';
 // comment (ref: the post) and reply (ref: the parent 댓글) come from 댓글·답글 (WP55, worker/comments.ts).
 // drop_stopped and drop_done (ref: the post) end a 자동 가격 내리기 setup (WP56, worker/automation.ts dropJob),
 // which also writes fav_price for every drop.
+// match (ref: the member's own post) is 자동 매칭 (WP58, worker/match.ts), from tick B.
+// weekly (ref: the week start) is the 엘리트 주간 요약 (WP63, worker/stats.ts), from tick B.
 export type NotifyType = 'fav_price' | 'fav_closed' | 'application' | 'grade_end' | 'hidden' | 'same_listing' | 'auto_paused' | 'auto_stale' | 'bump_ready'
-    | 'keyword' | 'board' | 'follow' | 'condition' | 'comment' | 'reply' | 'drop_stopped' | 'drop_done';
+    | 'keyword' | 'board' | 'follow' | 'condition' | 'comment' | 'reply' | 'drop_stopped' | 'drop_done' | 'match' | 'weekly';
 
 // At most this many 알림 per member per KST day; the check reads at most this many index entries.
 export const NOTIFY_PER_DAY = 100;

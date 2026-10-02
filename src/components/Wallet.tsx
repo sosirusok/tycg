@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import type { StatsLevel } from '../../shared/membership';
 
 // GET /me/usage (and the 끌올 response): the 끌올 지갑. Null wallet fields are the manager's (no wallet).
 export type Wallet = { bumpTokens: number | null; bumpMax: number | null; bumpRefillMin: number | null; nextRefillAt: number | null };
 export type Usage = Wallet & {
-    perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; adSlots: number | null };
+    // stats and profilePins: 판매 통계 and 대표 글 (WP63).
+    perks: { bumpMax: number | null; bumpRefillMinutes: number | null; bumpGapMinutes: number | null; adSlots: number | null; stats?: StatsLevel; profilePins?: number | null };
     rules: { photosPerPost: number | null; openPosts: number | null; postsPerDay: number | null; freshPerDay?: number | null };
     // featured: the member's 광고 slot posts now (WP53, '광고 2/3 · 자동').
     openPosts: number; postsToday: number; freshToday?: number; featured: { id: number; title: string; kind?: string }[];

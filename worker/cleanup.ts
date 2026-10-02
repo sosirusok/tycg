@@ -1,4 +1,5 @@
 import { db, MANAGER_ID } from './http';
+import { STATS_KEEP_DAYS } from './stats';
 import { unused } from './files';
 import { deleteR2Photos, deleteKvKeys, getKv, putR2, blobBytes, hasBucket, hasKv, counterValue, utcDate } from './storage';
 import { UNREAD_RECOUNT } from './chat';
@@ -140,8 +141,10 @@ export async function cleanup(now = Date.now()) {
     const house = [
         db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now),
         db().prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(now),
-        // The daily caps look back to KST midnight and the 새 글 placement at most 2 days.
-        db().prepare('DELETE FROM post_events WHERE created_at<?').bind(now - 2 * DAY),
+        // The daily caps look back to KST midnight and the 새 글 placement at most 2 days; 판매 통계 (WP63) keeps
+        // 'bump' and 'fresh' rows 14 days ('끌올 효과', the 주간 요약) and post_views 14 days (by post_views_hour).
+        db().prepare("DELETE FROM post_events WHERE created_at<? AND (kind NOT IN ('bump','fresh') OR created_at<?)").bind(now - 2 * DAY, now - STATS_KEEP_DAYS * DAY),
+        db().prepare('DELETE FROM post_views WHERE hour<?').bind(Math.floor((now - STATS_KEEP_DAYS * DAY) / 3600000)),
         db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0'),
         // 같은 매물 (WP44): prints are kept 7 days after the post was completed or deleted, and never for a
         // member who left.

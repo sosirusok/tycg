@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, applicationTitle, kstDateTime, type Application, type Earn } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, REPORT_TEXT, applicationTitle, kstDateTime, type Application, type Earn } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
@@ -15,7 +15,10 @@ type TabId = 'applications' | 'members' | 'resets' | 'reports' | 'hidden' | 'not
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
-    post_images?: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
+    post_images?: string | null; hidden: number | null; reporter_id: string; nickname: string; role?: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
+    // 신고 처리 순서 (WP60): when it was decided, and for a waiting report the reporter's reports and 기각 of
+    // the last 30 days; auto marks a '같은 매물 (자동)' report (filed as the manager).
+    decided_at?: number | null; reporter_reports_30d?: number; reporter_dismissed_30d?: number; auto?: boolean;
     // A member report: the reported member and the chat it came from.
     // A 댓글 report (WP55): the reported text and whether the 댓글 is still up.
     comment_id?: number | null; comment_body?: string | null; comment_live?: number | null;
@@ -26,12 +29,12 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
     const tab = (['applications', 'members', 'resets', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
-    const [summary, setSummary] = useState<{ reports: Report[]; hidden: Post[]; pendingApplications: number; pendingResets?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
+    const [summary, setSummary] = useState<{ reports: Report[]; pendingReports?: number; hidden: Post[]; pendingApplications: number; pendingResets?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
     if (!ready) return <div className="container page"><SkeletonRows /></div>;
     if (me?.role !== 'manager') return <div className="container page"><EmptyState icon="lock" title="매니저 전용 페이지입니다" /></div>;
-    const pendingReports = summary?.reports.filter(r => r.status === 'pending').length || 0;
+    const pendingReports = summary?.pendingReports ?? summary?.reports.filter(r => r.status === 'pending').length ?? 0;
     return <div className="container page">
         <h1 className="page-title">매니저 메뉴</h1>
         <div className="mt-16"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
@@ -45,7 +48,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
             {tab === 'applications' ? <Applications onChange={loadSummary} />
                 : tab === 'members' ? <Members />
                 : tab === 'resets' ? <Resets onChange={loadSummary} />
-                : tab === 'reports' ? <Reports reports={summary?.reports} onChange={loadSummary} />
+                : tab === 'reports' ? <Reports reports={summary?.reports} pendingCount={pendingReports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
                 : tab === 'notices' ? <Notices /> : <Settings usage={summary?.usage} />}
         </div>
@@ -144,31 +147,62 @@ function detailsWithLinks(details: string | null | undefined) {
     return details.split(/(#\d+)/).map((part, i) => /^#\d+$/.test(part) ? <Link key={i} to={'/posts/' + part.slice(1)}>{part}</Link> : part);
 }
 
-function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => void }) {
-    const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null);
+// 신고 (WP60): '대기 3' in 신고 처리 순서 (the Worker's order: 사기·먹튀 and 회수·해킹 계정 first, then the
+// reporter's grade, then the oldest), and '처리' with the last 50 decisions. A waiting row: the reason, how
+// long it has waited, the reporter with their 30-day counts, the target, and 처리 완료 / 기각. A decided row:
+// the outcome and 되돌리기.
+function Reports({ reports, pendingCount, onChange }: { reports?: Report[]; pendingCount: number; onChange: () => void }) {
+    const [member, setMember] = useState<string | null>(null), [evidence, setEvidence] = useState<Report | null>(null), [busy, setBusy] = useState(0);
     if (!reports) return <SkeletonRows />;
-    if (!reports.length) return <EmptyState title="접수된 신고가 없습니다" />;
-    const act = async (task: Promise<unknown>, message: string) => { try { await task; toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } };
-    return <>
-        <ul className="simple-list">{reports.map(r => <li key={r.id} className={r.status === 'pending' ? '' : 'is-done'}>
+    const act = async (task: () => Promise<unknown>, message: string, id = 0) => {
+        if (busy) return;
+        setBusy(id || -1);
+        try { await task(); toast(message); onChange(); } catch (e) { toast.error(errorText(e)); } finally { setBusy(0); }
+    };
+    const decide = (r: Report, status: 'pending' | 'resolved' | 'dismissed') => act(() => api('manage/report', 'POST', { id: r.id, status }),
+        status === 'resolved' ? '처리 완료' : status === 'dismissed' ? '기각 완료' : '되돌리기 완료', r.id);
+    const pending = reports.filter(r => r.status === 'pending'), decided = reports.filter(r => r.status !== 'pending');
+    const now = Date.now();
+    const row = (r: Report) => {
+        const waiting = r.status === 'pending';
+        return <li key={r.id} className={waiting ? '' : 'is-done'}>
             <span className="grow">
-                <strong>{r.reason}</strong>
+                <span className="report-head"><strong>{r.reason}</strong>{waiting ? <span className="muted small nowrap">{REPORT_TEXT.waited(now - r.created_at)}</span>
+                    : <span className={'event-status' + (r.status === 'dismissed' ? '' : ' st-approved')}>{r.status === 'dismissed' ? REPORT_TEXT.dismiss : REPORT_TEXT.resolve}</span>}</span>
                 <span className="small">{r.reason === '같은 매물 (자동)' ? detailsWithLinks(r.details) : r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
                 {r.comment_id && <span className="small report-comment">댓글: {r.comment_body}{!r.comment_live && <span className="muted nowrap">{'\u00a0'}· 삭제됨</span>}</span>}
                 {!r.post_id && !r.comment_id && <DeletedPhotos images={r.post_images} />}
-                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{r.post_id ? <> · <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></> : !r.target_user_id && ' · 삭제된 글'}</span>
+                {/* The post: the target of a post report, the place of a 댓글 or 같은 매물 report. */}
+                {r.post_id ? <span className="small">{r.target_user_id || r.comment_id ? '글' : '대상'} <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></span> : !r.target_user_id && <span className="muted small">삭제된 글</span>}
+                {/* Waiting: '신고 30일 4 · 기각 1' (the time is in '3시간 대기'); decided: when. */}
+                <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} role={r.role} badges={r.badges} />
+                    {waiting ? !r.auto && <span className="nowrap">{'\u00a0'}· {REPORT_TEXT.counts(r.reporter_reports_30d ?? 0, r.reporter_dismissed_30d ?? 0)}</span>
+                        : <span className="nowrap">{'\u00a0'}· {kstDateTime(r.decided_at ?? r.created_at)}</span>}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
             <span className="report-actions">
-                {r.comment_id ? !!r.comment_live && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('comments/' + r.comment_id, 'DELETE'), '댓글 삭제 완료')}>댓글 삭제</button>
-                    : r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
+                {r.comment_id ? !!r.comment_live && <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => act(() => api('comments/' + r.comment_id, 'DELETE'), '댓글 삭제 완료')}>댓글 삭제</button>
+                    : r.post_id && <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => act(() => api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
                 {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
                 {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
-                <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>
+                {waiting ? <>
+                    <button type="button" className="btn btn-primary btn-xs" disabled={!!busy} onClick={() => decide(r, 'resolved')}>{REPORT_TEXT.resolve}</button>
+                    <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => decide(r, 'dismissed')}>{REPORT_TEXT.dismiss}</button>
+                </> : <button type="button" className="btn btn-line btn-xs" disabled={!!busy} onClick={() => decide(r, 'pending')}>{REPORT_TEXT.undo}</button>}
             </span>
-        </li>)}</ul>
+        </li>;
+    };
+    return <>
+        <section>
+            <h2 className="list-title">{REPORT_TEXT.pending(pendingCount)}</h2>
+            {pending.length ? <ul className="simple-list">{pending.map(row)}</ul> : <EmptyState title="대기 중인 신고가 없습니다" />}
+        </section>
+        <section className="mt-24">
+            <h2 className="list-title">{REPORT_TEXT.decided}</h2>
+            {decided.length ? <ul className="simple-list">{decided.map(row)}</ul> : <EmptyState title="처리한 신고가 없습니다" />}
+        </section>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={onChange} />}</Modal>
         <Modal open={!!evidence} onClose={() => setEvidence(null)} title="신고된 채팅" wide>{evidence && <ReportChat report={evidence} />}</Modal>
     </>;

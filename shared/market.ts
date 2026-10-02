@@ -72,6 +72,10 @@ export type Post = {
     view_count?: number;
     // 댓글·답글 (WP55): live 댓글 and 답글 on the post.
     comment_count?: number;
+    // 대표 글 (WP63): in a member's lists, whether the post shows as 대표; profile_pin_at (the author's
+    // own lists only) also keeps a pin a lower grade no longer shows.
+    pinned?: boolean;
+    profile_pin_at?: number | null;
     // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of
     // the trade and the manager also get a pending one, with deal_state ('확인 대기' / '확인 완료').
     deal_price?: number;
@@ -439,6 +443,39 @@ export function accountSummary(d: Record<string, string>) {
         d.gas ? `가스 ${Number(d.gas).toLocaleString('ko-KR')}` : '',
         d.minerals ? `미네랄 ${Number(d.minerals).toLocaleString('ko-KR')}` : '',
     ].filter(Boolean);
+}
+
+// 맞는 글 (WP58, round-3 WP34 change 5): the board query of the other side for an own 판매 or 구매 post,
+// from its own fields, for every grade. 판매 → '맞는 구매 글': 구매 posts whose MAX reaches the 즉거가 and,
+// on 계정, that this account fits ('내 계정' filters: 대주 수, 전적, 팬텀 %, 닉네임) with any of its
+// ladders. 구매 → '맞는 판매 글': 판매 posts up to the MAX and, on 계정, the 대주 이하, 무전적, 팬텀 % 이상, the
+// 닉 종류 wanted (one 닉 등급 or one exact length only) and any of the ladders wanted. null for other kinds.
+export function matchQuery(p: Pick<Post, 'kind' | 'category' | 'price' | 'details' | 'tags'>): { kind: 'buy' | 'sell'; query: string } | null {
+    if (p.kind !== 'sell' && p.kind !== 'buy') return null;
+    const d = p.details || {}, q = new URLSearchParams();
+    const kind = p.kind === 'sell' ? 'buy' : 'sell', account = p.category === 'account';
+    q.set('kind', kind);
+    q.set('category', p.category);
+    if (p.price) q.set(p.kind === 'sell' ? 'min' : 'max', String(p.price));
+    if (account && p.kind === 'sell') {
+        if (d.ownerCount) q.set('ownerCountOfMine', d.ownerCount);
+        if (d.recordStatus === '무전적' || d.recordStatus === '전적 있음') q.set('myRecord', d.recordStatus);
+        if (d.phantom) q.set('myPhantom', d.phantom);
+        if (d.nicknameChars) q.set('nicknameChars', d.nicknameChars);
+        if (d.nicknameRank) q.set('nicknameRank', d.nicknameRank);
+        const types = parseList(d.nicknameTypes, NICK_TYPES);
+        if (types.length) q.set('myNicknameType', types[0]);
+    } else if (account) {
+        if (d.maxOwners) q.set('maxOwners', d.maxOwners);
+        if (d.recordPreference === RECORD_PREFERENCES[0]) q.set('recordStatus', RECORD_PREFERENCES[0]);
+        if (d.phantomMin) q.set('phantom', d.phantomMin);
+        const types = parseList(d.wantedNicknameTypes, NICK_TYPES), ranks = parseList(d.nicknameRanks, NICK_RANKS);
+        if (types.length) q.set('nicknameTypes', JSON.stringify(types));
+        if (ranks.length === 1) q.set('nicknameRank', ranks[0]);
+        if (d.nicknameCharsMin && d.nicknameCharsMin === d.nicknameCharsMax) q.set('nicknameChars', d.nicknameCharsMin);
+    }
+    if (account && p.tags?.length) q.set('tags', JSON.stringify(p.tags.map(t => ({ tier: t.tier, season: t.season }))));
+    return { kind, query: q.toString() };
 }
 
 // Quick replies (WP57): chips that fill the chat composer, never sent on their own. User voice (casual

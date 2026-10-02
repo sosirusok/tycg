@@ -86,6 +86,13 @@ export function memberColumns(alias: string, prefix = '') {
         + `(SELECT json_group_array(b.badge) FROM user_badges b WHERE b.user_id=${alias}.id AND ${alias}.deleted_at IS NULL) AS ${prefix}badges_json`;
 }
 
+// The member's paid rank for the manager's handling order (WP60: 신고 and the manager's chat list), as
+// priorityRank reads it: the highest current grade the manager granted (source 'manager', so a 플러스 체험
+// counts as 일반), with 관리자 (rank 4) counted as 엘리트 (3); 0 for none and for a withdrawn member.
+// `alias` is the users table alias in the surrounding query. Binds nothing.
+export const paidRankSql = (alias: string) => `COALESCE((SELECT MIN(MAX(g.rank),3) FROM user_grades g WHERE g.user_id=${alias}.id AND ${alias}.deleted_at IS NULL AND g.source='manager'
+    AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER))),0)`;
+
 // A trade counts once the other member confirmed it ('확인' or their 후기) and while the manager has
 // not removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
 export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
@@ -300,11 +307,12 @@ export function csrf(r: Request) {
     if (r.headers.get('sec-fetch-site') === 'cross-site') fail(403, '허용되지 않은 요청입니다.');
 }
 
-export async function limit(key: string, max: number, ms: number) {
+// `text` names the limit when it is a rule members meet (WP58: '맞는 글 채팅은 하루 20번까지입니다.').
+export async function limit(key: string, max: number, ms: number, text = '요청이 많습니다. 잠시 후 다시 시도해 주세요.') {
     const now = Date.now();
     const r = await db().prepare('INSERT INTO rate_limits (key,count,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<=? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<=? THEN excluded.reset_at ELSE reset_at END RETURNING count')
         .bind(key, now + ms, now, now).first<{ count: number }>();
-    if (r && r.count > max) fail(429, '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+    if (r && r.count > max) fail(429, text);
 }
 
 export function textField(v: unknown, min: number, max: number, label: string) {

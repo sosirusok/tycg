@@ -85,10 +85,13 @@ try {
     // The 플러스 무료 체험 window (0016_plus_trial) starts now and is closed right away, so the suites
     // keep 일반 sign-ups; verify-trial opens it for itself.
     const trialSettings = `INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now()}',0),('sys:trial_end','-1',0);`;
+    // The 엘리트 주간 요약 (WP63) counts this week as done, as 0048 does when it is applied, so no tick B of
+    // the run writes 'weekly' 알림 unless a suite asks for it (verify-stats moves the setting back).
+    const weeklySettings = `INSERT INTO settings(key,value,updated_at) VALUES('sys:weekly_last','${Date.now()}',0);`;
     // Posts an earlier run placed ahead of now (새 글 우선, WP44: 1 hour) go back to their creation time,
     // so they never push this run's posts off a board's first page.
     const ahead = `UPDATE posts SET bumped_at=created_at WHERE bumped_at>${Date.now()};`;
-    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings; ' + trialSettings + " UPDATE settings SET value='-1' WHERE key='sys:trial_end'; " + ahead], { stdio: 'ignore' }), 60000);
+    await completed(child([wrangler, 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc', '--command', 'DELETE FROM rate_limits; DELETE FROM settings; ' + trialSettings + weeklySettings + " UPDATE settings SET value='-1' WHERE key='sys:trial_end'; " + ahead], { stdio: 'ignore' }), 60000);
     // POST_LIMITS=relaxed lifts the post caps (open posts, posts per day, same title) on this server only,
     // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     preview = await startPreviewServer();
@@ -121,14 +124,17 @@ try {
     // verify-auto (WP52) runs the 자동 끌올 ticks at chosen times (TEST_HOOKS=on: the event's ?time= is the tick's now),
     // and verify-auto-drop (WP56) the 자동 가격 내리기 in the same tick, on the days after.
     // verify-promo (WP53) checks the 광고 placements against the strict rules.
+    // verify-auto-bulk (WP58) runs 일괄 변경 against the real wallet, 다시 올리기 against the WP44 placement and
+    // 자동 매칭 in tick B (cursor and pause times set with wrangler d1 execute).
+    // verify-stats (WP63) checks 판매 통계, 대표 글 and 인기순 against the real post rules, and the 주간 요약 in tick B.
     // verify-providers (WP66) needs the read meter and X-Test-Now (TEST_HOOKS=on) and removes its 200 seeded providers.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-promo.mjs', 'tests/verify-providers.mjs', 'tests/verify-budget.mjs'])) {
-        // verify-auto and verify-alerts-posts set up each scenario with wrangler d1 execute (about 1.7 s a
-        // call), so they get longer; verify-perks uploads 121 photos and fires the cron twice, which takes over
-        // 3 minutes when other checkouts run their gates on the same machine.
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }),
-            suite.includes('verify-auto') || suite.includes('verify-alerts-posts') ? 480000 : suite.includes('verify-perks') ? 360000 : 180000);
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-stats.mjs', 'tests/verify-providers.mjs', 'tests/verify-budget.mjs'])) {
+        // verify-auto, verify-alerts-posts, verify-perks (45 calls) and verify-stats set up their scenarios with
+        // wrangler d1 execute (about 1.7 s a call, 4-5 s on a busy machine), so they get longer; verify-perks also
+        // uploads 121 photos and fires the cron twice.
+        const long = ['verify-auto', 'verify-alerts-posts', 'verify-perks', 'verify-stats'].some(name => suite.includes(name));
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), long ? 480000 : 180000);
     }
     const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;
     stop(fallback);
