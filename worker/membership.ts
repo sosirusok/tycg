@@ -3,7 +3,7 @@ import { db, fail, requireUser, requireActive, requireManager, json, body, limit
 import { storageMode } from './storage';
 import { notifyOne } from './notifications';
 import { ensureChat, messageStatements, guardedMessageStatements } from './chat';
-import { latestSeason } from './posts';
+import { clanMinFrom, latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
@@ -12,9 +12,10 @@ import {
     AUTO_TEXT, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
     type ApplicationKind, type BadgeId, type Earn, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
-import { SUSPEND_DAYS, SUSPEND_FOREVER, suspendDaysLabel, type User } from '../shared/market';
+import { FEATURE_TAG_MAX, SUSPEND_DAYS, SUSPEND_FOREVER, normalizeTag, suspendDaysLabel, type User } from '../shared/market';
 
-// The 수익 홍보 texts (WP66) are the only 'sys:' settings sent to the browser; each falls back to its default.
+// The 수익 홍보 texts (WP66) and the clan ladder's first season (WP70) are the only 'sys:' settings sent to the
+// browser; each falls back to its default.
 const EARN_KEYS: Record<keyof Earn, string> = { broker: 'sys:earn_broker', appraise: 'sys:earn_appraise', story: 'sys:earn_story' };
 
 export async function siteConfig() {
@@ -22,14 +23,15 @@ export async function siteConfig() {
     const manager = await db().prepare('SELECT id,nickname FROM users WHERE id=?').bind(MANAGER_ID).first<any>();
     // The guest home band '가입하면 플러스 7일 무료' shows while the trial window is open.
     const w = await trialWindow(), open = trialOpen(w);
-    const keys = ['payment_notice', ...Object.values(EARN_KEYS)];
+    const keys = ['payment_notice', 'sys:clan_min_season', ...Object.values(EARN_KEYS)];
     const rows = (await db().prepare(`SELECT key,value FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`).bind(...keys).all<{ key: string; value: string }>()).results;
     const value = (key: string) => rows.find(r => r.key === key)?.value || '';
     const earn = Object.fromEntries((Object.keys(EARN_KEYS) as (keyof Earn)[]).map(k => [k, value(EARN_KEYS[k]) || EARN_DEFAULTS[k]])) as Earn;
     // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
     // vapidPublicKey: the key browsers subscribe to 웹 푸시 with (WP64); null while push is off.
-    return { latestSeason: await latestSeason(), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn, vapidPublicKey: vapidPublicKey() };
+    // clanMinSeason: the first clan-ladder season (WP70) for the clan season pickers.
+    return { latestSeason: await latestSeason(), clanMinSeason: clanMinFrom(value('sys:clan_min_season')), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn, vapidPublicKey: vapidPublicKey() };
 }
 
 const DAY = 86400000;
@@ -475,6 +477,19 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
                     ? db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(EARN_KEYS[k], v.trim(), now)
                     : db().prepare('DELETE FROM settings WHERE key=?').bind(EARN_KEYS[k]));
             }
+        }
+        // 클랜 래더 첫 시즌 and 고정 태그 (WP70).
+        const put = (key: string, value: string) => statements.push(db().prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key, value, now));
+        if (b.clanMinSeason !== undefined) {
+            const n = Number(b.clanMinSeason), latest = typeof b.latestSeason === 'number' ? Math.max(b.latestSeason, await latestSeason()) : await latestSeason();
+            if (!Number.isInteger(n) || n < 1 || n > latest) fail(400, `클랜 래더 첫 시즌: 1~${latest} 사이 숫자로 입력해 주세요.`);
+            put('sys:clan_min_season', String(n));
+        }
+        if (b.pinnedTags !== undefined) {
+            const list = typeof b.pinnedTags === 'string' ? b.pinnedTags.split(',').map((v: string) => v.trim()).filter(Boolean) : null;
+            const tags: (string | null)[] | undefined = list?.map((v: string) => normalizeTag(v));
+            if (!tags || tags.length > FEATURE_TAG_MAX || tags.some(t => !t)) fail(400, '고정 태그: 쉼표로 나눠 10개까지, 한 개에 1~12자로 입력해 주세요.');
+            put('sys:pinned_tags', [...new Set(tags as string[])].join(','));
         }
         if (statements.length) await db().batch(statements);
         return json(await siteConfig());

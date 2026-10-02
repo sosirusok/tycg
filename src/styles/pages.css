@@ -65,6 +65,16 @@
 .filter-head strong { color: var(--ink); font-size: var(--fs-15); }
 .filter-group { padding: 18px 0; border-bottom: 1px solid var(--line); }
 .filter-group > h4 { margin-bottom: 12px; font-size: var(--fs-14); font-weight: 700; }
+/* Groups fold (WP70): the title row is the toggle, with the group's active count and a chevron. */
+.filter-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: pointer; user-select: none; }
+.filter-group > summary::-webkit-details-marker { display: none; }
+.filter-group > summary::after { content: ''; flex: none; width: 8px; height: 8px; margin-right: 4px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+.filter-group:not([open]) > summary::after { transform: translateY(2px) rotate(-135deg); }
+.filter-group > summary h4 { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-14); font-weight: 700; }
+.filter-group[open] > summary { margin-bottom: 12px; }
+.filter-group > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--r-4); }
+.filter-group-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--brand); color: var(--white); font-size: var(--fs-12); font-weight: 700; }
+.filter-sub { margin-top: 4px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 600; }
 .filter-group .field-hint { margin-top: 8px; }
 .filter-group .choice-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
 .skin-chips { gap: 6px; }

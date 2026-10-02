@@ -107,8 +107,9 @@ try {
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT), '--inspector-port', '0',
         '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin, ...vapidKeys], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
+    // verify-ladder (WP68) is a unit suite that reads the latest season from this server's config.
     // verify-push runs here too (TEST_PHASE=main): without PUSH_TEST an http endpoint is refused.
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs', 'tests/verify-push.mjs'])) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-ladder.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs', 'tests/verify-push.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password', ...suite.includes('verify-push') ? { TEST_PHASE: 'main' } : {} } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
@@ -140,12 +141,13 @@ try {
     // verify-providers (WP66) needs the read meter and X-Test-Now (TEST_HOOKS=on) and removes its 200 seeded providers.
     // verify-push (WP64) runs a mock push service: inline pushes, the queue of tick B, failures and the keys.
     // verify-chat-live (WP69) reads the meter: a send in ≤ 2 D1 calls, and the long poll's calls and timing.
+    // verify-search (WP70) seeds 20,000 posts too and checks the posts_fts search with the meter.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-stats.mjs', 'tests/verify-providers.mjs', 'tests/verify-push.mjs', 'tests/verify-chat-live.mjs', 'tests/verify-budget.mjs'])) {
-        // verify-auto, verify-alerts-posts, verify-perks (45 calls) and verify-stats set up their scenarios with
-        // wrangler d1 execute (about 1.7 s a call, 4-5 s on a busy machine), so they get longer; verify-perks also
-        // uploads 121 photos and fires the cron twice.
-        const long = ['verify-auto', 'verify-alerts-posts', 'verify-perks', 'verify-stats'].some(name => suite.includes(name));
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-stats.mjs', 'tests/verify-providers.mjs', 'tests/verify-push.mjs', 'tests/verify-chat-live.mjs', 'tests/verify-search.mjs', 'tests/verify-budget.mjs'])) {
+        // verify-auto, verify-alerts-posts, verify-perks (45 calls), verify-stats and verify-dup (about 60 calls) set
+        // up their scenarios with wrangler d1 execute (about 1.7 s a call, 4-5 s on a busy machine), so they get
+        // longer; verify-perks also uploads 121 photos and fires the cron twice, and verify-search seeds 20,000 posts.
+        const long = ['verify-auto', 'verify-alerts-posts', 'verify-perks', 'verify-stats', 'verify-dup', 'verify-search'].some(name => suite.includes(name));
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), long ? 480000 : 180000);
     }
     const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;

@@ -161,12 +161,17 @@ check(!('ads' in (await guest('posts/' + N1s)).data.post), "n1's open 판매 pos
 const home = async () => (await guest('home')).data.ads;
 let h = await home();
 equal(authorsOf(h), [ids(e1), ids(e2)].sort(), "home '엘리트 매물' holds e1 and e2, one card each, no 프리미엄");
+// WP70: only 판매중 판매 posts, even though e2 also advertises a 구매 post (it stays in the 구매 board's box).
+check(h.length > 0 && h.every(p => p.kind === 'sell' && p.status === 'open'), "the home '엘리트 매물' row holds only open 판매 posts");
+check(!h.some(p => p.id === E2b), "e2's 구매 ad is never in the home row");
+equal(h.find(p => p.author_id === ids(e2))?.id, E2s, "e2's card is its 판매 post");
 {
     // The home bottom card never holds a post of the row; with only e1 and e2 advertising it offers their
     // other slot posts (e1 has 3, e2 2), so an 엘리트 keeps the card with few advertisers.
     const full = (await guest('home')).data;
     check(Array.isArray(full.cardAds) && full.cardAds.length > 0 && !full.cardAds.some(c => full.ads.some(a => a.id === c.id)), `the home bottom card never repeats a post of the row (${(full.cardAds || []).map(c => c.id)})`);
     check(full.cardAds.every(c => [ids(e1), ids(e2)].includes(c.author_id)), 'and offers another slot post of an 엘리트 in the row');
+    check(full.cardAds.every(c => c.kind === 'sell' && c.status === 'open'), 'the home bottom card shows open 판매 posts only');
 }
 
 // A pending 댓글 신고 is about the comment, not the post: e2's only 판매 ad stays in the box.

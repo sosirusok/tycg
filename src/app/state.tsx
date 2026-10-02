@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from '../../shared/market';
-import { LATEST_SEASON } from '../../shared/market';
+import { CLAN_MIN_SEASON, LATEST_SEASON } from '../../shared/market';
 import type { ApplicationKind, Earn, PlanId, TrialState } from '../../shared/membership';
 import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
@@ -8,8 +8,8 @@ import { navigate } from '../lib/router';
 import { closePush, pushClosed, pushOn, pushSupported, refreshPush, subscribePush, unbindPush } from '../lib/push';
 
 // earn: the 수익 홍보 texts (WP66), from manage 설정 or their defaults. vapidPublicKey: the 웹 푸시 key (WP64);
-// null while the site has no push keys.
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn; vapidPublicKey?: string | null };
+// null while the site has no push keys. clanMinSeason: the first clan-ladder season (WP70, manager setting).
+export type SiteConfig = { latestSeason: number; clanMinSeason?: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn; vapidPublicKey?: string | null };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -101,7 +101,7 @@ export function useAdaptivePoll(poll: () => void, enabled: boolean, every = 0) {
     }, [enabled, every]);
 }
 
-const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };
+const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, clanMinSeason: CLAN_MIN_SEASON, paymentNotice: '', manager: null };
 
 // 웹 푸시 (WP64): the member just sent a chat message or turned on an 알림, the moments a push helps.
 // AppProvider then shows the '알림 켜기' bar, if this browser can take pushes, does not get the member's

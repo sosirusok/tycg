@@ -56,7 +56,12 @@ function list(raw: unknown) {
         return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean))].sort().join(',') : text(raw);
     } catch { return text(raw); }
 }
-const ladderOf = (tags: SeasonTag[] | undefined) => [...new Set((tags || []).map(t => `${t.tier}:${t.season}`))].sort().join(',');
+// The ladder as one value: 'master:18,master:29'. 시즌 비공개 (WP68) adds 'master:h2' (2 hidden 마스터
+// emblems), so a ladder without hidden emblems keeps the value earlier prints stored.
+const ladderOf = (tags: SeasonTag[] | undefined, hidden?: Record<string, number> | null) => [...new Set([
+    ...(tags || []).map(t => `${t.tier}:${t.season}`),
+    ...Object.entries(hidden || {}).filter(([, n]) => Number.isInteger(n) && n > 0).map(([tier, n]) => `${tier}:h${n}`),
+])].sort().join(',');
 // 우대 스킨 as the detail page shows them: the full skeleton set implies its legacy single skin.
 function skinsOf(raw: unknown) {
     const tags = parseList(typeof raw === 'string' ? raw : '', SKIN_TAGS);
@@ -64,11 +69,14 @@ function skinsOf(raw: unknown) {
 }
 const filled = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 
-// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details and season tags say.
-export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = []): ListingFields {
+// The canonical listing fields of a post: what its 거래 구분, 세부 분류, details, season tags, 시즌 비공개
+// (hidden, WP68: 판매 and the offered side of 교환 only) and 클랜 래더 (clan, WP70: a clan post's own seasons)
+// say. 특징 태그 (details.featureTags) and 현재 클랜 티어 (details.clanTier) come with the details; new fields
+// stay empty on older posts, so earlier prints keep matching.
+export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = [], hidden?: Record<string, number> | null, clan: SeasonTag[] = []): ListingFields {
     const d = details || {};
     if (kind === 'buy' || kind === 'proxy_request') {
-        const want: Record<string, string> = { ladder: ladderOf(seasons) };
+        const want: Record<string, string> = { ladder: ladderOf(seasons), clanLadder: ladderOf(clan) };
         for (const [k, v] of Object.entries(d)) {
             if (k === 'currentOffer') continue;
             want[k] = typeof v === 'string' && v.trim().startsWith('[') ? list(v) : num(v);
@@ -78,7 +86,7 @@ export function listingFields(kind: string, category: string, details: Record<st
     if (category === 'account') {
         const nick = [num(d.nicknameChars), parseList(d.nicknameTypes, NICK_TYPES).sort().join(','), text(d.nicknameRank)];
         const dist: Record<string, string> = {
-            ladder: ladderOf(seasons), skins: skinsOf(d.skinTags),
+            ladder: ladderOf(seasons, hidden), skins: skinsOf(d.skinTags),
             ...Object.fromEntries(NUMBERS.map(k => [k, num(d[k])])),
             rides: text(d.rides), emblems: text(d.emblems),
             nick: nick.some(Boolean) ? nick.join('|') : '',
@@ -86,6 +94,8 @@ export function listingFields(kind: string, category: string, details: Record<st
         const sup: Record<string, string> = {
             ...Object.fromEntries(SUPPORTING_CHOICES.map(k => [k, k === 'ownerCount' ? num(d[k]) : typeof d[k] === 'string' ? d[k].trim() : ''])),
             ...Object.fromEntries(SUPPORTING_TEXT.map(k => [k, text(d[k])])),
+            // 특징 태그 can only contradict: a seller's own words, never enough to call two posts the same.
+            tags: list(d.featureTags),
         };
         return { m: 'acct', d: filled(dist), s: filled(sup) };
     }
@@ -95,8 +105,10 @@ export function listingFields(kind: string, category: string, details: Record<st
     for (const [k, v] of Object.entries(d)) {
         // The wanted side of 교환 describes another listing, so it never decides or contradicts.
         if (k === 'currentOffer' || k.startsWith('wanted')) continue;
-        (keys.some(([id]) => id === k) ? key : rest)[k] = num(v);
+        (keys.some(([id]) => id === k) ? key : rest)[k] = typeof v === 'string' && v.trim().startsWith('[') ? list(v) : num(v);
     }
+    // The clan's own 클랜 래더 (WP70) supports the 클랜명 like the other clan fields.
+    if (category === 'clan') rest.clanLadder = ladderOf(clan);
     return { m: 'key', d: filled(key), s: filled(rest) };
 }
 

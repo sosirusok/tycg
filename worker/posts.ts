@@ -3,11 +3,13 @@ import { db, fail, currentUser, requireUser, requireActive, json, body, limit, t
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName, matchQuery,
+    CLAN_MIN_SEASON, FEATURE_TAG_MAX, TAG_TEXT, isClanTier, normalizeTag, validClanTags,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { AD_TEXT, BULK_MAX, BULK_TEXT, GRADES, MANAGER_PERKS, MATCH_TEXT, PERKS, PIN_TEXT, SITE_RULES, STATS_RANK, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
 import { ASK_LIMIT, planTrade } from './reviews';
 import { postTitleKey, sameText, type Match } from '../shared/listing';
+import { fullTiers, validHidden, type LadderHidden } from '../shared/ladder';
 import { assertNoBlockedLinks, shownCards, unfurlOnSave } from './unfurl';
 import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '../shared/richtext';
 import { favoritesNotify, notifyStatement } from './notifications';
@@ -56,6 +58,13 @@ export async function latestSeason() {
     const v = Number(await setting('latest_season'));
     return Number.isInteger(v) && v >= LATEST_SEASON && v <= 200 ? v : LATEST_SEASON;
 }
+// 클랜 래더 (WP70): the first clan-ladder season, a manager setting (sys:clan_min_season, default 6).
+// clanMinFrom reads a stored value (the site config reads it with its other settings).
+export function clanMinFrom(raw: string | null | undefined) {
+    const v = Number(raw);
+    return Number.isInteger(v) && v >= 1 && v <= 200 ? v : CLAN_MIN_SEASON;
+}
+export async function clanMinSeason() { return clanMinFrom(await setting('sys:clan_min_season')); }
 
 // One post also carries the author's '최근 접속' for the detail page's author box (lists leave it out);
 // GET /posts/:id adds the trade counts (tradeStats).
@@ -102,16 +111,31 @@ const DEAL_ANSWER_MS = 7 * 86400000;
 export async function decorate(rows: any[], viewer?: Viewer, full = false) {
     if (!rows.length) return [];
     const ids = JSON.stringify(rows.map(p => p.id));
+    // Each side table is read only for the posts that can have rows there (WP70: list reads stay within
+    // the WP42 budget as more tables join): wanted seasons and the clan ladder an exchange wants (교환),
+    // 시즌 비공개 (판매·교환 계정), the clan's own ladder (클랜), struck prices (판매), 찜 (a signed-in viewer).
     // 완료 거래가 (WP51): one read of trades by post_id (unique) for the completed posts on the page only.
+    const idsOf = (test: (p: any) => boolean) => rows.filter(test).map(p => p.id);
+    const exchangeIds = idsOf(p => p.kind === 'exchange'), hiddenIds = idsOf(p => (p.kind === 'sell' || p.kind === 'exchange') && p.category === 'account');
+    const clanIds = idsOf(p => p.category === 'clan'), sellIds = idsOf(p => p.kind === 'sell');
     const closedIds = rows.filter(p => p.status === 'closed').map(p => p.id);
-    const [tags, wantedTags, favs, histories, deals] = await db().batch([
+    const inList = (list: number[]) => JSON.stringify(list);
+    const planned: (D1PreparedStatement | null)[] = [
         db().prepare('SELECT post_id,tier,season FROM post_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
-        db().prepare('SELECT post_id,tier,season FROM post_wanted_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(ids),
-        db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(viewer?.id || '', ids),
-        db().prepare('SELECT post_id,price,changed_at FROM post_price_history WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id').bind(ids),
-        ...closedIds.length ? [db().prepare('SELECT post_id,price,seller_id,buyer_id,created_at,(confirmed_at IS NOT NULL OR author_id IS NULL) AS confirmed FROM trades WHERE post_id IN (SELECT value FROM json_each(?)) AND removed_at IS NULL')
-            .bind(JSON.stringify(closedIds))] : [],
-    ]);
+        exchangeIds.length ? db().prepare('SELECT post_id,tier,season FROM post_wanted_seasons WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY season DESC').bind(inList(exchangeIds)) : null,
+        // 시즌 비공개 (WP68): read by the primary key (post_id, tier); most pages have none.
+        hiddenIds.length ? db().prepare('SELECT post_id,tier,count FROM post_ladder_hidden WHERE post_id IN (SELECT value FROM json_each(?))').bind(inList(hiddenIds)) : null,
+        // 클랜 래더 (WP70): the clan's own seasons (w 0) and the ones a 교환 wants (w 1), in one read.
+        clanIds.length || exchangeIds.length ? db().prepare(`SELECT post_id,tier,season,0 AS w FROM post_clan_seasons WHERE post_id IN (SELECT value FROM json_each(?1))
+            UNION ALL SELECT post_id,tier,season,1 AS w FROM post_wanted_clan_seasons WHERE post_id IN (SELECT value FROM json_each(?2)) ORDER BY season DESC`).bind(inList(clanIds), inList(exchangeIds)) : null,
+        viewer ? db().prepare('SELECT post_id FROM favorites WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))').bind(viewer.id, ids) : null,
+        sellIds.length ? db().prepare('SELECT post_id,price,changed_at FROM post_price_history WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id').bind(inList(sellIds)) : null,
+        closedIds.length ? db().prepare('SELECT post_id,price,seller_id,buyer_id,created_at,(confirmed_at IS NOT NULL OR author_id IS NULL) AS confirmed FROM trades WHERE post_id IN (SELECT value FROM json_each(?)) AND removed_at IS NULL')
+            .bind(inList(closedIds)) : null,
+    ];
+    const got = await db().batch(planned.filter((x): x is D1PreparedStatement => !!x));
+    let at = 0;
+    const [tags, wantedTags, hiddenRows, clanRows, favs, histories, deals] = planned.map(x => x ? got[at++] : { results: [] as any[] });
     const now = Date.now();
     return rows.map(row => {
         const p = withMember(row, 'author_');
@@ -172,6 +196,9 @@ export async function decorate(rows: any[], viewer?: Viewer, full = false) {
             details: parse(p.details, {}), images: full ? images : images.slice(0, 1), photo_count: images.length,
             tags: tags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
             wanted_tags: wantedTags.results.filter((t: any) => t.post_id === p.id).map((t: any) => ({ tier: t.tier, season: t.season })),
+            ladder_hidden: Object.fromEntries(hiddenRows.results.filter((h: any) => h.post_id === p.id).map((h: any) => [h.tier, h.count])),
+            clan_tags: clanRows.results.filter((t: any) => t.post_id === p.id && !t.w).map((t: any) => ({ tier: t.tier, season: t.season })),
+            wanted_clan_tags: clanRows.results.filter((t: any) => t.post_id === p.id && t.w).map((t: any) => ({ tier: t.tier, season: t.season })),
             favorite: favs.results.some((f: any) => f.post_id === p.id),
             price_history: p.kind === 'sell' ? shownPriceHistory(histories.results.filter((h: any) => h.post_id === p.id).map((h: any) => ({ price: h.price, changed_at: h.changed_at })), p.price) : [],
             featured,
@@ -296,6 +323,30 @@ export function tierSearch(q: string, latest: number): { tier: string; season: n
     return season >= tier.min && season <= latest ? { tier: tier.id, season } : null;
 }
 
+// 시즌 비공개 (WP68) refusals.
+export const HIDDEN_ERROR = '시즌 비공개: 티어와 개수(1~99개)를 확인해 주세요.';
+export const HIDDEN_SIDE_ERROR = '시즌 비공개는 판매·교환 계정 글에만 넣을 수 있습니다.';
+// 클랜 래더 and 특징 태그 (WP70) refusals.
+export const CLAN_LADDER_ERROR = '클랜 래더: 티어와 시즌을 확인해 주세요.';
+export const CLAN_TIER_ERROR = '현재 클랜 티어를 확인해 주세요.';
+const TAG_ERROR = TAG_TEXT.invalid, TAG_MAX_ERROR = TAG_TEXT.max, TAG_SIDE_ERROR = TAG_TEXT.side;
+
+// details.featureTags as the editor sends it (a JSON list, or a list): normalized, without repeats.
+// null: nothing sent.
+function readTags(raw: unknown): string[] | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const list = typeof raw === 'string' ? parse(raw, null) : raw;
+    if (!Array.isArray(list)) fail(400, TAG_ERROR);
+    const tags: string[] = [];
+    for (const item of list) {
+        const tag = normalizeTag(item);
+        if (!tag) fail(400, TAG_ERROR);
+        if (!tags.includes(tag)) tags.push(tag);
+    }
+    if (tags.length > FEATURE_TAG_MAX) fail(400, TAG_MAX_ERROR);
+    return tags;
+}
+
 async function validatePost(b: any, u: User, existing?: any) {
     const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '내용');
     if (!TRADE_KINDS.includes(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
@@ -309,6 +360,34 @@ async function validatePost(b: any, u: User, existing?: any) {
     const wantedRaw = b.wantedTags ?? [];
     if (!validTags(wantedRaw, latest)) fail(400, '원하는 래더의 티어와 시즌을 확인해 주세요.');
     const wantedTags = b.kind === 'exchange' && b.details?.wantedCategory === 'account' ? uniqueTags(wantedRaw) : [];
+    // 시즌 비공개 (WP68): {tier: count} on 판매 and the offered side of 교환, account posts only. An edit that
+    // leaves it out (a page from before it) keeps the post's rows while the post can still hold them.
+    const hiddenAllowed = (b.kind === 'sell' || b.kind === 'exchange') && category === 'account';
+    let ladderHidden: LadderHidden = {};
+    if (b.ladderHidden !== undefined && b.ladderHidden !== null) {
+        const checked = validHidden(b.ladderHidden);
+        if (!checked) fail(400, HIDDEN_ERROR);
+        if (Object.keys(checked).length && !hiddenAllowed) fail(400, HIDDEN_SIDE_ERROR);
+        ladderHidden = checked;
+    } else if (existing && hiddenAllowed) {
+        const kept = await db().prepare('SELECT tier,count FROM post_ladder_hidden WHERE post_id=?').bind(existing.id).all<{ tier: string; count: number }>();
+        ladderHidden = Object.fromEntries(kept.results.map(r => [r.tier, r.count]));
+    }
+    // 클랜 래더 (WP70): the clan's own seasons on clan posts (판매, 구매 and the offered side of 교환), and the clan
+    // ladder a 교환 wants when it asks for a clan. Like 시즌 비공개, an edit from a page without the field keeps
+    // the post's rows while the post can still hold them.
+    const clanMin = await clanMinSeason();
+    const clanAllowed = category === 'clan', wantedClanAllowed = b.kind === 'exchange' && b.details?.wantedCategory === 'clan';
+    const clanSide = async (raw: unknown, allowed: boolean, table: string) => {
+        if (raw === undefined || raw === null) {
+            if (!existing || !allowed) return [];
+            return (await db().prepare(`SELECT tier,season FROM ${table} WHERE post_id=? ORDER BY season DESC`).bind(existing.id).all<SeasonTag>()).results;
+        }
+        if (!validClanTags(raw, latest, clanMin)) fail(400, CLAN_LADDER_ERROR);
+        return allowed ? uniqueTags(raw) : [];
+    };
+    const clanTags = await clanSide(b.clanTags, clanAllowed, 'post_clan_seasons');
+    const wantedClanTags = await clanSide(b.wantedClanTags, wantedClanAllowed, 'post_wanted_clan_seasons');
     // Price meaning is determined by the trade kind, never by a stale form's mode.
     const price = b.kind === 'exchange' ? null : amount(b.price);
     if (b.kind === 'sell' && price !== null && price < 1000) fail(400, '즉거가는 1,000원 이상입니다.');
@@ -342,6 +421,18 @@ async function validatePost(b: any, u: User, existing?: any) {
     }
     if (category === 'account' && b.kind === 'buy') validateBuyerDetails(details);
     if (b.kind === 'exchange' && details.wantedCategory === 'account') validateBuyerDetails(details, 'wanted');
+    // 현재 클랜 티어 (WP70, one choice, optional): the clan's tier on clan posts, the wanted clan's on 교환.
+    for (const [key, allowed] of [['clanTier', clanAllowed], ['wantedClanTier', wantedClanAllowed]] as const) {
+        const v = b.details?.[key];
+        if (v === undefined || v === null || v === '') continue;
+        if (!isClanTier(v)) fail(400, CLAN_TIER_ERROR);
+        if (allowed) details[key] = v;
+    }
+    // 특징 태그 (WP70): up to 10 on 판매 and the offered side of 교환, account and clan posts.
+    const tagsAllowed = (b.kind === 'sell' || b.kind === 'exchange') && (category === 'account' || category === 'clan');
+    const featureTagList = readTags(b.details?.featureTags) ?? [];
+    if (featureTagList.length && !tagsAllowed) fail(400, TAG_SIDE_ERROR);
+    if (featureTagList.length) details.featureTags = JSON.stringify(featureTagList);
     // Runs after the range checks above so a bounded field reports its own range.
     for (const f of fields) {
         if (f.type === 'number' && details[f.id] && (!/^\d+$/.test(details[f.id]) || Number(details[f.id]) > 1000000000)) fail(400, `${f.label}: 숫자로 입력해 주세요.`);
@@ -389,7 +480,7 @@ async function validatePost(b: any, u: User, existing?: any) {
         if (!checked.ok) fail(400, STYLE_ERROR);
         bodyStyle = checked.style ? JSON.stringify(checked.style) : '';
     }
-    return { linkPreview: linkPreview ? 1 : 0, bodyStyle, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
+    return { linkPreview: linkPreview ? 1 : 0, bodyStyle, thumb: thumb ?? null, kind: b.kind, title, content, category, tags, wantedTags, ladderHidden, clanTags, wantedClanTags, featureTags: featureTagList, price, mode, details: JSON.stringify(details), images: JSON.stringify(images), accepts: b.kind === 'sell' && (b.accepts_offers || mode === 'offer') ? 1 : 0, uploads };
 }
 
 // The filters every list shares: the manager's hidden posts, members under 이용 정지 (boards, search,
@@ -433,18 +524,52 @@ export function qClause(word: string, wordNs: string, skins: string | null, ladd
 }
 // The board search's bound form: q is bound 4 times, the skins twice, then the ladder.
 export const BOARD_Q = { word: 'lower(?)', wordNs: "lower(replace(?,' ',''))", skins: '?' };
-export const ladderSql = (season: boolean) => `p.id IN (SELECT post_id FROM post_seasons WHERE tier=?${season ? ' AND season=?' : ''})`;
+// A bare tier word ('마스터', '다야': every season of the tier) also finds 시즌 비공개 emblems of that tier
+// (WP68), so the tier is bound twice then.
+export const ladderSql = (season: boolean) => season ? 'p.id IN (SELECT post_id FROM post_seasons WHERE tier=? AND season=?)'
+    : '(p.id IN (SELECT post_id FROM post_seasons WHERE tier=?) OR p.id IN (SELECT post_id FROM post_ladder_hidden WHERE tier=?))';
 // The search word as the board reads it (trimmed, at most 100 characters).
 export const searchWord = (raw: string | null | undefined) => (raw || '').trim().slice(0, 100);
 
 // Whether a query needs the latest season (a ladder shorthand such as '현플', or season tags).
-export const needsSeason = (s: URLSearchParams) => TIER_SHORTHAND.test(searchWord(s.get('q'))) || !!s.get('tags') || !!s.get('wantedTags');
+export const needsSeason = (s: URLSearchParams) => TIER_SHORTHAND.test(searchWord(s.get('q'))) || !!s.get('tags') || !!s.get('wantedTags') || !!s.get('clanTags');
+
+// 검색 (WP70): a word of 3 or more characters (also without its spaces) is looked up in posts_fts (0061,
+// trigram), so a search reads the posts that hold it instead of every post: the title and body as typed,
+// the facts (every detail value and the author's nickname) without spaces, and the skins the word names
+// ('악몽의 주인' finds 악몽주인). Shorter words keep the LIKE search (qClause).
+export const FTS_MAX = 1000;
+const chars = (v: string) => [...v].length;
+export function ftsMatch(q: string): string | null {
+    const word = searchWord(q), squashed = word.replace(/ /g, '');
+    if (chars(word) < 3 || chars(squashed) < 3) return null;
+    const phrase = (v: string) => '"' + v.replace(/"/g, '""') + '"';
+    const facts = [squashed, ...skinsForWord(word).map(v => v.replace(/ /g, '')).filter(v => chars(v) >= 3)];
+    return [`{title content} : ${phrase(word)}`, ...[...new Set(facts)].map(v => `facts : ${phrase(v)}`)].join(' OR ');
+}
+// The ids of the posts holding the word, newest first; null when the word takes the LIKE search, or when
+// more than FTS_MAX posts hold it (a common word: the LIKE search over the board's order stops early).
+export async function ftsIds(q: string): Promise<number[] | null> {
+    const match = ftsMatch(q);
+    if (!match) return null;
+    try {
+        const r = await db().prepare('SELECT rowid AS id FROM posts_fts WHERE posts_fts MATCH ? ORDER BY rowid DESC LIMIT ?').bind(match, FTS_MAX + 1).all<{ id: number }>();
+        return r.results.length > FTS_MAX ? null : r.results.map(x => x.id);
+    } catch (e) {
+        console.error('posts_fts search failed', e instanceof Error ? e.message : 'unknown');
+        return null;
+    }
+}
+// The ladder a whole word names, as ids (the FTS form of ladderSql).
+const ladderIds = (season: boolean) => season ? 'SELECT post_id FROM post_seasons WHERE tier=? AND season=?'
+    : 'SELECT post_id FROM post_seasons WHERE tier=? UNION ALL SELECT post_id FROM post_ladder_hidden WHERE tier=?';
 
 // Every filter of a board query (WP54: shared by the board list and the 조건 알림 cron): the shared
 // base filters (baseFilters, with the viewer), the tab, category and state, the search word and every
 // field filter. Not here: scope (찜, 최근 본 글), 내 글 'stale', the 30-day board window and the order.
 // A bad value throws 400 as the board always did. latest: the latest season (needsSeason).
-export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'> | null, latest: number, now: number, author: string | null = null) {
+// fts: the ids ftsIds found for the search word (listPosts); without them the word takes the LIKE search.
+export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'> | null, latest: number, now: number, author: string | null = null, fts: number[] | null = null) {
     const { where, values } = baseFilters(u as User | null, author, now) as { where: string[]; values: any[] };
     for (const [param, col, allowed] of [['kind', 'kind', TRADE_KINDS], ['category', 'category', CATEGORIES.map(c => c.id)], ['status', 'status', ['open', 'closed']]] as [string, string, string[]][]) {
         const v = s.get(param);
@@ -463,10 +588,16 @@ export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'>
         const skins = skinsForWord(q);
         // A whole search that names a ladder ('28챌', '현플', '다야') also finds posts with that ladder record.
         const ladder = tierSearch(q, latest);
-        where.push(qClause(BOARD_Q.word, BOARD_Q.wordNs, skins.length ? BOARD_Q.skins : null, ladder ? ladderSql(ladder.season !== null) : null));
-        values.push(q, q, q, q);
-        if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
-        if (ladder) values.push(ladder.tier, ...ladder.season === null ? [] : [ladder.season]);
+        if (fts) {
+            // The posts posts_fts found (the skins the word names are in its facts) and the named ladder, by id.
+            where.push(`p.id IN (SELECT value FROM json_each(?)${ladder ? ' UNION ALL ' + ladderIds(ladder.season !== null) : ''})`);
+            values.push(JSON.stringify(fts));
+        } else {
+            where.push(qClause(BOARD_Q.word, BOARD_Q.wordNs, skins.length ? BOARD_Q.skins : null, ladder ? ladderSql(ladder.season !== null) : null));
+            values.push(q, q, q, q);
+            if (skins.length) values.push(JSON.stringify(skins), JSON.stringify(skins));
+        }
+        if (ladder) values.push(ladder.tier, ...ladder.season === null ? [ladder.tier] : [ladder.season]);
     }
     for (const [key, op] of [['min', '>='], ['max', '<=']]) {
         const n = s.get(key);
@@ -588,11 +719,44 @@ export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'>
         if (!raw) continue;
         const tags = parse(raw, null);
         if (!validTags(tags, latest)) fail(400, '검색 시즌을 확인해 주세요.');
-        const unique = uniqueTags(tags);
+        const unique = uniqueTags(tags), all = param === 'tags' && s.get('match') === 'all';
+        if (!unique.length) continue;
+        // 시즌 비공개 (WP68): with '하나라도 맞으면', a filter that covers every season of a tier ('모든 시즌
+        // 마스터') also finds hidden emblems of that tier; specific seasons never do (their season is
+        // unknown), and '모두 포함' ignores them.
+        const full = param === 'tags' && !all ? fullTiers(unique, latest) : [];
+        where.push(full.length ? `(${seasonFilter(table, unique, false)} OR p.id IN (SELECT post_id FROM post_ladder_hidden WHERE tier IN (SELECT value FROM json_each(?))))` : seasonFilter(table, unique, all));
+        values.push(JSON.stringify(unique), ...full.length ? [JSON.stringify(full)] : []);
+    }
+    // 클랜 래더 (WP70): any (match=all: every) chosen clan season; seasons before the first clan-ladder
+    // season are let through and simply find nothing.
+    const clanRaw = s.get('clanTags');
+    if (clanRaw) {
+        const clanTags = parse(clanRaw, null);
+        if (!validClanTags(clanTags, latest, 1)) fail(400, '검색 시즌을 확인해 주세요.');
+        const unique = uniqueTags(clanTags);
         if (unique.length) {
-            where.push(seasonFilter(table, unique, param === 'tags' && s.get('match') === 'all'));
+            where.push(seasonFilter('post_clan_seasons', unique, s.get('match') === 'all'));
             values.push(JSON.stringify(unique));
         }
+    }
+    const clanTier = s.get('clanTier');
+    if (clanTier) {
+        if (!isClanTier(clanTier)) fail(400, '클랜 티어 검색 조건을 확인해 주세요.');
+        where.push("json_extract(p.details,'$.clanTier')=?");
+        values.push(clanTier);
+    }
+    for (const [key, path, op] of [['clanLevel', 'clanLevel', '>='], ['clanMembersMin', 'clanMembers', '>='], ['clanMembersMax', 'clanMembers', '<=']] as const) {
+        const n = queryInteger(key, 0, 9999);
+        if (n !== null) { where.push(`CAST(json_extract(p.details,'$.${path}') AS INTEGER)${op}?`); values.push(n); }
+    }
+    // 특징 태그 (WP70): posts with the tag ('#불새상류'), through post_tags.
+    const tagRaw = s.get('tag');
+    if (tagRaw) {
+        const tag = normalizeTag(tagRaw);
+        if (!tag) fail(400, '태그 검색 조건을 확인해 주세요.');
+        where.push('p.id IN (SELECT post_id FROM post_tags WHERE tag=?)');
+        values.push(tag);
     }
     const badge = s.get('badge');
     if (badge && ['proxy', 'identity', 'credit'].includes(badge)) {
@@ -606,7 +770,15 @@ async function listPosts(req: Request, url: URL) {
     const now = Date.now(), backfill = bumpBackfill(now);
     const u = await currentUser(req), s = url.searchParams;
     const author = s.get('author');
-    const { where, values, q } = buildPostFilter(s, u, needsSeason(s) ? await latestSeason() : LATEST_SEASON, now, author);
+    // 검색 (WP70): a word of 3 or more characters is looked up in posts_fts first (one read).
+    const word = searchWord(s.get('q'));
+    const fts = word ? await ftsIds(word) : null;
+    const { where, values, q } = buildPostFilter(s, u, needsSeason(s) ? await latestSeason() : LATEST_SEASON, now, author, fts);
+    // With those ids every read below goes by id: NOT INDEXED keeps the planner off the board indexes, whose
+    // scan in 최신순 would read every post of the board for a rare word. Only the LIKE search joins users
+    // for the count (it matches nicknames; posts_fts holds them in its facts).
+    const from = fts ? ' FROM posts p NOT INDEXED ' : ' FROM posts p ';
+    const byId = (sql: string) => fts ? sql.replace(' FROM posts p ', from) : sql;
     const scope = s.get('scope');
     if (scope === 'favorites' || scope === 'recent') {
         if (!u) fail(401, '로그인이 필요합니다.');
@@ -638,7 +810,8 @@ async function listPosts(req: Request, url: URL) {
     const clause = ' WHERE ' + where.join(' AND '), page = Math.max(1, Math.min(10000, Math.floor(Number(s.get('page')) || 1)));
     // 내 글 (counts=1) also reads each row's 자동 끌올 state (WP52), one primary-key lookup per row.
     const ownCounts = !!u && author === u.id && !scope && s.get('counts') === '1';
-    const select = (ownCounts ? ownSelect : postSelect).replace(' FROM posts p ', `${pinRows ? `,${pinnedSql()} AS pinned` : ''} FROM posts p `);
+    // A search with posts_fts ids reads by id here too (byId, WP70).
+    const select = byId((ownCounts ? ownSelect : postSelect).replace(' FROM posts p ', `${pinRows ? `,${pinnedSql()} AS pinned` : ''} FROM posts p `));
     const listSql = popular
         ? `SELECT * FROM (${select}${clause} ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${POPULAR_CANDIDATES}) c ORDER BY (SELECT COUNT(*) FROM favorites f WHERE f.post_id=c.id) DESC,c.view_count DESC,c.bumped_at DESC,c.id DESC LIMIT ? OFFSET ?`
         : `${select}${clause} ORDER BY ${order},p.id DESC LIMIT ? OFFSET ?`;
@@ -657,9 +830,9 @@ async function listPosts(req: Request, url: URL) {
     const ad = adWhere(now, 2), adBase = withAds ? adFilters(where, values) : null;
     const r = (await db().batch([
         ...backfill,
-        db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM posts p${q ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
+        db().prepare(`SELECT COUNT(*) AS count FROM (SELECT 1${from.trimEnd()}${q && !fts ? ' JOIN users u ON u.id=p.author_id' : ''}${clause}${countCap})`).bind(...values),
         db().prepare(listSql).bind(...values, ...(scope === 'recent' ? [u!.id] : []), popular && page > POPULAR_PAGES ? 0 : size, (page - 1) * size),
-        ...withCounts ? [db().prepare('SELECT p.kind,COUNT(*) AS count FROM posts p JOIN users u ON u.id=p.author_id' + clause + ' GROUP BY p.kind').bind(...values)] : [],
+        ...withCounts ? [db().prepare(`SELECT p.kind,COUNT(*) AS count${from.trimEnd()}${fts ? '' : ' JOIN users u ON u.id=p.author_id'}${clause} GROUP BY p.kind`).bind(...values)] : [],
         ...adBase ? [db().prepare(`${adSelect()} WHERE ${ad.sql} AND ${adBase.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...ad.args, ...adBase.values)] : [],
     ])).slice(backfill.length);
     const counts = withCounts ? Object.fromEntries(TRADE_KINDS.map(k => [k, (r[2].results as any[]).find(row => row.kind === k)?.count || 0])) : undefined;
@@ -677,6 +850,28 @@ async function listPosts(req: Request, url: URL) {
     // post and started a chat from it. The profile lists do not ask, so they skip these reads.
     if (ownCounts) await addOwnCounts(posts);
     return json({ posts, total, page, size, ...total > COUNT_CAP ? { capped: true } : {}, ...counts ? { counts } : {}, ...adCards ? { ads: adCards } : {} });
+}
+
+// GET /api/tags (WP70): the board's '태그' filter. The manager's pinned tags (sys:pinned_tags, default
+// '불새상류') first, then the 12 most used tags of the last 30 days, counted over the newest 300 tag rows
+// (one read of at most 301 rows, kept in this isolate for 10 minutes).
+export const DEFAULT_PINNED_TAGS = '불새상류';
+const TAG_CACHE_MS = 10 * 60000;
+let tagCache: { at: number; tags: string[] } | null = null;
+export async function pinnedTags() {
+    const raw = await setting('sys:pinned_tags');
+    return [...new Set((raw ?? DEFAULT_PINNED_TAGS).split(',').map(normalizeTag).filter((t): t is string => !!t))].slice(0, FEATURE_TAG_MAX);
+}
+export async function tagsHandler() {
+    const now = Date.now();
+    if (!tagCache || now - tagCache.at > TAG_CACHE_MS) {
+        // The first post of the last 30 days through posts_created (1 row); post ids grow with time.
+        const r = await db().prepare(`SELECT tag,COUNT(*) AS n FROM (SELECT tag FROM post_tags WHERE post_id>=(SELECT id FROM posts WHERE created_at>? ORDER BY created_at LIMIT 1)
+            ORDER BY post_id DESC LIMIT 300) GROUP BY tag ORDER BY n DESC,tag LIMIT 12`).bind(now - 30 * DAY).all<{ tag: string }>();
+        tagCache = { at: now, tags: r.results.map(x => x.tag) };
+    }
+    const pinned = await pinnedTags();
+    return json({ pinned, popular: tagCache.tags.filter(t => !pinned.includes(t)) });
 }
 
 // 찜한 글: a sale whose 즉거가 is below the price the member saw when saving it carries price_drop
@@ -1188,6 +1383,18 @@ async function matchesOf(u: User, own: any, url: URL) {
 }
 
 type Valid = Awaited<ReturnType<typeof validatePost>>;
+
+// 클랜 래더 and 특징 태그 (WP70) rows of a post, one statement per table (a JSON list each), for the post
+// that `target` selects (bind targetArgs). Nothing for an empty list.
+function extraRows(v: Pick<Valid, 'clanTags' | 'wantedClanTags' | 'featureTags'>, target: string, targetArgs: unknown[]) {
+    const seasons = (table: string, list: SeasonTag[]) => list.length ? [db().prepare(`INSERT INTO ${table}(post_id,tier,season) SELECT n.id,json_extract(j.value,'$.tier'),json_extract(j.value,'$.season')
+        FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...targetArgs, JSON.stringify(list))] : [];
+    return [
+        ...seasons('post_clan_seasons', v.clanTags),
+        ...seasons('post_wanted_clan_seasons', v.wantedClanTags),
+        ...v.featureTags.length ? [db().prepare(`INSERT INTO post_tags(post_id,tag) SELECT n.id,j.value FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...targetArgs, JSON.stringify(v.featureTags))] : [],
+    ];
+}
 const isWant = (kind: string) => kind === 'buy' || kind === 'proxy_request';
 
 // 409 for a new post (or an edit) that is the same listing as one of the author's open posts: which
@@ -1284,6 +1491,8 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
                 relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, perks.adSlots ? now : null, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
         ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
         ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
+        ...Object.entries(v.ladderHidden).map(([tier, count]) => db().prepare(`INSERT INTO post_ladder_hidden(post_id,tier,count) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(tier, count, ...newArgs)),
+        ...extraRows(v, newPost, newArgs),
         db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
         ...strict ? [
             // A free new post: placed exactly 1 hour ahead (only a non-relist can be).
@@ -1353,6 +1562,10 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
         ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
         db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
         ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
+        db().prepare('DELETE FROM post_ladder_hidden WHERE post_id=?').bind(existing.id),
+        ...Object.entries(v.ladderHidden).map(([tier, count]) => db().prepare('INSERT INTO post_ladder_hidden(post_id,tier,count) VALUES(?,?,?)').bind(existing.id, tier, count)),
+        ...['post_clan_seasons', 'post_wanted_clan_seasons', 'post_tags'].map(table => db().prepare(`DELETE FROM ${table} WHERE post_id=?`).bind(existing.id)),
+        ...extraRows(v, '(SELECT ? AS id)', [existing.id]),
         db().prepare('DELETE FROM post_images WHERE post_id=?').bind(existing.id),
         db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT ?,value FROM json_each(?)').bind(existing.id, v.images),
         printUpsert(self, [existing.id], existing.author_id, print),

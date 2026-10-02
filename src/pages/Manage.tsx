@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
+import { CLAN_MIN_SEASON, REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, REPORT_TEXT, applicationTitle, kstDateTime, type Application, type Earn } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -398,11 +398,14 @@ function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday
     const [notice, setNotice] = useState(config.paymentNotice), [season, setSeason] = useState(String(config.latestSeason)), [busy, setBusy] = useState(false);
     // 수익 홍보 (WP66): the amounts and the 사례 the Guide, the apply modal and the '중개/가측' tab show.
     const [earn, setEarn] = useState<Earn>(config.earn || EARN_DEFAULTS);
-    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); setEarn(config.earn || EARN_DEFAULTS); }, [config]);
+    // 클랜 래더 첫 시즌 and 고정 태그 (WP70); the pinned tags come from GET /api/tags.
+    const [clanMin, setClanMin] = useState(String(config.clanMinSeason ?? CLAN_MIN_SEASON)), [pinned, setPinned] = useState<string | null>(null);
+    useEffect(() => { setNotice(config.paymentNotice); setSeason(String(config.latestSeason)); setEarn(config.earn || EARN_DEFAULTS); setClanMin(String(config.clanMinSeason ?? CLAN_MIN_SEASON)); }, [config]);
+    useEffect(() => { api<{ pinned: string[] }>('tags').then(d => setPinned(d.pinned.join(', '))).catch(() => setPinned('')); }, []);
     async function save(e: FormEvent) {
         e.preventDefault();
         setBusy(true);
-        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season), earn }); refreshConfig(); toast('저장 완료'); }
+        try { await api('manage/settings', 'PUT', { paymentNotice: notice, latestSeason: Number(season), earn, clanMinSeason: Number(clanMin), ...pinned !== null ? { pinnedTags: pinned } : {} }); refreshConfig(); toast('저장 완료'); }
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
@@ -413,6 +416,12 @@ function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday
         <label className="field"><span className="field-label">현재 래더 시즌</span>
             <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={32} max={200} value={season} onChange={e => setSeason(e.target.value)} /><span>시즌</span></div>
             <span className="field-hint">새 시즌 오픈 시 변경. 글쓰기, 검색 시즌 목록에 반영. 낮출 수 없음.</span></label>
+        <label className="field"><span className="field-label">클랜 래더 첫 시즌</span>
+            <div className="input-unit" style={{ maxWidth: 200 }}><input className="input" type="number" min={1} max={Number(season) || 200} value={clanMin} onChange={e => setClanMin(e.target.value)} /><span>시즌</span></div>
+            <span className="field-hint">클랜 래더 기록, 원하는 클랜 티어 시즌 목록의 시작</span></label>
+        <label className="field"><span className="field-label">고정 태그</span>
+            <input className="input" maxLength={200} value={pinned ?? ''} disabled={pinned === null} onChange={e => setPinned(e.target.value)} placeholder="예: 불새상류, 올스킨" />
+            <span className="field-hint">게시판 태그 필터 맨 앞에 표시. 쉼표로 구분, 10개까지</span></label>
         <fieldset className="field earn-settings"><legend className="field-label">{EARN_TEXT.title}</legend>
             <label className="field"><span className="field-label">중개 수익 예시 (월)</span><input className="input" maxLength={EARN_MAX} value={earn.broker} onChange={e => setEarn({ ...earn, broker: e.target.value })} placeholder={EARN_DEFAULTS.broker} /></label>
             <label className="field"><span className="field-label">가측 수익 예시 (월)</span><input className="input" maxLength={EARN_MAX} value={earn.appraise} onChange={e => setEarn({ ...earn, appraise: e.target.value })} placeholder={EARN_DEFAULTS.appraise} /></label>

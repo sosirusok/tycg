@@ -37,6 +37,60 @@
   /* Gloss and glow on the metals: a soft white highlight and a warm gold shadow. */
   --gold-gloss: rgba(255, 255, 255, 0.55);
   --gold-shadow: 0 6px 18px rgba(184, 144, 31, 0.28);
+  /* 래더 티어 색 (WP68): the owner's override of the one-brand-color rule, for ladder tier pills and tier
+     chips only. Each ink keeps 4.5:1 or more at every stop of its background; the line is a darker edge of
+     the same hue, so light pills stay visible on white. 골드, 실버 and 브론즈 are the WP66 grade-frame metals. */
+  --tier-champion-bg: linear-gradient(135deg, #f4a8da 0%, #ffffff 50%, #9ed8ff 100%);
+  --tier-champion-ink: #4a1d45;
+  --tier-champion-line: #c27bb0;
+  --tier-challenger-bg: linear-gradient(135deg, #ffe36e 0%, #9ed8ff 100%);
+  --tier-challenger-ink: #2b3240;
+  --tier-challenger-line: #c9a63a;
+  --tier-master-bg: linear-gradient(135deg, #15151e 0%, #5a2a8a 100%);
+  --tier-master-ink: #ffffff;
+  --tier-master-line: #15151e;
+  --tier-diamond-bg: linear-gradient(135deg, #1546c9 0%, #2272d0 100%);
+  --tier-diamond-ink: #ffffff;
+  --tier-diamond-line: #1240b5;
+  --tier-platinum-bg: linear-gradient(135deg, #e6eeec 0%, #a9c6c0 100%);
+  --tier-platinum-ink: #20312e;
+  --tier-platinum-line: #8daba4;
+  --tier-gold-bg: linear-gradient(135deg, #f7e7a1 0%, #e2c15a 50%, #c9a227 100%);
+  --tier-gold-ink: #3a2a00;
+  --tier-gold-line: #b8901f;
+  --tier-silver-bg: linear-gradient(135deg, #e9ecf1 0%, #a7aeb9 100%);
+  --tier-silver-ink: #262b33;
+  --tier-silver-line: #8e96a2;
+  --tier-bronze-bg: linear-gradient(135deg, #e7b98a 0%, #b87333 100%);
+  --tier-bronze-ink: #241100;
+  --tier-bronze-line: #9c5f27;
+  --tier-iron-bg: linear-gradient(135deg, #6e737b 0%, #474c54 100%);
+  --tier-iron-ink: #ffffff;
+  --tier-iron-line: #3b4047;
+  /* 클랜 래더 티어 색 (WP70): the clan name colors of the game (챔피언 red, 챌린저 pink, 다이아 cyan, 플래티넘
+     blue, 골드 yellow, 실버 gray, 브론즈 green), owner-approved like the tier colors. Pills: ink on bg ≥ 4.5:1;
+     text: the clan name on white ≥ 4.5:1. */
+  --clan-champion-bg: #d32f2f;
+  --clan-champion-ink: #ffffff;
+  --clan-champion-text: #c62828;
+  --clan-challenger-bg: #d81b60;
+  --clan-challenger-ink: #ffffff;
+  --clan-challenger-text: #c2185b;
+  --clan-diamond-bg: #26c6da;
+  --clan-diamond-ink: #04313a;
+  --clan-diamond-text: #007c89;
+  --clan-platinum-bg: #1565c0;
+  --clan-platinum-ink: #ffffff;
+  --clan-platinum-text: #1565c0;
+  --clan-gold-bg: #ffd54f;
+  --clan-gold-ink: #3a2a00;
+  --clan-gold-text: #8a6a00;
+  --clan-silver-bg: #616b78;
+  --clan-silver-ink: #ffffff;
+  --clan-silver-text: #5f6b7a;
+  --clan-bronze-bg: #2e7d32;
+  --clan-bronze-ink: #ffffff;
+  --clan-bronze-text: #2e7d32;
   /* Type scale */
   --fs-12: 12px;
   --fs-13: 13px;

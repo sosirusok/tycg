@@ -187,9 +187,10 @@ export async function followsList(req: Request) {
 // reachable (worker/match.ts): a post the subscriber may hear about (visible, not their own, no block
 // either way, its author not under 이용 정지, the 대리(진행) rule); aliases p and u.
 // A 키워드 or 게시판 알림 s (alias s) matches post p: its tab (or any tab), its category (or any) and the
-// board's search SQL with the stored word, skins and ladder.
+// board's search SQL with the stored word, skins and ladder (a bare tier word also finds 시즌 비공개
+// emblems of that tier, WP68, as the board's ladderSql does).
 const keywordMatch = () => `(s.alert_kind=p.kind OR s.alert_kind='') AND (s.alert_category='' OR s.alert_category=p.category)
-    AND ${qClause('s.alert_word', 's.alert_word_ns', 's.alert_skins', "(s.alert_tier!='' AND p.id IN (SELECT post_id FROM post_seasons WHERE tier=s.alert_tier AND (s.alert_season IS NULL OR season=s.alert_season)))")}`;
+    AND ${qClause('s.alert_word', 's.alert_word_ns', 's.alert_skins', "(s.alert_tier!='' AND (p.id IN (SELECT post_id FROM post_seasons WHERE tier=s.alert_tier AND (s.alert_season IS NULL OR season=s.alert_season)) OR (s.alert_season IS NULL AND p.id IN (SELECT post_id FROM post_ladder_hidden WHERE tier=s.alert_tier))))")}`;
 
 // Keyword and board text: '‘유루미’ 새 글', '판매 · 계정 새 글' or '판매 새 글'. Bind the two name maps.
 const KEYWORD_TEXT = "CASE WHEN s.alert_word='' THEN COALESCE(json_extract(?,'$.'||s.alert_kind),'')||CASE WHEN s.alert_category='' THEN '' ELSE ' · '||COALESCE(json_extract(?,'$.'||s.alert_category),s.alert_category) END||' 새 글' ELSE '‘'||s.name||'’ 새 글' END";

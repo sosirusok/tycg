@@ -3,7 +3,7 @@ import { Bell, BellRing, ChevronRight, Flag, Heart, MessageCircle, MoreHorizonta
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, closedLabel, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tagName, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, clanTierName, closedLabel, featureTags, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -21,6 +21,7 @@ import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoShee
 import { AD_TEXT, ALERT_TEXT, DROP_TEXT, MATCH_TEXT, PROVIDER_TEXT, gradeInfo, kstDateTime } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
 import { Comments } from '../components/Comments';
+import { ClanTierPill, FeatureTags, LadderTags, hasLadder, tierClass } from '../components/LadderTags';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
@@ -55,7 +56,20 @@ function specBlock(rows: Row[]) {
 function tagBlock(title: string, names: string[]) {
     return names.length ? [<h3 key={title + '-h'}>{title}</h3>, <div className="tags" key={title}>{names.map(s => <span className="tag tag-line" key={s}>{s}</span>)}</div>] : [];
 }
-const ladderNames = (tags: Post['tags']) => [...tags].sort((a, b) => b.season - a.season).map(tagName);
+// Ladders as one tier-colored pill per tier, highest first ('모든 시즌 챔피언', '마스터 18시즌 · 시즌 비공개 2', WP68);
+// clan: the clan tiers ('모든 시즌 클랜 챔피언', '클랜 골드 28~32시즌', WP70).
+function ladderBlock(title: string, tags: Post['tags'], hidden?: Post['ladder_hidden'], clan = false) {
+    return hasLadder(tags, hidden) ? [<h3 key={title + '-h'}>{title}</h3>, <LadderTags key={title} className="ladder-block" tags={tags} hidden={hidden} clan={clan} />] : [];
+}
+// 특징 태그 (WP70): '#불새상류' chips.
+function featureBlock(title: string, raw?: string) {
+    const tags = featureTags(raw);
+    return tags.length ? [<h3 key={title + '-h'}>{title}</h3>, <FeatureTags key={title} tags={tags} />] : [];
+}
+// 현재 클랜 티어 (WP70) as one pill in the clan color.
+function clanTierBlock(title: string, tier?: string) {
+    return tier && clanTierName(tier) ? [<h3 key={title + '-h'}>{title}</h3>, <div className="ladder-tags ladder-block" key={title}><ClanTierPill tier={tier} /></div>] : [];
+}
 
 function nicknameRange(d: Record<string, string>, prefix = '') {
     const min = d[prefix ? 'wantedNicknameCharsMin' : 'nicknameCharsMin'];
@@ -77,10 +91,29 @@ function offeredBlocks(post: Post): ReactNode[] {
             ...(['integrated', 'passwordChange', 'phoneChange', 'backupEmail'] as const).map(k => [ACCOUNT_CHOICES[k].label, d[k] ? choiceLabel(k, d[k]) : ''] as Row),
             ['레벨', num(d.level)], ['연구실', num(d.labLevel)], ['인간 스킨', num(d.humanSkins, '개')], ['좀비 스킨', num(d.zombieSkins, '개')], ['옷장', num(d.closet, '칸')],
         ]),
-        ...tagBlock('래더 기록', ladderNames(post.tags)),
+        ...ladderBlock('래더 기록', post.tags, post.ladder_hidden),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d.skinTags))),
         ...d.rareSkins ? [<h3 key="rare-h">기타 스킨</h3>, <p className="body-text" key="rare">{d.rareSkins}</p>] : [],
+        ...featureBlock('계정 특징 태그', d.featureTags),
     ];
+}
+
+// 클랜 (WP70): the clan's fields with the clan name in its 현재 클랜 티어 color (as in the game), the tier pill,
+// its 클랜 래더 (구매: the clan tiers wanted) and its 특징 태그.
+function clanBlocks(post: Post): ReactNode[] {
+    const d = post.details, tier = clanTierName(d.clanTier || '') ? d.clanTier : '';
+    return [
+        ...specBlock((DETAIL_FIELDS.clan || []).map(f => [f.label, f.id === 'clanName' && d.clanName && tier
+            ? <span className={'clan-name ' + tierClass(tier, true)}>{d.clanName}</span>
+            : f.type === 'number' ? num(d[f.id]) : d[f.id]] as Row)),
+        ...clanTierBlock('현재 클랜 티어', tier),
+        ...ladderBlock(post.kind === 'buy' ? '원하는 클랜 티어' : '클랜 래더 기록', post.clan_tags || [], undefined, true),
+        ...featureBlock('클랜 특징 태그', d.featureTags),
+    ];
+}
+// The clan a 교환 asks for: its 현재 클랜 티어 and clan ladder.
+function wantedClanBlocks(post: Post): ReactNode[] {
+    return [...clanTierBlock('현재 클랜 티어', post.details.wantedClanTier), ...ladderBlock('원하는 클랜 티어', post.wanted_clan_tags || [], undefined, true)];
 }
 
 // Buyer-side wishes (구매, and the wanted side of 교환 with the "wanted" prefix).
@@ -92,7 +125,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
             ['대주 수', num(d[key('maxOwners')], '대주 이하')], ['스킨 수 (팬텀)', d[key('phantomMin')] ? d[key('phantomMin')] + '% 이상' : ''], ['전적', d[key('recordPreference')]],
             ['닉 글자 수', nicknameRange(d, prefix)], ['닉 종류', nickTypesText(parseList(d.wantedNicknameTypes, NICK_TYPES))], ['닉 등급', ranks.length ? rankText(ranks) : ''],
         ]),
-        ...tagBlock('원하는 래더', ladderNames(prefix ? post.wanted_tags || [] : post.tags)),
+        ...ladderBlock('원하는 래더', prefix ? post.wanted_tags || [] : post.tags),
         ...tagBlock('우대 스킨', skinDisplay(skinTags(d[key('skinTags')]))),
     ];
 }
@@ -100,7 +133,7 @@ function wantedBlocks(post: Post, prefix: '' | 'wanted' = ''): ReactNode[] {
 function genericBlocks(post: Post, category: string): ReactNode[] {
     return [
         ...specBlock((DETAIL_FIELDS[category] || []).map(f => [f.label, f.type === 'number' ? num(post.details[f.id]) : post.details[f.id]] as Row)),
-        ...category === 'ladder' ? tagBlock('래더 시즌', post.tags.map(tagName)) : [],
+        ...category === 'ladder' ? ladderBlock('래더 시즌', post.tags) : [],
     ];
 }
 
@@ -261,14 +294,14 @@ export function Detail({ id }: { id: string }) {
     // The rows of each section are built first; a section without any is left out.
     let info: ReactNode[];
     if (post.kind === 'exchange') {
-        const offered = post.category === 'account' ? offeredBlocks(post) : genericBlocks(post, 'clan');
-        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : [];
+        const offered = post.category === 'account' ? offeredBlocks(post) : clanBlocks(post);
+        const wanted = exchangeWanted === 'account' ? wantedBlocks(post, 'wanted') : wantedClanBlocks(post);
         info = [
             ...offered.length ? [<h3 key="offered-h">내놓는 {categoryName(post.category)}</h3>, <Fragment key="offered">{offered}</Fragment>] : [],
             <h3 key="wanted-h">구하는 {categoryName(exchangeWanted)}</h3>,
             wanted.length ? <Fragment key="wanted">{wanted}</Fragment> : <p className="muted" key="wanted">따로 정한 조건 없음 · 내용 참고</p>,
         ];
-    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : genericBlocks(post, post.category);
+    } else info = post.category === 'account' ? (post.kind === 'buy' ? wantedBlocks(post) : offeredBlocks(post)) : post.category === 'clan' ? clanBlocks(post) : genericBlocks(post, post.category);
 
     // '찜 12' beside the heart (WP59): the button reads '찜하기 · 찜 12' (or '찜 해제 · 찜 12') to screen readers.
     const favs = post.fav_count || 0, favLabel = `${post.favorite ? '찜 해제' : '찜하기'} · 찜 ${favs}`;

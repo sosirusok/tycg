@@ -2,11 +2,12 @@ import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type React
 import { LoaderCircle, Lock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RECORD_PREFERENCES, TRADE_KINDS,
-    categoriesForKind, categoryName, choiceLabel, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, RECORD_PREFERENCES, TRADE_KINDS,
+    categoriesForKind, categoryName, choiceLabel, featureTags, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
     type DetailField, type Post, type SeasonTag, type TradeKind,
 } from '../../shared/market';
 import { SITE_RULES, kstDateTime, linkPreviewAllowed } from '../../shared/membership';
+import { validHidden, type LadderHidden } from '../../shared/ladder';
 import { findLinks } from '../../shared/links';
 import { encodeStyle, normalizeMarks, shiftOnEdit, styleRank, type Mark } from '../../shared/richtext';
 import { ApiError, api, dragsFiles, errorText, fileHash, imageFiles, lookupPhotos, makeThumb, pastesText, sendPhoto, UPLOAD_BUSY, type UsedIn } from '../lib/api';
@@ -16,7 +17,7 @@ import { CIcon, EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { kstClock as readyClock, walletNow, type Usage } from '../components/Wallet';
 import { SameListingSheet, type Dup } from '../components/SameListingSheet';
 import { PhotoGrid } from '../components/PhotoGrid';
-import { IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker } from '../components/Pickers';
+import { ClanTierPicker, IntegerInput, NickTypePicker, RankPicker, SeasonPicker, Segmented, SkinPicker, TagInput } from '../components/Pickers';
 
 // 글자 꾸미기 sheet (WP49), loaded when first opened.
 const StyleSheet = lazy(() => import('../components/StyleSheet'));
@@ -27,16 +28,21 @@ type Form = {
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
     wantedTags: SeasonTag[]; // ladders an exchange post wants in return
+    ladderHidden: LadderHidden; // 시즌 비공개 (WP68): 판매 and the offered side of 교환 only
+    clanTags: SeasonTag[]; // 클랜 래더 (WP70): the clan's own seasons on clan posts (구매: the wanted ones)
+    wantedClanTags: SeasonTag[]; // the clan ladder an exchange wants for a clan
     link_preview: boolean; // 링크 미리보기 (WP48), on by default; drafts carry it
     body_style: Mark[]; // 글자 꾸미기 (WP49): ranges over body, shifted as it is typed; drafts carry them
 };
 
-const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], link_preview: true, body_style: [] };
+const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', price: '', offer: '', accepts_offers: true, status: 'open', tags: [], details: {}, images: [], wantedTags: [], ladderHidden: {}, clanTags: [], wantedClanTags: [], link_preview: true, body_style: [] };
+// 시즌 비공개 goes with 판매 and the offered side of 교환, on account posts only (the server refuses it elsewhere).
+const holdsHidden = (f: Pick<Form, 'kind' | 'category'>) => (f.kind === 'sell' || f.kind === 'exchange') && f.category === 'account';
 
 function normalize(raw: Partial<Form>): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
     const cats = categoriesForKind(t.kind);
-    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [] };
+    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [], ladderHidden: validHidden(raw.ladderHidden) || {}, clanTags: raw.clanTags || [], wantedClanTags: raw.wantedClanTags || [] };
     form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
@@ -44,7 +50,7 @@ function normalize(raw: Partial<Form>): Form {
 
 function fromPost(p: Post): Form {
     const { currentOffer, ...details } = p.details;
-    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
+    return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], ladderHidden: p.ladder_hidden || {}, clanTags: p.clan_tags || [], wantedClanTags: p.wanted_clan_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
 function template(kind: TradeKind, category: string) {
@@ -129,11 +135,13 @@ function forKind(f: Form, kind: TradeKind): Form {
     const shared = category === f.category && ((f.kind === 'sell' && kind === 'exchange') || (f.kind === 'exchange' && kind === 'sell'));
     const details: Record<string, string> = shared ? Object.fromEntries(Object.entries(f.details).filter(([k]) => !k.startsWith('wanted'))) : {};
     if (kind === 'exchange') details.wantedCategory = 'account';
-    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], details };
+    return { ...f, kind, category, price: '', offer: '', tags: shared ? f.tags : [], wantedTags: [], ladderHidden: shared ? f.ladderHidden : {}, clanTags: shared ? f.clanTags : [], wantedClanTags: [], details };
 }
 function dropsInput(f: Form, next: Form) {
     return Object.entries(f.details).some(([k, v]) => k !== 'wantedCategory' && !!v && next.details[k] !== v)
-        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags);
+        || (f.tags.length > 0 && next.tags !== f.tags) || (f.wantedTags.length > 0 && next.wantedTags !== f.wantedTags)
+        || (Object.keys(f.ladderHidden).length > 0 && next.ladderHidden !== f.ladderHidden)
+        || (f.clanTags.length > 0 && next.clanTags !== f.clanTags) || (f.wantedClanTags.length > 0 && next.wantedClanTags !== f.wantedClanTags);
 }
 
 // '15:40' on the Korean clock.
@@ -398,7 +406,7 @@ export default function Editor({ id }: { id?: string }) {
     function changeCategory(category: string) {
         if (category === form.category) return;
         const keep = form.kind === 'exchange' ? Object.fromEntries(Object.entries(form.details).filter(([k]) => k.startsWith('wanted'))) : {};
-        patch({ category, tags: [], details: keep });
+        patch({ category, tags: [], ladderHidden: {}, clanTags: [], details: keep });
     }
 
     // Photos from the picker, a paste or a drop, within the cap; one batch at a time, 3 uploads at
@@ -494,7 +502,8 @@ export default function Editor({ id }: { id?: string }) {
             // edit keeps the thumbnail it had while the 대표 is the same.
             const cover = form.images[0], had = post.current;
             const thumb = cover && (!had || had.images[0] !== cover || !had.thumb) ? await makeThumb(cover) : null;
-            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
+            const payload = { kind: form.kind, category: form.category, title: form.title, body: form.body, price, accepts_offers: form.kind === 'sell' && (price === null || form.accepts_offers), tags: form.tags, wantedTags: form.kind === 'exchange' ? form.wantedTags : [], ladderHidden: holdsHidden(form) ? form.ladderHidden : {},
+                clanTags: form.category === 'clan' ? form.clanTags : [], wantedClanTags: form.kind === 'exchange' && form.details.wantedCategory === 'clan' ? form.wantedClanTags : [], details, images: form.images, link_preview: form.link_preview, body_style: encodeStyle(form.body, normalizeMarks(form.body, form.body_style, rank)) ?? '', ...thumb ? { thumb } : {} };
             done.current = true;
             const d = await api<{ id: number; placed?: 'fresh' | 'bump' | 'last' | 'old'; bumpAt?: number; notice?: string }>(id ? 'posts/' + id : 'posts', id ? 'PUT' : 'POST', payload);
             // The form's own draft goes; a waiting draft of the same board stays for later.
@@ -556,11 +565,15 @@ export default function Editor({ id }: { id?: string }) {
     // 닉 종류: nicknameTypes on 판매 and the offered side of 교환, wantedNicknameTypes on 구매 and the wanted side.
     const nickTypes = (key: 'nicknameTypes' | 'wantedNicknameTypes') => <div className="field"><span className="field-label">닉 종류</span>
         <NickTypePicker multiple value={parseList(d[key], NICK_TYPES)} onChange={v => setDetail(key, v.length ? JSON.stringify(v) : '')} />
+        <span className="field-hint">{RARE_NICK_HINT}</span>
     </div>;
-    const hasWanted = form.wantedTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
+    const hasWanted = form.wantedTags.length > 0 || form.wantedClanTags.length > 0 || Object.entries(d).some(([k, v]) => k.startsWith('wanted') && k !== 'wantedCategory' && !!v);
+    // 특징 태그 (WP70) on 판매 and the offered side of 교환: '#불새상류', up to 10.
+    const tagField = (label: string) => <div className="field"><span className="field-label">{label}</span>
+        <TagInput label={label} value={featureTags(d.featureTags)} onChange={v => setDetail('featureTags', v.length ? JSON.stringify(v) : '')} /></div>;
 
     const sellerAccount = <div className="grid-gap-16">
-        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} /></div>
+        <div className="field"><span className="field-label">래더 기록</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} hidden={form.ladderHidden} onHiddenChange={ladderHidden => patch({ ladderHidden })} /></div>
         <div className="ed-grid">
             <Num label="대주 수" value={d.ownerCount || ''} onChange={v => setDetail('ownerCount', v)} unit="대주" max={9999} placeholder="예: 2" />
             <div className="field"><span className="field-label">전적</span><Segmented name="전적" options={['무전적', '전적 있음'] as const} value={d.recordStatus || ''} onChange={v => setDetail('recordStatus', v)} /></div>
@@ -569,6 +582,7 @@ export default function Editor({ id }: { id?: string }) {
         </div>
         {nickTypes('nicknameTypes')}
         <div className="field"><span className="field-label">우대 스킨</span><SkinPicker value={skinTags(d.skinTags)} onChange={v => setDetail('skinTags', v.length ? JSON.stringify(v) : '')} /><span className="field-hint">없는 스킨은 내용에 적어 주세요.</span></div>
+        {tagField('계정 특징 태그')}
         <div className="ed-grid ed-grid-3">
             <Num label={PHANTOM_LABEL} value={d.phantom || ''} onChange={v => setDetail('phantom', v)} unit="%" max={PHANTOM_MAX} placeholder="예: 225" hint={PHANTOM_HINT} />
             <Num label="가스" value={d.gas || ''} onChange={v => setDetail('gas', v)} placeholder="예: 246" />
@@ -629,7 +643,20 @@ export default function Editor({ id }: { id?: string }) {
         </div>;
     };
 
-    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
+    // 클랜 (WP70): the clan's fields, 현재 클랜 티어 and its 클랜 래더 (구매: the clan tiers wanted), and on 판매 and the
+    // offered side of 교환 its 특징 태그. A 교환 that asks for a clan names the wanted tier and clan ladder.
+    const clanInfo = <div className="grid-gap-16">
+        {generic('clan')}
+        <div className="field"><span className="field-label">현재 클랜 티어</span><ClanTierPicker value={d.clanTier || ''} onChange={v => setDetail('clanTier', v)} /></div>
+        <div className="field"><span className="field-label">{buying ? '원하는 클랜 티어' : '클랜 래더 기록'}</span><SeasonPicker clan value={form.clanTags} onChange={clanTags => patch({ clanTags })} /></div>
+        {!buying && tagField('클랜 특징 태그')}
+    </div>;
+    const wantedClan = <div className="grid-gap-16">
+        <div className="field"><span className="field-label">현재 클랜 티어</span><ClanTierPicker value={d.wantedClanTier || ''} onChange={v => setDetail('wantedClanTier', v)} /></div>
+        <div className="field"><span className="field-label">원하는 클랜 티어</span><SeasonPicker clan value={form.wantedClanTags} onChange={wantedClanTags => patch({ wantedClanTags })} /></div>
+    </div>;
+
+    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : category === 'clan' && buying ? '원하는 클랜' : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
     const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
     const photoCount = `${form.images.length}/${photoCap}`;
     // 링크 미리보기 (WP48): the switch shows for 플러스 and up (the 무료 체험 too) once the body holds a link.
@@ -671,7 +698,7 @@ export default function Editor({ id }: { id?: string }) {
                         <Segmented name="내놓는 대상" options={EXCHANGE_SIDES} label={categoryName} allowEmpty={false} value={category} onChange={v => { if (v) changeCategory(v); }} />
                         <span>에서</span>
                         <Segmented name="구하는 대상" options={EXCHANGE_SIDES} label={categoryName} allowEmpty={false} value={wanted}
-                            onChange={v => { if (v && v !== wanted) patch({ details: { ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('wanted'))), wantedCategory: v }, wantedTags: [] }); }} />
+                            onChange={v => { if (v && v !== wanted) patch({ details: { ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('wanted'))), wantedCategory: v }, wantedTags: [], wantedClanTags: [] }); }} />
                         <span>구함</span>
                     </div> : <div className="chip-row mt-16" role="radiogroup" aria-label="세부 분류">
                         {categoriesForKind(kind).map(c => <button type="button" key={c.id} role="radio" aria-checked={category === c.id} className="chip" aria-pressed={category === c.id} onClick={() => changeCategory(c.id)}>{c.name}</button>)}
@@ -700,14 +727,14 @@ export default function Editor({ id }: { id?: string }) {
                 </Section>}
 
                 {kind === 'exchange' ? <>
-                    <Section title={`내가 내놓는 ${categoryName(category)}`}>{account ? sellerAccount : generic('clan')}</Section>
+                    <Section title={`내가 내놓는 ${categoryName(category)}`}>{account ? sellerAccount : clanInfo}</Section>
                     <section className="ed-section">
                         <Fold className="ed-fold" filled={hasWanted} summary={<h2>{`내가 구하는 ${categoryName(wanted)}`}</h2>}>
-                            <div className="mt-16">{wanted === 'account' ? buyerAccount('wanted') : <p className="muted">원하는 클랜은 내용에 적어 주세요.</p>}</div>
+                            <div className="mt-16">{wanted === 'account' ? buyerAccount('wanted') : wantedClan}</div>
                         </Fold>
                     </section>
                 </> : hasInfo && <Section title={infoTitle}>
-                    {account ? (buying ? buyerAccount('') : sellerAccount) : generic(category)}
+                    {account ? (buying ? buyerAccount('') : sellerAccount) : category === 'clan' ? clanInfo : generic(category)}
                 </Section>}
 
                 <section className="ed-section">
