@@ -3,6 +3,7 @@ import { MEMBER_REPORT_REASONS, priceText, type User } from '../shared/market';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 import { searchesHandler } from './alerts';
+import { reportComment } from './comments';
 
 // Badge and grade columns for a listed member, without the grade's end date.
 export function publicMember(row: any, prefix = '') {
@@ -55,8 +56,11 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         await limit('report:' + u.id, 8, 3600000);
         const b = await body(req);
         if (b.postId === undefined && b.userId !== undefined) return reportMember(u, b);
+        // 신고 of a 댓글 (WP55).
+        if (b.commentId !== undefined && b.commentId !== null) return reportComment(u, b);
         const post = await visiblePost(b.postId, u), reason = textField(b.reason, 2, 50, '신고 사유'), detail = textField(b.details, 1, 1000, '신고 설명');
-        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending'").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
+        // A waiting 댓글 report on the same post does not count as a report of the post.
+        if (await db().prepare("SELECT id FROM reports WHERE post_id=? AND reporter_id=? AND status='pending' AND comment_id IS NULL").bind(post.id, u.id).first()) fail(409, '이미 신고한 글입니다.');
         await db().prepare('INSERT INTO reports(post_id,reporter_id,reason,details,created_at) VALUES(?,?,?,?,?)').bind(post.id, u.id, reason, detail, Date.now()).run();
         return json({ ok: true });
     }

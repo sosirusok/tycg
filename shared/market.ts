@@ -68,6 +68,8 @@ export type Post = {
     thumb?: string | null;
     // 조회수 (WP45).
     view_count?: number;
+    // 댓글·답글 (WP55): live 댓글 and 답글 on the post.
+    comment_count?: number;
     // 운영진 가측가 (WP65): the manager's appraisal, null once the post was edited after it.
     appraised?: { price: number; at: number } | null;
     // 완료 거래가 (WP51): the 거래가 of the completed post's confirmed trade. The author, the two members of

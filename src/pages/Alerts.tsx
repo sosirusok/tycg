@@ -21,6 +21,8 @@ const ICONS: Record<string, string> = {
     auto_paused: 'warning', auto_stale: 'memo', bump_ready: 'megaphone',
     // 새 글 알림 (WP54).
     keyword: 'bell', board: 'spiral-notepad', follow: 'bookmark', condition: 'gem-stone',
+    // 댓글·답글 (WP55).
+    comment: 'memo', reply: 'memo',
 };
 
 // 구독 관리 (WP54): the members this member follows, newest first, each with '구독 해제'.
@@ -108,6 +110,8 @@ export default function Alerts() {
             q.delete('page');
             void navigate('/trade?' + q.toString());
         }
+        // 댓글·답글 (WP55): the post at its 댓글 section.
+        else if ((a.type === 'comment' || a.type === 'reply') && a.post) void navigate('/posts/' + a.post.id + '#comments');
         else if (a.post) void navigate('/posts/' + a.post.id);
     }
 

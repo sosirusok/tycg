@@ -16,6 +16,8 @@ type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
     post_images?: string | null; hidden: number | null; nickname: string; grade: string; grade_trial?: boolean; badges: string[]; reason: string; details: string; status: string; created_at: number;
     // A member report: the reported member and the chat it came from.
+    // A 댓글 report (WP55): the reported text and whether the 댓글 is still up.
+    comment_id?: number | null; comment_body?: string | null; comment_live?: number | null;
     target_user_id: string | null; conversation_id: string | null; target_nickname?: string; target_role?: string; target_grade?: string; target_grade_trial?: boolean; target_badges?: string[]; target_deleted?: boolean; target_suspended?: boolean };
 type EvidenceMessage = { id: number; sender_id: string; nickname: string; body: string; type: string; photos: number; created_at: number };
 type Notice = { id: number; title: string; body: string; created_at: number };
@@ -162,12 +164,14 @@ function Reports({ reports, onChange }: { reports?: Report[]; onChange: () => vo
                 <span className="small">{r.reason === '같은 매물 (자동)' ? detailsWithLinks(r.details) : r.details}</span>
                 {/* A member report names the member (profile link); a post report names the post. */}
                 {r.target_user_id && <span className="small">대상 {r.target_deleted ? r.target_nickname : <Link to={'/profile/' + r.target_user_id}><NameLine nickname={r.target_nickname || ''} grade={r.target_grade} trial={r.target_grade_trial} role={r.target_role} badges={r.target_badges} /></Link>}{r.target_suspended && <span className="nowrap">{'\u00a0'}· 이용 정지 중</span>}</span>}
-                {!r.post_id && <DeletedPhotos images={r.post_images} />}
+                {r.comment_id && <span className="small report-comment">댓글: {r.comment_body}{!r.comment_live && <span className="muted nowrap">{'\u00a0'}· 삭제됨</span>}</span>}
+                {!r.post_id && !r.comment_id && <DeletedPhotos images={r.post_images} />}
                 <span className="muted small">신고자 <NameLine nickname={r.nickname} grade={r.grade} trial={r.grade_trial} badges={r.badges} /><span className="nowrap">{'\u00a0'}· {relativeTime(r.created_at)}</span>{r.post_id ? <> · <Link to={'/posts/' + r.post_id}>{r.title || '글 ' + r.post_id}</Link></> : !r.target_user_id && ' · 삭제된 글'}</span>
             </span>
             {/* One group, so the actions wrap together under the text on phones. */}
             <span className="report-actions">
-                {r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
+                {r.comment_id ? !!r.comment_live && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('comments/' + r.comment_id, 'DELETE'), '댓글 삭제 완료')}>댓글 삭제</button>
+                    : r.post_id && <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/visibility', 'POST', { postId: r.post_id, hidden: !r.hidden, reason: !r.hidden && (REPORT_REASONS as readonly string[]).includes(r.reason) ? r.reason : '' }), r.hidden ? '공개 완료' : '숨김 완료')}>{r.hidden ? '공개' : '숨기기'}</button>}
                 {r.conversation_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setEvidence(r)}>채팅 보기</button>}
                 {r.target_user_id && <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(r.target_user_id)}>회원 관리</button>}
                 <button type="button" className="btn btn-line btn-xs" onClick={() => act(api('manage/report', 'POST', { id: r.id, status: r.status === 'pending' ? 'resolved' : 'pending' }), r.status === 'pending' ? '처리 완료' : '미처리로 변경')}>{r.status === 'pending' ? '처리 완료' : '되돌리기'}</button>

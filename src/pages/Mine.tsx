@@ -16,7 +16,7 @@ import { AlertCard, Auto } from './Auto';
 
 // '자동화' (WP52) shows for 플러스 and up (the 체험 too) and the manager.
 const TABS = [
-    { id: 'posts', label: '내 글' }, { id: 'auto', label: '자동화' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' },
+    { id: 'posts', label: '내 글' }, { id: 'auto', label: '자동화' }, { id: 'favorites', label: '찜한 글' }, { id: 'offers', label: '가격 제시' }, { id: 'comments', label: '댓글' },
     { id: 'recent', label: '최근 본 글' }, { id: 'applications', label: '신청 내역' }, { id: 'blocks', label: '차단' },
 ] as const;
 type TabId = typeof TABS[number]['id'];
@@ -27,6 +27,8 @@ type Offer = {
     id: string; post_id: number; title: string; amount: number; status: string; sender_id: string; sender_name: string; recipient_name: string; conversation_id: string; created_at: number;
     sender_grade: string; sender_grade_trial?: boolean; sender_badges: string[]; recipient_grade: string; recipient_grade_trial?: boolean; recipient_badges: string[];
 };
+// 내 거래 '댓글' (WP55): my 댓글 and 답글, newest first, 20 a page, each with its post's title.
+type MyComment = { id: number; post_id: number; title: string; body: string; image: string | null; reply: boolean; created_at: number };
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
 
 // Every post carries bump_count; the author's own list asks for fav_count and chat_count too (counts=1).
@@ -136,7 +138,9 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         let alive = true;
         const pages = isPostTab(tab) && loaded.current.tab === tab ? loaded.current.page : 1;
         if (tab === 'auto') { setData({ tab, items: [], total: 0, page: 1 }); return () => { alive = false; }; }
-        const load: Promise<Omit<ListState, 'tab'>> = isPostTab(tab)
+        const load: Promise<Omit<ListState, 'tab'>> = tab === 'comments'
+            ? api<{ comments: MyComment[]; hasMore: boolean }>('me/comments?page=1').then(d => ({ items: d.comments, total: 0, page: 1, full: d.hasMore }))
+            : isPostTab(tab)
             ? Promise.all(Array.from({ length: pages }, (_, i) => api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(tab, i + 1))))
                 .then(rs => ({ items: uniquePosts(rs.flatMap(r => r.posts)), total: rs[rs.length - 1].total, page: pages, capped: !!rs[rs.length - 1].capped, full: rs[rs.length - 1].posts.length === PAGE_SIZE }))
             : api<any>(tab).then(d => ({ items: d.offers || d.applications || d.blocks || [], total: 0, page: 1 }));
@@ -163,6 +167,14 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         if (!data || data.tab !== tab || loadingMore) return;
         setLoadingMore(true);
         const next = data.page + 1, current = tab;
+        if (current === 'comments') {
+            try {
+                const d = await api<{ comments: MyComment[]; hasMore: boolean }>('me/comments?page=' + next);
+                setData(prev => prev && prev.tab === current ? { ...prev, items: [...new Map([...prev.items, ...d.comments].map((c: MyComment) => [c.id, c])).values()], page: next, full: d.hasMore } : prev);
+            } catch (e) { toast.error(errorText(e)); }
+            finally { setLoadingMore(false); }
+            return;
+        }
         try {
             const d = await api<{ posts: Post[]; total: number; capped?: boolean }>(pagePath(current, next));
             setData(prev => prev && prev.tab === current ? {
@@ -205,7 +217,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
         try { await api('me/automation/continue', 'POST', {}); void navigate('/me/posts', { replace: true }); }
         catch (e) { toast.error(errorText(e)); }
     }
-    const moreButton = data && data.tab === tab && isPostTab(tab) && (data.items.length < data.total || (data.capped && data.full))
+    const moreButton = data && data.tab === tab && (isPostTab(tab) ? (data.items.length < data.total || (data.capped && data.full)) : tab === 'comments' && data.full)
         && <button type="button" className="btn btn-line more-btn" disabled={loadingMore} onClick={more}>더 보기</button>;
 
     return <div className="container page">
@@ -233,6 +245,13 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     <b>{priceText(o.amount)}</b><span className="event-status">{OFFER_STATUS[o.status] || o.status}</span>
                     <Link to={'/chat/' + o.conversation_id} className="btn btn-line btn-xs">채팅</Link>
                 </li>)}</ul> : <EmptyState icon="message" title="제시 내역이 없습니다" />)
+                : tab === 'comments' ? (items.length ? <><ul className="simple-list my-comments">{(items as MyComment[]).map(c => <li key={c.id}>
+                    <span className="grow">
+                        <Link to={'/posts/' + c.post_id + '#comments'} className="strong-link">{c.title}</Link>
+                        <span className="my-comment-body">{c.reply && <span className="tag tag-line">답글</span>}{c.body}</span>
+                        <span className="muted small">{relativeTime(c.created_at)}{c.image ? ' · 사진 1장' : ''}</span>
+                    </span>
+                </li>)}</ul>{moreButton}</> : <EmptyState icon="message" title="댓글이 없습니다." />)
                 : tab === 'applications' ? (items.length ? <ul className="simple-list">{(items as Application[]).map(a => <li key={a.id}>
                     <span className="grow"><strong>{applicationTitle(a)}</strong><span className="muted small">{relativeTime(a.created_at)}{a.note ? ` · ${a.note}` : ''}</span></span>
                     <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>

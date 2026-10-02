@@ -19,6 +19,7 @@ import { meterOn, localRequest, metered, meterHeaders } from './meter';
 import { notificationsHandler } from './notifications';
 import { automationHandler } from './automation';
 import { followAllowedHandler, followHandler, followsList } from './alerts';
+import { commentsHandler, myComments, postCommentsHandler } from './comments';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -312,6 +313,8 @@ async function route(req: Request): Promise<Response> {
             case 'posts': {
                 // posts/:id/partners and posts/:id/trade (WP23: 거래한 회원 after 거래완료).
                 if (p[2] === 'partners' || p[2] === 'trade') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
+                // posts/:id/comments (WP55: 댓글·답글).
+                if (p[2] === 'comments') { const r = await postCommentsHandler(req, p, url); if (r) return r; break; }
                 return await postsHandler(req, p, url);
             }
             case 'uploads': case 'images': { const r = await filesHandler(req, p); if (r) return r; break; }
@@ -324,12 +327,16 @@ async function route(req: Request): Promise<Response> {
                 if (p[1] === 'automation') { const a = await automationHandler(req, p); if (a) return a; break; }
                 // 구독 관리 (WP54).
                 if (p[1] === 'follows' && !p[2] && method === 'GET') return await followsList(req);
+                // 내 거래 '댓글' (WP55).
+                if (p[1] === 'comments' && !p[2] && method === 'GET') return await myComments(req, url);
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;
             }
             // 알림함 (WP50).
             case 'notifications': { const r = await notificationsHandler(req, p, url); if (r) return r; break; }
+            // PATCH and DELETE comments/:id (WP55).
+            case 'comments': { const r = await commentsHandler(req, p); if (r) return r; break; }
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
             // 중개·가측 신청 (WP65).
             case 'services': { const r = await servicesHandler(req, p); if (r) return r; break; }

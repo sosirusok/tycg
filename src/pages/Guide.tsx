@@ -52,6 +52,7 @@ const FREE_ITEMS = [
     `거래중 글 ${SITE_RULES.openPosts}개`,
     `하루 새 글 ${SITE_RULES.postsPerDay}개`,
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
+    '댓글·답글',
     '채팅·제시',
     '링크 자동 연결',
     '찜·알림',

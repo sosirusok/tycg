@@ -55,8 +55,9 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     requireManager(u);
     if (!p[1] && method === 'GET') {
         const r = await db().batch([
-            // A member report (WP22) also names the reported member (target_*) and the chat it came from.
-            db().prepare(`SELECT r.*,p.title,p.hidden,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
+            // A member report (WP22) also names the reported member (target_*) and the chat it came from; a 댓글
+            // report (WP55) carries the reported text (comment_body) and whether the 댓글 is still up.
+            db().prepare(`SELECT r.*,p.title,p.hidden,CASE WHEN r.comment_id IS NOT NULL THEN EXISTS(SELECT 1 FROM comments c WHERE c.id=r.comment_id AND c.deleted_at IS NULL) END AS comment_live,u.nickname,${memberColumns('u')},t.nickname AS target_nickname,t.role AS target_role,t.deleted_at AS target_deleted_at,t.suspended_until AS target_suspended_until,${memberColumns('t', 'target_')}
                 FROM reports r LEFT JOIN posts p ON p.id=r.post_id JOIN users u ON u.id=r.reporter_id LEFT JOIN users t ON t.id=r.target_user_id ORDER BY r.created_at DESC LIMIT 100`),
             // Posts hidden by 회원 탈퇴 are not moderation work, so they stay out of 숨긴 글.
             db().prepare(postSelect + " WHERE p.hidden=1 AND p.hidden_reason!='탈퇴' ORDER BY p.updated_at DESC LIMIT 100"),

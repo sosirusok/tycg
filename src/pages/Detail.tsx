@@ -20,6 +20,7 @@ import { bumpReadyAt, walletNow, type Usage } from '../components/Wallet';
 import { remindText, setBumpRemind, useAutoToggle } from '../components/AutoSheet';
 import { AD_TEXT, ALERT_TEXT, gradeInfo } from '../../shared/membership';
 import { AdSection } from '../components/AdCard';
+import { Comments } from '../components/Comments';
 
 type Row = [string, ReactNode];
 // Fields the detail response adds to a post (WP10 bump and feature columns, hide reason, 탈퇴, the author's 최근 접속,
@@ -134,6 +135,8 @@ export function Detail({ id }: { id: string }) {
         finally { setFollowBusy(false); }
     });
     const [lightbox, setLightbox] = useState<number | null>(null), [offer, setOffer] = useState(false), [report, setReport] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+    // 신고 of one 댓글 (WP55), from the 댓글 section.
+    const [commentReport, setCommentReport] = useState<number | null>(null);
     const [priceOpen, setPriceOpen] = useState(false), [usage, setUsage] = useState<Usage | null>(null), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
     // The 완료 sheet (WP43), and later '거래 기록 요청' from the owner tools while a completed post (within
     // 7 days) has partners and no live trade record yet (recordable).
@@ -302,6 +305,8 @@ export function Detail({ id }: { id: string }) {
                     {!mine && <button type="button" className="btn btn-text small" onClick={() => requireLogin(() => setReport(true))}><Flag size={15} />신고</button>}
                     <span className="grow" /><span>글 번호 {post.id}</span>
                 </div>
+                {/* 댓글·답글 (WP55): every grade, a completed post included. */}
+                <Comments post={post} onReport={setCommentReport} />
                 {/* '비슷한 매물' (WP53): under a completed post only, never under a live seller's post. */}
                 {!!post.ads?.length && <AdSection title={AD_TEXT.similar} posts={post.ads} className="ad-similar" />}
             </article>
@@ -364,7 +369,8 @@ export function Detail({ id }: { id: string }) {
         <Lightbox images={post.images} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
         <OfferModal open={offer} onClose={() => setOffer(false)} post={post} />
         {mine && post.kind === 'sell' && <PriceModal open={priceOpen} onClose={() => setPriceOpen(false)} post={post} onSaved={p => setPost(prev => ({ ...p, link_cards: prev?.link_cards, author_trade_count: prev?.author_trade_count, author_deal_sum: prev?.author_deal_sum, author_good_count: prev?.author_good_count }))} />}
-        <ReportModal open={report} onClose={() => setReport(false)} postId={post.id} />
+        <ReportModal open={report} onClose={() => setReport(false)} target={{ postId: post.id }} />
+        <ReportModal open={commentReport !== null} onClose={() => setCommentReport(null)} target={{ commentId: commentReport }} title="댓글 신고" />
         {canAppraise && <ServiceSheet open={appraise} onClose={() => setAppraise(false)} kind="appraise" post={post} />}
         {mine && <CompleteSheet post={tradeSheet ? { id: post.id, kind: post.kind, title: post.title, price: post.price, price_mode: post.price_mode, status: post.status, thumb: post.images[0] ?? null, hidden: !!post.hidden } : null} suspended={suspended}
             onClose={() => setTradeSheet(false)} onDone={() => { void load(); void loadUsage(); }} />}
@@ -476,15 +482,16 @@ function PriceModal({ open, onClose, post, onSaved }: { open: boolean; onClose: 
     </Modal>;
 }
 
-function ReportModal({ open, onClose, postId }: { open: boolean; onClose: () => void; postId: number }) {
+// 신고 of the post ({postId}) or of one 댓글 ({commentId}, WP55), with the same reasons.
+function ReportModal({ open, onClose, target, title = '신고' }: { open: boolean; onClose: () => void; target: { postId: number } | { commentId: number | null }; title?: string }) {
     const [reason, setReason] = useState<string>(REPORT_REASONS[0]), [details, setDetails] = useState(''), [busy, setBusy] = useState(false);
     async function send() {
         setBusy(true);
-        try { await api('reports', 'POST', { postId, reason, details }); onClose(); setDetails(''); toast('신고 접수 완료'); }
+        try { await api('reports', 'POST', { ...target, reason, details }); onClose(); setDetails(''); toast('신고 접수 완료'); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }
-    return <Modal open={open} onClose={onClose} title="신고" footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고</button>}>
+    return <Modal open={open} onClose={onClose} title={title} footer={<button className="btn btn-primary btn-lg" disabled={busy || !details.trim()} onClick={send}>신고</button>}>
         <div className="form-stack">
             <div className="chip-row">{REPORT_REASONS.map(r => <button type="button" key={r} className="chip chip-sm" aria-pressed={reason === r} onClick={() => setReason(r)}>{r}</button>)}</div>
             <label className="field"><span className="field-label">내용</span><textarea className="textarea" style={{ minHeight: 120 }} maxLength={1000} value={details} onChange={e => setDetails(e.target.value)} placeholder="예: 입금 후 잠수, 사진 도용" /></label>

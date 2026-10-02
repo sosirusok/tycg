@@ -132,6 +132,8 @@ export function PostCard({ post, highlight = [], onChange, showKind = true, hide
             <div className="post-card-meta">
                 <span className="post-card-kind">{showKind ? `[${KIND_NAMES[post.kind]}] ${subjectLabel(post)}` : subjectLabel(post)}</span>
                 <span className="post-card-time">{postTime(post)}</span>
+                {/* 댓글·답글 (WP55). */}
+                {!!post.comment_count && <span className="post-card-comments">댓글 {post.comment_count.toLocaleString('ko-KR')}</span>}
                 {post.status === 'closed' && <span className="status status-closed">{statusName(post.kind, post.status)}</span>}
                 {!!post.hidden && <span className="status status-hidden">숨김</span>}
                 {post.appraised && <span className="appraised-tag">가측 {priceText(post.appraised.price)}</span>}
