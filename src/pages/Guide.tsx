@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { dateText, wonText } from '../../shared/market';
-import { AD_TEXT, BADGES, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
+import { TEMPLATE_VARS, dateText, wonText } from '../../shared/market';
+import { AD_TEXT, BADGES, CHAT_AUTO_TEXT, DROP_TEXT, GRADES, PERKS, SITE_RULES, TITLE_STYLE_NAMES, dropGuideText, filterAlertText, gapText, gradeInfo, gradePriority, linkPreviewAllowed, titleTier, type GradeInfo } from '../../shared/membership';
 import { styleRank } from '../../shared/richtext';
 import { api } from '../lib/api';
 import { useApp } from '../app/state';
@@ -47,6 +47,9 @@ const BENEFIT_ROWS: [string, (g: GradeInfo) => string | string[]][] = [
     ['조건 알림', g => filterAlertText(PERKS[g.id])],
     // 자동 가격 내리기 (WP56): '-', '판매 글 1개 · 하루 1번', '5개', '전체', from PERKS.autoPricePosts.
     ['자동 가격 내리기', g => dropGuideText(PERKS[g.id])],
+    // 채팅 자동화 (WP57): own quick replies (with {제목} {즉거가} {현젯} from 프리미엄) and the automatic answers.
+    ['내 빠른 답장', g => { const k = PERKS[g.id]; return !k.replyTemplates ? '-' : `${k.replyTemplates}개${k.templateVars ? (gradeInfo(g.id).rank >= 3 ? ' · 변수' : ' · ' + TEMPLATE_VARS.join(' ')) : ''}`; }],
+    [CHAT_AUTO_TEXT.label, g => { const k = PERKS[g.id]; return [...k.firstReply ? [CHAT_AUTO_TEXT.first] : [], ...k.awayReply ? [CHAT_AUTO_TEXT.away] : []].join(' · ') || '-'; }],
 ];
 // What the free 일반 grade already has: every cafe basic, with anti-flood ceilings only (SITE_RULES).
 const FREE_ITEMS = [
@@ -56,6 +59,7 @@ const FREE_ITEMS = [
     `끌올 ${PERKS.normal.bumpMax}개 · ${gapText(PERKS.normal.bumpRefillMinutes)}마다 충전`,
     '댓글·답글',
     '채팅·제시',
+    '기본 빠른 답장',
     '링크 자동 연결',
     '찜·알림',
     `검색 조건 저장 ${SITE_RULES.savedSearches}개`,

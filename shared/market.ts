@@ -440,3 +440,64 @@ export function accountSummary(d: Record<string, string>) {
         d.minerals ? `미네랄 ${Number(d.minerals).toLocaleString('ko-KR')}` : '',
     ].filter(Boolean);
 }
+
+// Quick replies (WP57): chips that fill the chat composer, never sent on their own. User voice (casual
+// cafe talk), one set per board for the member who writes to the post (writer) and one for its author.
+// A chat about no post uses the 판매 writer set.
+export const QUICK_REPLIES: Record<TradeKind, { writer: string[]; author: string[] }> = {
+    sell: {
+        // copy-lint-ignore-next-line
+        writer: ['아직 판매중인가요?', '쿨거 가능해요', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'],
+        // copy-lint-ignore-next-line
+        author: ['네 판매중입니다', '판완됐습니다'],
+    },
+    buy: {
+        // copy-lint-ignore-next-line
+        writer: ['아직 구하시나요?', '스펙 캡처 보내드릴게요', '전번·계좌 인증 가능합니다'],
+        // copy-lint-ignore-next-line
+        author: ['네 아직 구합니다', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'],
+    },
+    exchange: {
+        // copy-lint-ignore-next-line
+        writer: ['교환 아직 되나요?', '제 계정 스펙 보내드릴게요'],
+        // copy-lint-ignore-next-line
+        author: ['네 교환 가능합니다', '이중창 인증 가능할까요?'],
+    },
+    // 대리(구함): the writer is the one who would do the 대리, so they send their own 경력.
+    proxy_request: {
+        // copy-lint-ignore-next-line
+        writer: ['바로 진행 가능합니다', '천점당 얼마인가요?', '경력 캡처 보내드릴게요'],
+        // copy-lint-ignore-next-line
+        author: ['네 아직 구합니다', '가격 알려주세요', '경력 있으신가요?'],
+    },
+    proxy_offer: {
+        // copy-lint-ignore-next-line
+        writer: ['천점당 얼마인가요?', '경력 캡처 있나요?', '바로 진행 가능합니다'],
+        // copy-lint-ignore-next-line
+        author: ['네 진행 가능합니다', '가격 알려주세요'],
+    },
+};
+// The board chips for a chat: by the post's board and side; after 완료 only a sale's author keeps
+// '판완됐습니다'.
+export function quickReplies(listing: { kind: string; status: string } | null, own: boolean): string[] {
+    if (!listing || !isTradeKind(listing.kind)) return QUICK_REPLIES.sell.writer;
+    const set = QUICK_REPLIES[listing.kind];
+    if (listing.status === 'closed') return own && listing.kind === 'sell' ? set.author.slice(1) : [];
+    return own ? set.author : set.writer;
+}
+
+// {제목}, {즉거가} and {현젯} in a quick reply or an auto reply, from the post the chat is about. A
+// sentence with a value the post does not have (no post, no 즉거가, no 현젯) is left out; null when
+// nothing is left.
+export const TEMPLATE_VARS = ['{제목}', '{즉거가}', '{현젯}'] as const;
+export function fillTemplate(text: string, post: { title: string; kind: string; price: number | null; currentOffer?: number | null } | null): string | null {
+    const values: Record<string, string | null> = {
+        '{제목}': post ? post.title : null,
+        '{즉거가}': post && post.kind === 'sell' && post.price !== null ? priceText(post.price) : null,
+        '{현젯}': post && post.kind === 'sell' && post.currentOffer ? priceText(post.currentOffer) : null,
+    };
+    const lines = text.split('\n').map(line => line.split(/(?<=[.!?])\s+/).filter(sentence => TEMPLATE_VARS.every(v => !sentence.includes(v) || values[v] !== null))
+        .map(sentence => TEMPLATE_VARS.reduce((out, v) => out.split(v).join(values[v] ?? ''), sentence)).join(' '));
+    const out = lines.join('\n').trim();
+    return out || null;
+}

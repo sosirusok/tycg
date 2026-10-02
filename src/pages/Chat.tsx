@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, Check, ImagePlus, LoaderCircle, MoreHorizontal, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
+import { ArrowLeft, Check, ImagePlus, LoaderCircle, MoreHorizontal, Plus, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, closedLabel, isTradeKind, statusName, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
-    type Post, type Review, type TradeKind, type User,
+    KIND_ICONS, REVIEW_CARD_TEXT, REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, closedLabel, fillTemplate, isTradeKind, quickReplies, statusName, listingPrice, priceText, relativeTime, reviewName, suspendUntilText,
+    type Post, type Review, type User,
 } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, BADGES, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, TEMPLATE_MAX, applicationTitle, gradeInfo, perksOf, type Application } from '../../shared/membership';
 import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -34,22 +34,11 @@ const ANSWER_MS = 7 * 86400000;
 
 const POST_MISMATCH = '게시글 작성자를 확인해 주세요.';
 const OFFER_STATUS: Record<string, string> = { pending: '대기', accepted: '수락', declined: '거절', withdrawn: '취소', cancelled: '마감' };
-// Quick replies fill the composer and are never sent on their own (user voice, so casual cafe talk).
-// copy-lint-ignore-next-line
-const BUYER_REPLIES = ['아직 판매중인가요?', '쿨거 가능해요', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'];
-// copy-lint-ignore-next-line
-const SELLER_REPLIES = ['네 판매중입니다', '판완됐습니다'];
-// Per kind: [the member who writes to the post, the post's author]. A sale is the default.
-const KIND_REPLIES: Partial<Record<TradeKind, [string[], string[]]>> = {
-    // copy-lint-ignore-next-line
-    buy: [['아직 구하시나요?', '쿨거 가능해요', '이중창 인증 가능해요', '전번·계좌 인증 됩니다'], ['네 아직 구합니다', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?']],
-    // copy-lint-ignore-next-line
-    exchange: [['아직 교환하시나요?', '쿨거 가능해요', '이중창 인증 가능할까요?'], ['네 교환 가능합니다', '이중창 인증 가능할까요?']],
-    // copy-lint-ignore-next-line
-    proxy_request: [['아직 구하시나요?', '바로 진행 가능해요', '경력 보내드릴게요'], ['네 아직 구합니다', '가격 알려주세요', '경력 있으신가요?']],
-    // copy-lint-ignore-next-line
-    proxy_offer: [['지금 진행 가능한가요?', '가격 알려주세요', '경력 있으신가요?'], ['네 진행 가능합니다', '가격 알려주세요']],
-};
+// 채팅 자동화 (WP57): GET me/automation/chat. The board chips (quickReplies) are for every grade; own
+// quick replies (내 빠른 답장) for 플러스 and up, with {제목} {즉거가} {현젯} filled from the pinned post
+// for 프리미엄 and up (vars); awayUntil is '지금 자리 비움' (엘리트 and up).
+export type ChatAuto = { templates: string[]; max: number | null; vars: boolean; canFirst: boolean; firstOn: boolean; firstText: string;
+    canAway: boolean; awayOn: boolean; awayFrom: number; awayTo: number; awayText: string; awayUntil: number | null };
 const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일치', '거래내역 부족'];
 // A phone number (010-1234-5678) or an account-like run of digits in a partner's message gets a
 // '더치트 조회' link, the cafes' safety step before sending money. Bank accounts have 10 to 14 digits,
@@ -120,6 +109,21 @@ export default function Chat({ id }: { id?: string }) {
         loadChats(true);
     }, [me?.id, loadChats]);
     useAdaptivePoll(loadChats, !!me);
+    // 채팅 자동화 (WP57): read once per member and grade, for the own chips and '지금 자리 비움'.
+    const perks = me ? perksOf(me) : null;
+    const wantsAuto = !!perks && (perks.replyTemplates > 0 || perks.awayReply);
+    const [auto, setAuto] = useState<ChatAuto | null>(null), [awayBusy, setAwayBusy] = useState(false);
+    useEffect(() => {
+        setAuto(null);
+        if (wantsAuto) api<ChatAuto>('me/automation/chat').then(setAuto).catch(() => {});
+    }, [me?.id, me?.grade, wantsAuto]);
+    async function awayNow(on: boolean) {
+        if (awayBusy) return;
+        setAwayBusy(true);
+        try { const r = await api<{ chat: ChatAuto }>('me/automation', 'PUT', { awayNow: on }); setAuto(r.chat); toast(on ? '자리 비움 설정 완료' : '자리 비움 해제'); }
+        catch (e) { toast.error(errorText(e)); }
+        finally { setAwayBusy(false); }
+    }
     // The open room marked its messages read: its row shows none at once, then the list catches up.
     const roomActivity = () => {
         if (id) setChats(list => list && list.map(c => c.id === id ? { ...c, unread: 0 } : c));
@@ -135,7 +139,10 @@ export default function Chat({ id }: { id?: string }) {
         <div className={'chat-shell' + (id ? ' has-room' : '') + (empty ? ' is-empty' : '')}>
             <aside className="chat-list" aria-label="채팅 목록">
                 <div className="chat-list-head">
-                    <h1 className="chat-list-title">채팅</h1>
+                    <div className="chat-list-top">
+                        <h1 className="chat-list-title">채팅</h1>
+                        {auto?.canAway && me.role !== 'manager' && <label className="switch chat-away"><input type="checkbox" role="switch" checked={!!auto.awayUntil} disabled={awayBusy} onChange={e => void awayNow(e.target.checked)} />{CHAT_AUTO_TEXT.awayNow}</label>}
+                    </div>
                     {me.role === 'manager' && <div className="chip-row chat-filter" role="group" aria-label="채팅 목록 보기">
                         {([['all', '전체'], ['applications', '신청 대기']] as const).map(([v, label]) => <button type="button" key={v} className="chip chip-sm" aria-pressed={view === v} onClick={() => setFilter(v)}>{label}</button>)}
                     </div>}
@@ -155,13 +162,13 @@ export default function Chat({ id }: { id?: string }) {
                         {c.last_post_thumb && <img className="chat-item-thumb" src={imageUrl(c.last_post_thumb)} alt="" loading="lazy" />}
                     </Link></li>)}</ul>}
             </aside>
-            {id ? <Room key={id} id={id} me={me} onActivity={roomActivity} onGrant={() => void refreshMe().catch(() => {})} />
+            {id ? <Room key={id} id={id} me={me} auto={auto} setAuto={setAuto} onActivity={roomActivity} onGrant={() => void refreshMe().catch(() => {})} />
                 : !empty && <section className="chat-room chat-empty"><p className="chat-pick">채팅방을 선택하세요</p></section>}
         </div>
     </div>;
 }
 
-function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivity: () => void; onGrant: () => void }) {
+function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: User; auto: ChatAuto | null; setAuto: (a: ChatAuto) => void; onActivity: () => void; onGrant: () => void }) {
     // The parent passes new callbacks on every render; keeping them in refs lets the room
     // load once per chat instead of restarting whenever the chat list refreshes.
     const activity = useRef(onActivity), grant = useRef(onGrant);
@@ -176,6 +183,7 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     const [brokerSheet, setBrokerSheet] = useState(false);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
     const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
+    const [savingTemplate, setSavingTemplate] = useState(false);
     const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false), [reporting, setReporting] = useState(false);
     // After the manager decides an application here: the next chat with a waiting one (null: none left).
     const [decided, setDecided] = useState(''), [nextApp, setNextApp] = useState<string | null | undefined>(undefined);
@@ -402,11 +410,26 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
     // Quick replies: any trade chat before my first text message (never in an application chat or a
     // chat with the manager that is not about a post), hidden as soon as the composer has text.
     // On a completed post only the author of a sale keeps '판완됐습니다'; the 'still selling' chips go.
-    const replySet = listing && isTradeKind(listing.kind) ? KIND_REPLIES[listing.kind] : undefined;
-    const closedListing = listing?.status === 'closed';
-    const replies = closedListing ? (ownListing && !replySet ? SELLER_REPLIES.slice(1) : []) : replySet ? replySet[ownListing ? 1 : 0] : ownListing ? SELLER_REPLIES : BUYER_REPLIES;
-    const quick = loaded && !apps.length && !text && !blocked && !partner?.deleted && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
+    const usable = loaded && !apps.length && !blocked && !partner?.deleted && !suspendedUntil;
+    const replies = quickReplies(listing, ownListing);
+    const quick = usable && !text && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
         && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? replies : [];
+    // 내 빠른 답장 (WP57): first in the row whenever the composer is empty; with text in it, a '+' chip
+    // saves that text as one more (while under the grade's count and not saved already).
+    const own = usable && !text && auto ? auto.templates : [];
+    const trimmed = text.trim();
+    const canSave = usable && !!auto && auto.max !== 0 && !!trimmed && trimmed.length <= TEMPLATE_MAX && !auto.templates.includes(trimmed) && (auto.max === null || auto.templates.length < auto.max);
+    const applyTemplate = (t: string) => {
+        const filled = auto?.vars ? fillTemplate(t, listing && { title: listing.title, kind: listing.kind, price: listing.price, currentOffer: listing.currentOffer }) : t;
+        setText(filled ?? t); input.current?.focus();
+    };
+    async function saveTemplate() {
+        if (!auto || !canSave || savingTemplate) return;
+        setSavingTemplate(true);
+        try { const r = await api<{ chat: ChatAuto }>('me/automation', 'PUT', { templates: [...auto.templates, trimmed] }); setAuto(r.chat); toast('저장 완료'); }
+        catch (err) { toast.error(errorText(err)); }
+        finally { setSavingTemplate(false); input.current?.focus(); }
+    }
     const listingIcon = listing && isTradeKind(listing.kind) ? KIND_ICONS[listing.kind] : 'money-bag';
     const nowMs = Date.now();
     const listingOpen = !!listing && listing.status !== 'closed';
@@ -478,8 +501,9 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                             : m.type === 'offer' ? <OfferCard offer={offers.find(o => o.id === m.reference_id)} me={me} onAction={offerAction} onMark={markOffer} />
                             : m.type === 'review' ? <ReviewCard trade={trades.find(t => t.id === m.reference_id)} me={me} gone={!!partner?.deleted} asked={m.sender_id === me.id}
                                 denied={messages.some(x => x.id > m.id && x.type === 'system' && x.body === '거래 아님' && x.sender_id !== m.sender_id)} onReport={() => setReporting(true)} onSaved={() => { void poll(false, true); activity.current(); }} />
-                            : <div className={'bubble-row' + (mine ? ' mine' : '')}>
+                            : <div className={'bubble-row' + (mine ? ' mine' : '') + (m.type === 'auto' ? ' is-auto' : '')}>
                                 <div className="bubble-col">
+                                    {m.type === 'auto' && <span className="bubble-auto">{CHAT_AUTO_TEXT.label}</span>}
                                     {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
                                     {m.body && <p className="bubble"><RichBody text={m.body} /></p>}
                                 </div>
@@ -495,7 +519,11 @@ function Room({ id, me, onActivity, onGrant }: { id: string; me: User; onActivit
                 {partner?.deleted ? <p className="muted small composer-blocked">탈퇴한 회원입니다.</p>
                     : blocked ? <p className="muted small composer-blocked">차단된 채팅방입니다.</p>
                     : suspendedUntil ? <p className="muted small composer-blocked">이용 정지 중입니다. ({suspendUntilText(suspendedUntil)})</p> : <>
-                    {quick.length > 0 && <div className="chip-scroll quick-replies" role="group" aria-label="빠른 답장">{quick.map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}</div>}
+                    {(own.length > 0 || quick.length > 0 || canSave) && <div className="chip-scroll quick-replies" role="group" aria-label="빠른 답장">
+                        {own.map(q => <button type="button" key={'own:' + q} className="chip chip-sm chip-own" title={q} onClick={() => applyTemplate(q)}>{q}</button>)}
+                        {quick.filter(q => !own.includes(q)).map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}
+                        {canSave && <button type="button" className="chip chip-sm chip-add" aria-label="빠른 답장 저장" disabled={savingTemplate} onClick={() => void saveTemplate()}><Plus size={14} aria-hidden="true" />빠른 답장</button>}
+                    </div>}
                     {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
                         <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void attach(Array.from(e.target.files || []))} />

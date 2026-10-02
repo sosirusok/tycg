@@ -137,23 +137,30 @@ export function rulesOf(u: { role?: string | null }): SiteRules {
 // 자동 가격 내리기 (WP56): autoPricePosts 판매 posts (Infinity: all), the periods a member can pick
 // (priceEveryHours; 플러스 is fixed at a day), pricePct whether '5%' can be the step, and autoDecline
 // whether '최저가 미만 제시 자동 거절' is available.
+// 채팅 자동화 (WP57): replyTemplates own quick replies (내 빠른 답장), templateVars whether they can hold
+// {제목} {즉거가} {현젯}, firstReply '첫 문의 자동 안내' and awayReply '자리 비움' (both off by default).
 export type Perks = {
     bumpMax: number; bumpRefillMinutes: number; bumpGapMinutes: number;
     autoBumpPosts: number; autoEveryMinutes: number; pauseDays: number; adSlots: number;
     serviceCoupons: number; filterAlerts: number; filterAlertEvents: 'new' | 'all';
     autoPricePosts: number; priceEveryHours: number[]; pricePct: boolean; autoDecline: boolean;
+    replyTemplates: number; templateVars: boolean; firstReply: boolean; awayReply: boolean;
 };
 
 const PRICE_PERIODS = [12, 24, 48, 72];
 const ELITE_PERKS: Perks = { bumpMax: 20, bumpRefillMinutes: 30, bumpGapMinutes: 20, autoBumpPosts: Infinity, autoEveryMinutes: 30, pauseDays: 7, adSlots: 3, serviceCoupons: Infinity, filterAlerts: 20, filterAlertEvents: 'all',
-    autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true };
+    autoPricePosts: Infinity, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: true,
+    replyTemplates: 20, templateVars: true, firstReply: true, awayReply: true };
 export const PERKS: Record<GradeId, Perks> = {
     normal: { bumpMax: 3, bumpRefillMinutes: 360, bumpGapMinutes: 360, autoBumpPosts: 0, autoEveryMinutes: 0, pauseDays: 0, adSlots: 0, serviceCoupons: 0, filterAlerts: 0, filterAlertEvents: 'new',
-        autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false },
+        autoPricePosts: 0, priceEveryHours: [], pricePct: false, autoDecline: false,
+        replyTemplates: 0, templateVars: false, firstReply: false, awayReply: false },
     plus: { bumpMax: 5, bumpRefillMinutes: 240, bumpGapMinutes: 180, autoBumpPosts: 1, autoEveryMinutes: 240, pauseDays: 3, adSlots: 0, serviceCoupons: 1, filterAlerts: 3, filterAlertEvents: 'new',
-        autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false },
+        autoPricePosts: 1, priceEveryHours: [24], pricePct: false, autoDecline: false,
+        replyTemplates: 5, templateVars: false, firstReply: false, awayReply: false },
     premium: { bumpMax: 10, bumpRefillMinutes: 90, bumpGapMinutes: 60, autoBumpPosts: 5, autoEveryMinutes: 90, pauseDays: 3, adSlots: 1, serviceCoupons: 5, filterAlerts: 10, filterAlertEvents: 'all',
-        autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false },
+        autoPricePosts: 5, priceEveryHours: PRICE_PERIODS, pricePct: true, autoDecline: false,
+        replyTemplates: 10, templateVars: true, firstReply: true, awayReply: false },
     elite: ELITE_PERKS,
     // 관리자 has the same limits as 엘리트 and no extra permissions.
     admin: { ...ELITE_PERKS },
@@ -281,6 +288,43 @@ export const DROP_TEXT = {
     next: (when: string, price: string) => `다음 내림 ${when} · ${price}`,
     allDone: (n: number) => `가격 내리기 ${n}개 설정 완료`,
 };
+// 채팅 자동화 (WP57, copy.md). The prefills are in user voice (the member's own words, sent as theirs).
+export const CHAT_AUTO_TEXT = {
+    label: '자동 응답',
+    templatesOff: '내 빠른 답장은 플러스부터 가능합니다.',
+    templatesMax: (n: number) => `빠른 답장은 ${n}개까지입니다.`,
+    templateLong: '빠른 답장은 100자까지입니다.',
+    firstOff: '첫 문의 자동 안내는 프리미엄부터 가능합니다.',
+    awayOff: '자리 비움 응답은 엘리트부터 가능합니다.',
+    textLong: '자동 응답 문구는 300자까지입니다.',
+    hours: '자리 비움 시간을 확인해 주세요.',
+    first: '첫 문의 자동 안내',
+    away: '자리 비움',
+    awayNow: '지금 자리 비움',
+    // copy-lint-ignore-next-line
+    firstDefault: '문의 감사합니다. {제목} 즉거가 {즉거가}입니다. 전번·계좌 인증 가능합니다.',
+    // copy-lint-ignore-next-line
+    awayDefault: '지금은 자리를 비웠습니다. 10시 이후 답장 드립니다.',
+};
+// Own quick replies hold at most this many characters; the two auto texts at most AUTO_REPLY_MAX.
+export const TEMPLATE_MAX = 100, AUTO_REPLY_MAX = 300;
+// 자리 비움 by schedule: from 02:00 to 10:00 KST unless the member picks other hours.
+export const AWAY_FROM = 2, AWAY_TO = 10;
+// '지금 자리 비움' lasts this long, then turns itself off.
+export const AWAY_NOW_MS = 12 * 3600000;
+// The 자리 비움 window running at `now` (its start, the key of 'one reply per window'), or null.
+// '지금 자리 비움' (until) wins over the schedule; the schedule is in whole KST hours and may wrap midnight.
+export function awayWindow(a: { away_on?: number | boolean | null; away_from?: number | null; away_to?: number | null; away_until?: number | null }, now: number): number | null {
+    if (a.away_until && a.away_until > now) return a.away_until - AWAY_NOW_MS;
+    if (!a.away_on) return null;
+    const from = a.away_from ?? AWAY_FROM, to = a.away_to ?? AWAY_TO;
+    if (from === to) return null;
+    const h = new Date(now + KST).getUTCHours();
+    if (from < to ? h < from || h >= to : h < from && h >= to) return null;
+    const start = kstDayStart(now) + from * 3600000;
+    return start > now ? start - 86400000 : start;
+}
+
 // '1만원', '5%'.
 export const dropStepText = (step: number | null, pct: number | null) => pct ? `${pct}%` : `${(step || DROP_STEPS[0]) / 10000}만원`;
 // '12시간', '하루', '2일', '3일'.

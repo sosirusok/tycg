@@ -200,7 +200,7 @@ function ReportChat({ report }: { report: Report }) {
     if (error) return <p className="muted">{error}</p>;
     if (!messages) return <SkeletonRows count={3} height={48} />;
     if (!messages.length) return <EmptyState title="메시지가 없습니다" />;
-    const text = (m: EvidenceMessage) => m.type === 'offer' ? '가격 제시' : m.type === 'listing' ? `문의한 글: ${m.body}` : [m.body, m.photos ? `사진 ${m.photos}장` : ''].filter(Boolean).join(' · ');
+    const text = (m: EvidenceMessage) => m.type === 'offer' ? '가격 제시' : m.type === 'listing' ? `문의한 글: ${m.body}` : m.type === 'auto' ? `자동 응답: ${m.body}` : [m.body, m.photos ? `사진 ${m.photos}장` : ''].filter(Boolean).join(' · ');
     return <ul className="report-chat">{messages.map(m => <li key={m.id} className={m.sender_id === report.target_user_id ? 'is-target' : ''}>
         <span className="muted small">{m.nickname} · {dateText(m.created_at)} {new Date(m.created_at).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' })}</span>
         <span className={m.type === 'system' ? 'muted' : ''}>{text(m)}</span>

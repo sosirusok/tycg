@@ -365,6 +365,9 @@
 .chat-shell.is-empty .chat-list { border-right: 0; }
 .chat-list-head { position: sticky; top: 0; z-index: 1; display: grid; gap: 12px; padding: 20px 20px 12px; background: var(--white); }
 .chat-list-title { font-size: var(--fs-20); font-weight: 700; }
+/* '지금 자리 비움' (WP57) sits at the right of the title. */
+.chat-list-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.chat-away { gap: 8px; color: var(--ink-2); font-size: var(--fs-13); white-space: nowrap; }
 .chat-list ul { margin: 0; padding: 0 8px 8px; list-style: none; }
 .chat-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: var(--r-8); }
 .chat-item:hover { background: var(--fill-2); }
@@ -456,6 +459,12 @@
 .review-verdict { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: var(--fs-15); font-weight: 700; }
 .composer { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--white); }
 .quick-replies { margin-bottom: 8px; }
+.quick-replies .chip { flex: none; }
+.chip-add { gap: 4px; color: var(--ink-2); }
+/* An own quick reply can hold 100 characters; the chip shows the start of it. */
+.chip-own { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; line-height: 28px; }
+/* An automatic answer (WP57): the member's own bubble with a small '자동 응답' above it. */
+.bubble-auto { color: var(--ink-3); font-size: var(--fs-12); }
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .composer textarea { flex: 1; min-width: 0; max-height: 160px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--r-pill); resize: none; font-size: var(--fs-15); line-height: 1.45; outline: none; }
 /* Pill while it is one line; a taller draft gets the modal radius so the corners do not clip text. */
@@ -779,6 +788,17 @@
 .drop-status { margin-top: 4px; color: var(--ink); font-size: var(--fs-13); font-weight: 600; }
 .drop-decline { color: var(--ink); font-weight: 600; }
 .owner-drop { margin: 0; color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; }
+/* 채팅 (WP57): own quick replies with a delete button, the add field, then the two automatic answers. */
+.template-list li { grid-template-columns: minmax(0, 1fr) auto; min-height: 48px; padding: 6px 0; }
+.template-text { color: var(--ink); font-size: var(--fs-14); line-height: 1.5; overflow-wrap: anywhere; }
+.template-add { display: flex; gap: 8px; }
+.template-add .input { height: 40px; font-size: var(--fs-14); }
+.template-add .btn { flex: none; height: 40px; }
+.chat-auto-block { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.chat-auto-block .switch { color: var(--ink); font-weight: 600; }
+.chat-auto-block .textarea { min-height: 72px; padding: 10px 12px; font-size: var(--fs-14); }
+.away-hours { display: flex; align-items: center; gap: 8px; color: var(--ink-3); }
+.away-hours .select { width: 104px; height: 40px; font-size: var(--fs-14); }
 
 
 /* 댓글·답글 (WP55): rows under the post body, 답글 indented one level, the composer last. */

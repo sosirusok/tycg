@@ -1,4 +1,5 @@
-import type { User } from '../shared/market';
+import { fillTemplate, type User } from '../shared/market';
+import { CHAT_AUTO_TEXT, awayWindow, perksOf } from '../shared/membership';
 import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
@@ -96,6 +97,40 @@ async function chatListing(conversationId: string, u: User) {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
     }
+}
+
+// 채팅 자동화 (WP57): the partner's automatic answer to a member's message, written in the same batch.
+// - 자리 비움 (엘리트 and up): one per chat per away window (reference 'away:' + the window's start).
+// - 첫 문의 자동 안내 (프리미엄 and up): about one of the partner's open posts, once per post per chat, and
+//   only while the partner wrote nothing in the chat for 24 hours (an away reply in this batch counts, so
+//   one message gets at most one automatic answer).
+// Never in a chat with the manager or with an application, never from or to a member under 이용 정지,
+// and only here (a member's own message): system lines, 제시, post cards and automatic answers never get
+// one, so two members' automatic answers cannot set each other off. A block refuses the message before.
+type AutoPartner = { deleted_at: number | null; role: string; suspended_until: number | null; grade: string | null; first_on: number | null; first_text: string | null;
+    away_on: number | null; away_from: number | null; away_to: number | null; away_text: string | null; away_until: number | null };
+const AUTO_GUARD = "NOT EXISTS(SELECT 1 FROM applications ap WHERE ap.conversation_id=?)";
+async function autoReplyStatements(conversationId: string, sender: User, partnerId: string, other: AutoPartner, post: any, now: number) {
+    if (isManager(sender) || other.role === 'manager' || isSuspended(other.suspended_until) || isSuspended(sender.suspended_until)) return [];
+    const perks = perksOf({ role: other.role, grade: other.grade || 'normal' }), out: D1PreparedStatement[] = [];
+    const away = perks.awayReply ? awayWindow(other, now) : null;
+    if (away !== null) {
+        out.push(...guardedMessageStatements(conversationId, partnerId, other.away_text || CHAT_AUTO_TEXT.awayDefault, 'auto', 'away:' + away,
+            `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)`, [conversationId, conversationId, 'away:' + away], now));
+    }
+    if (perks.firstReply && other.first_on) {
+        // The post this message is about: the one it carries, else the chat's latest post card or 제시.
+        const about = post ?? await db().prepare(`SELECT * FROM posts WHERE id=${aboutPost('?')}`).bind(conversationId).first<any>();
+        if (about && about.author_id === partnerId && about.status !== 'closed' && !about.hidden) {
+            const details = parse(about.details, {} as Record<string, unknown>);
+            const text = fillTemplate(other.first_text || CHAT_AUTO_TEXT.firstDefault, { title: about.title, kind: about.kind, price: about.price_mode === 'offer' ? null : about.price, currentOffer: Number(details.currentOffer) || null });
+            if (text) out.push(...guardedMessageStatements(conversationId, partnerId, text, 'auto', String(about.id),
+                `${AUTO_GUARD} AND NOT EXISTS(SELECT 1 FROM messages am WHERE am.conversation_id=? AND am.type='auto' AND am.reference_id=?)
+                    AND NOT EXISTS(SELECT 1 FROM messages sm WHERE sm.conversation_id=? AND sm.sender_id=? AND sm.created_at>?)`,
+                [conversationId, conversationId, String(about.id), conversationId, partnerId, now - 86400000], now));
+        }
+    }
+    return out;
 }
 
 function partner(row: any) {
@@ -201,7 +236,11 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
             // A member under 이용 정지 writes only to the manager (to appeal).
             if (partnerId !== MANAGER_ID) requireActive(u);
             // Nobody can write to a member who left; their side of the chat stays readable.
-            if ((await db().prepare('SELECT deleted_at FROM users WHERE id=?').bind(partnerId).first<{ deleted_at: number | null }>())?.deleted_at) fail(404, WITHDRAWN);
+            // The partner's row also brings their grade and 채팅 자동화 settings (WP57) in the same read.
+            const other = await db().prepare(`SELECT u.deleted_at,u.role,u.suspended_until,
+                (SELECT g.grade FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>?) ORDER BY g.rank DESC LIMIT 1) AS grade,
+                a.first_on,a.first_text,a.away_on,a.away_from,a.away_to,a.away_text,a.away_until FROM users u LEFT JOIN automation a ON a.user_id=u.id WHERE u.id=?`).bind(Date.now(), partnerId).first<AutoPartner>();
+            if (other?.deleted_at) fail(404, WITHDRAWN);
             if (await blocked(c.user_a, c.user_b)) fail(403, '차단된 회원입니다.');
             await limit('message:' + u.id, 60, 60000);
             const b = await body(req);
@@ -225,12 +264,14 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 if (post.author_id !== partnerId) fail(400, '게시글 작성자를 확인해 주세요.');
             }
             const now = Date.now(), ref = post ? String(post.id) : '';
+            const auto = other ? await autoReplyStatements(p[1], u, partnerId, other, post, now) : [];
             const r = await db().batch([
                 ...post ? [db().prepare("INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT ?,?,?,'listing',?,'[]',? WHERE COALESCE((SELECT reference_id FROM messages WHERE conversation_id=? AND type='listing' ORDER BY id DESC LIMIT 1),'')!=?")
                     .bind(p[1], u.id, post.title, ref, now, p[1], ref)] : [],
                 ...messageStatements(p[1], u.id, text, 'text', null, images as string[], now),
                 // The author writing about their own open post keeps it in 자동 끌올 (WP52: touched_at).
                 db().prepare(`UPDATE posts SET touched_at=? WHERE id=${aboutPost('?')} AND author_id=? AND status!='closed'`).bind(now, p[1], u.id),
+                ...auto,
             ]);
             return json({ id: r[post ? 1 : 0].meta.last_row_id }, 201);
         }

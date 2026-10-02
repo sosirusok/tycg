@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { X } from 'lucide-react';
 import { toast } from 'sonner';
 import { KIND_ICONS, isTradeKind, manToWon, priceText, wonToMan } from '../../shared/market';
-import { ALERT_TEXT, AUTO_TEXT, DROP_TEXT, dropEveryText, dropStepText, kstDateTime } from '../../shared/membership';
+import { ALERT_TEXT, AUTO_REPLY_MAX, AUTO_TEXT, CHAT_AUTO_TEXT, DROP_TEXT, TEMPLATE_MAX, dropEveryText, dropStepText, kstDateTime } from '../../shared/membership';
+import { TEMPLATE_VARS } from '../../shared/market';
+import type { ChatAuto } from './Chat';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { CIcon, SkeletonRows } from '../components/ui';
@@ -17,7 +20,7 @@ type AutoPost = { id: number; title: string; kind: string; category: string; thu
 type DropSettings = { slots: number | null; step: number; pct: number | null; everyH: number; everyOptions: number[]; canPct: boolean; canDecline: boolean; declineOn: boolean; on: number };
 export type AutoState = Wallet & {
     bumpOn: boolean; bumpNew: boolean; canBumpNew: boolean; state: string; pausedAt: number | null; nextAt: number | null; everyMin: number;
-    slots: number | null; pauseDays: number | null; trial: boolean; listed: number; stale: number; posts: AutoPost[]; drop: DropSettings;
+    slots: number | null; pauseDays: number | null; trial: boolean; listed: number; stale: number; posts: AutoPost[]; drop: DropSettings; chat: ChatAuto;
 };
 // '다음 내림 10월 2일 20:00 · 27만원' (the Detail owner bar shows the same line).
 export const dropStatus = (d: PostDrop | null | undefined) => d?.on && d.nextAt && d.nextPrice ? DROP_TEXT.next(kstDateTime(d.nextAt), priceText(d.nextPrice)) : null;
@@ -44,6 +47,7 @@ export function Auto() {
     return <>
         <BumpCard s={s} setS={setS} load={load} />
         <div className="mt-16"><DropCard s={s} setS={setS} /></div>
+        <div className="mt-16"><ChatCard chat={s.chat} setChat={chat => setS({ ...s, chat })} /></div>
     </>;
 }
 
@@ -163,6 +167,63 @@ function DropCard({ s, setS }: { s: AutoState; setS: (s: AutoState) => void }) {
         })}</ul> : <p className="auto-empty">즉거가가 있는 판매 글이 없습니다.</p>}
         {d.canDecline && <label className="switch drop-decline"><input type="checkbox" role="switch" checked={d.declineOn} disabled={busy} onChange={e => void save({ declineOn: e.target.checked })} />{DROP_TEXT.decline}</label>}
         <ul className="auto-hints"><li>{DROP_TEXT.hold}</li></ul>
+    </section>;
+}
+
+// The '채팅' card (WP57): 내 빠른 답장 (n/10, each with a delete button, and a field to add one), then
+// for 프리미엄 and up '첫 문의 자동 안내' with its text, and for 엘리트 and up '자리 비움' with its hours and
+// text. Both switches start off; the texts start with the prefills and save on blur.
+const hourText = (h: number) => `${String(h).padStart(2, '0')}:00`;
+function ChatCard({ chat, setChat }: { chat: ChatAuto; setChat: (c: ChatAuto) => void }) {
+    const [busy, setBusy] = useState(false), [draft, setDraft] = useState('');
+    const [first, setFirst] = useState(chat.firstText), [away, setAway] = useState(chat.awayText);
+    async function save(change: Record<string, unknown>, done?: string) {
+        if (busy) return false;
+        setBusy(true);
+        try { const r = await api<{ chat: ChatAuto }>('me/automation', 'PUT', change); setChat(r.chat); if (done) toast(done); return true; }
+        catch (e) { toast.error(errorText(e)); return false; }
+        finally { setBusy(false); }
+    }
+    async function add(e: FormEvent) {
+        e.preventDefault();
+        const t = draft.trim();
+        if (!t || chat.templates.includes(t)) { setDraft(''); return; }
+        if (await save({ templates: [...chat.templates, t] }, '저장 완료')) setDraft('');
+    }
+    const full = chat.max !== null && chat.templates.length >= chat.max;
+    const hours = Array.from({ length: 24 }, (_, h) => h);
+    return <section className="card card-pad auto-card chat-auto-card" aria-labelledby="auto-chat-title">
+        <h2 className="card-title" id="auto-chat-title">채팅</h2>
+        <h3 className="auto-list-title">내 빠른 답장 {chat.templates.length}{chat.max !== null ? `/${chat.max}` : ''}</h3>
+        {chat.templates.length ? <ul className="auto-list template-list">{chat.templates.map(t => <li key={t}>
+            <span className="auto-main"><span className="template-text">{t}</span></span>
+            <button type="button" className="icon-btn" aria-label={`${t} 삭제`} disabled={busy} onClick={() => void save({ templates: chat.templates.filter(x => x !== t) }, '삭제 완료')}><X size={18} /></button>
+        </li>)}</ul> : <p className="auto-empty">채팅 입력창의 + 빠른 답장으로도 저장할 수 있습니다.</p>}
+        {!full && <form className="template-add" onSubmit={add}>
+            <input className="input" value={draft} maxLength={TEMPLATE_MAX} disabled={busy} onChange={e => setDraft(e.target.value)} placeholder="예: 전번·계좌 인증 가능합니다" aria-label="빠른 답장 문구" />
+            <button type="submit" className="btn btn-line btn-sm" disabled={busy || !draft.trim()}>추가</button>
+        </form>}
+        {chat.vars && <p className="auto-note">쓸 수 있는 값: {TEMPLATE_VARS.join(' · ')}</p>}
+        {(chat.canFirst || chat.canAway) && <h3 className="auto-list-title">{CHAT_AUTO_TEXT.label}</h3>}
+        {chat.canFirst && <div className="chat-auto-block">
+            <label className="switch"><input type="checkbox" role="switch" checked={chat.firstOn} disabled={busy} onChange={e => void save({ firstOn: e.target.checked })} />{CHAT_AUTO_TEXT.first}</label>
+            <textarea className="textarea" rows={3} maxLength={AUTO_REPLY_MAX} value={first} disabled={busy} aria-label={`${CHAT_AUTO_TEXT.first} 문구`}
+                onChange={e => setFirst(e.target.value)} onBlur={() => { if (first.trim() && first.trim() !== chat.firstText) void save({ firstText: first }, '저장 완료'); else setFirst(chat.firstText); }} />
+            <p className="auto-sub">내 거래중 글에 온 첫 문의에 1번 · 문의한 글의 {TEMPLATE_VARS.join(' ')} 자동 입력</p>
+        </div>}
+        {chat.canAway && <div className="chat-auto-block">
+            <label className="switch"><input type="checkbox" role="switch" checked={chat.awayOn} disabled={busy} onChange={e => void save({ awayOn: e.target.checked })} />{CHAT_AUTO_TEXT.away}</label>
+            <div className="away-hours">
+                <select className="select" aria-label="자리 비움 시작" value={chat.awayFrom} disabled={busy} onChange={e => void save({ awayFrom: Number(e.target.value), awayTo: chat.awayTo })}>
+                    {hours.map(h => <option key={h} value={h} disabled={h === chat.awayTo}>{hourText(h)}</option>)}</select>
+                <span aria-hidden="true">~</span>
+                <select className="select" aria-label="자리 비움 끝" value={chat.awayTo} disabled={busy} onChange={e => void save({ awayFrom: chat.awayFrom, awayTo: Number(e.target.value) })}>
+                    {hours.map(h => <option key={h} value={h} disabled={h === chat.awayFrom}>{hourText(h)}</option>)}</select>
+            </div>
+            <textarea className="textarea" rows={2} maxLength={AUTO_REPLY_MAX} value={away} disabled={busy} aria-label={`${CHAT_AUTO_TEXT.away} 문구`}
+                onChange={e => setAway(e.target.value)} onBlur={() => { if (away.trim() && away.trim() !== chat.awayText) void save({ awayText: away }, '저장 완료'); else setAway(chat.awayText); }} />
+            <p className="auto-sub">자리 비움 시간에 온 채팅에 1번 · 채팅 목록 &lsquo;지금 자리 비움&rsquo; 12시간 유지</p>
+        </div>}
     </section>;
 }
 

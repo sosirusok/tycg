@@ -3,7 +3,7 @@ import { notifyStatement } from './notifications';
 import { amount, walletJson } from './posts';
 import { adTrimManyStatement } from './ads';
 import { TRADE_KINDS, categoriesForKind, priceText, type User } from '../shared/market';
-import { AUTO_RESERVE, AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
+import { AUTO_REPLY_MAX, AUTO_RESERVE, AUTO_TEXT, AWAY_FROM, AWAY_NOW_MS, AWAY_TO, CHAT_AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, TEMPLATE_MAX, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
 // 자동 끌올 (WP52). Two cron ticks share the work:
 // - tick A (every 10 minutes, ':00') moves at most one post per due member, only 09:00-02:00 KST;
@@ -140,7 +140,7 @@ function candidatesStatement(members: { u: string; g: number; x: number }[], boa
 }
 
 // How many different members wait for a reply in each due member's chats about their open posts: the
-// other side's last text is 24 hours to 7 days old, the member wrote nothing since, neither blocked the
+// other side's last text is 24 hours to 7 days old, the member wrote nothing since (an 'auto' reply is not an answer), neither blocked the
 // other and the other has not left. 2 or more pause 자동 끌올; one reply or a block resumes it.
 function replyStatement(ids: string[], now: number) {
     return db().prepare(`WITH d(uid) AS (SELECT value FROM json_each(?)),
@@ -149,7 +149,7 @@ function replyStatement(ids: string[], now: number) {
         w AS (SELECT cv.uid,cv.cid,cv.other,(SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id=cv.cid AND m.sender_id=cv.other AND m.type='text') AS last FROM cv)
         SELECT w.uid AS id,COUNT(DISTINCT w.other) AS n FROM w
         WHERE w.last<=? AND w.last>?
-            AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=w.cid AND m.sender_id=w.uid AND m.created_at>w.last)
+            AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=w.cid AND m.sender_id=w.uid AND m.created_at>w.last AND m.type!='auto')
             AND EXISTS(SELECT 1 FROM posts p WHERE p.author_id=w.uid AND p.status!='closed' AND p.id=(SELECT CASE WHEN m.type='listing' THEN CAST(m.reference_id AS INTEGER) ELSE (SELECT o.post_id FROM offers o WHERE o.id=m.reference_id) END
                 FROM messages m WHERE m.conversation_id=w.cid AND m.type IN ('listing','offer') ORDER BY m.id DESC LIMIT 1))
             AND NOT EXISTS(SELECT 1 FROM blocks k WHERE (k.user_id=w.uid AND k.target_id=w.other) OR (k.user_id=w.other AND k.target_id=w.uid))
@@ -501,7 +501,7 @@ async function automationState(u: User) {
     const now = Date.now(), manager = isManager(u), perks = perksOf(u);
     const r = await db().batch([
         db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, manager ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now),
-        db().prepare('SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at,drop_step,drop_pct,drop_every_h,decline_on FROM automation WHERE user_id=?').bind(u.id),
+        db().prepare(`SELECT bump_on,bump_new,bump_next_at,pause_reason,paused_at,drop_step,drop_pct,drop_every_h,decline_on,${CHAT_COLUMNS} FROM automation WHERE user_id=?`).bind(u.id),
         db().prepare('SELECT bump_tokens,bump_at FROM users WHERE id=?').bind(u.id),
         db().prepare(`SELECT p.id,p.title,p.kind,p.category,p.thumb,CASE WHEN json_valid(p.images) THEN json_extract(p.images,'$[0]') END AS image,p.bumped_at,p.hidden,COALESCE(pa.bump,0) AS auto,
                 COALESCE(p.touched_at,p.updated_at)<=? AS stale,p.price,p.price_mode,CAST(json_extract(p.details,'$.currentOffer') AS INTEGER) AS current_offer,
@@ -531,7 +531,71 @@ async function automationState(u: User) {
             everyOptions: perks.priceEveryHours, canPct: perks.pricePct, canDecline: perks.autoDecline, declineOn: perks.autoDecline && !!a.decline_on,
             on: posts.filter(p => p.drop?.on && !p.hidden).length,
         },
+        // 채팅 자동화 (WP57): the '채팅' card.
+        chat: chatJson(r[1].results[0] as ChatRow, perks, now, manager),
     };
+}
+
+// 채팅 자동화 (WP57): own quick replies, '첫 문의 자동 안내' and '자리 비움', all in the member's automation
+// row. Empty texts read as the prefilled ones; hours are whole KST hours.
+const CHAT_COLUMNS = 'templates,first_on,first_text,away_on,away_from,away_to,away_text,away_until';
+type ChatRow = { templates: string; first_on: number; first_text: string; away_on: number; away_from: number | null; away_to: number | null; away_text: string; away_until: number | null };
+export function storedTemplates(raw: unknown): string[] {
+    try { const v = JSON.parse(String(raw ?? '[]')); return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : []; } catch { return []; }
+}
+// The manager's chats are all manager chats, which never get automatic answers, so the two switches stay hidden.
+function chatJson(a: ChatRow | null | undefined, perks: Perks, now: number, manager: boolean) {
+    const max = Number.isFinite(perks.replyTemplates) ? perks.replyTemplates : null;
+    return {
+        templates: storedTemplates(a?.templates).slice(0, max ?? undefined), max, vars: perks.templateVars,
+        canFirst: perks.firstReply && !manager, firstOn: perks.firstReply && !!a?.first_on, firstText: a?.first_text || CHAT_AUTO_TEXT.firstDefault,
+        canAway: perks.awayReply && !manager, awayOn: perks.awayReply && !!a?.away_on, awayFrom: a?.away_from ?? AWAY_FROM, awayTo: a?.away_to ?? AWAY_TO,
+        awayText: a?.away_text || CHAT_AUTO_TEXT.awayDefault, awayUntil: perks.awayReply && a?.away_until && a.away_until > now ? a.away_until : null,
+    };
+}
+// GET me/automation/chat (the chat page): the same settings, one row read, for every grade.
+async function chatState(u: User) {
+    const a = await db().prepare(`SELECT ${CHAT_COLUMNS} FROM automation WHERE user_id=?`).bind(u.id).first<ChatRow>();
+    return chatJson(a, perksOf(u), Date.now(), isManager(u));
+}
+const CHAT_KEYS = ['templates', 'firstOn', 'firstText', 'awayOn', 'awayFrom', 'awayTo', 'awayText', 'awayNow'];
+const hourOf = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 23;
+const autoText = (v: unknown) => {
+    if (typeof v !== 'string') fail(400, '설정을 확인해 주세요.');
+    const t = v.trim();
+    if (t.length > AUTO_REPLY_MAX) fail(400, CHAT_AUTO_TEXT.textLong);
+    // The prefilled text is stored as '' so it follows later wording changes.
+    return t;
+};
+// The chat fields of PUT me/automation, checked before the 자동 끌올 gate so each names its own grade.
+// Returns the SET parts.
+function chatSets(b: Record<string, any>, perks: Perks, now: number): { sets: string[]; args: unknown[] } {
+    const sets: string[] = [], args: unknown[] = [];
+    if (b.templates !== undefined) {
+        if (!perks.replyTemplates) fail(403, CHAT_AUTO_TEXT.templatesOff);
+        if (!Array.isArray(b.templates) || b.templates.some((t: unknown) => typeof t !== 'string')) fail(400, '설정을 확인해 주세요.');
+        const list = [...new Set((b.templates as string[]).map(t => t.trim()).filter(Boolean))];
+        if (list.some(t => t.length > TEMPLATE_MAX)) fail(400, CHAT_AUTO_TEXT.templateLong);
+        if (list.length > perks.replyTemplates) fail(400, CHAT_AUTO_TEXT.templatesMax(perks.replyTemplates));
+        sets.push('templates=?'); args.push(JSON.stringify(list));
+    }
+    if (b.firstOn !== undefined || b.firstText !== undefined) {
+        if (!perks.firstReply) fail(403, CHAT_AUTO_TEXT.firstOff);
+        if (b.firstOn !== undefined) { if (typeof b.firstOn !== 'boolean') fail(400, '설정을 확인해 주세요.'); sets.push('first_on=?'); args.push(b.firstOn ? 1 : 0); }
+        if (b.firstText !== undefined) { const t = autoText(b.firstText); sets.push('first_text=?'); args.push(t === CHAT_AUTO_TEXT.firstDefault ? '' : t); }
+    }
+    if (b.awayOn !== undefined || b.awayFrom !== undefined || b.awayTo !== undefined || b.awayText !== undefined || b.awayNow !== undefined) {
+        if (!perks.awayReply) fail(403, CHAT_AUTO_TEXT.awayOff);
+        if (b.awayOn !== undefined) { if (typeof b.awayOn !== 'boolean') fail(400, '설정을 확인해 주세요.'); sets.push('away_on=?'); args.push(b.awayOn ? 1 : 0); }
+        if (b.awayFrom !== undefined || b.awayTo !== undefined) {
+            if (!hourOf(b.awayFrom) || !hourOf(b.awayTo) || b.awayFrom === b.awayTo) fail(400, CHAT_AUTO_TEXT.hours);
+            sets.push('away_from=?', 'away_to=?'); args.push(b.awayFrom, b.awayTo);
+        }
+        if (b.awayText !== undefined) { const t = autoText(b.awayText); sets.push('away_text=?'); args.push(t === CHAT_AUTO_TEXT.awayDefault ? '' : t); }
+        // '지금 자리 비움': 12 hours from now, then it turns itself off.
+        if (b.awayNow !== undefined) { if (typeof b.awayNow !== 'boolean') fail(400, '설정을 확인해 주세요.'); sets.push('away_until=?'); args.push(b.awayNow ? now + AWAY_NOW_MS : null); }
+    }
+    return { sets, args };
 }
 
 // A post's 가격 내리기 for its author: on, 최저가, the next drop time and price, and how many drops so far.
@@ -547,10 +611,14 @@ export function dropJson(p: { kind: string; price: number | null; price_mode?: s
 export async function automationHandler(req: Request, p: string[]): Promise<Response | null> {
     if (p[1] !== 'automation') return null;
     const u = await requireUser(req), method = req.method, now = Date.now();
+    if (p[2] === 'chat' && !p[3] && method === 'GET') return json(await chatState(u));
+    // The chat fields (WP57) are checked first, so a member without a grade hears which grade they need.
+    const put = !p[2] && method === 'PUT' ? await body(req) : null;
+    const chat = put ? chatSets(put, perksOf(u), now) : null;
     if (!autoAllowed(u)) fail(403, AUTO_TEXT.off);
     if (!p[2] && method === 'GET') return json(await automationState(u));
-    if (!p[2] && method === 'PUT') {
-        const b = await body(req), sets: string[] = [], args: unknown[] = [];
+    if (put && chat) {
+        const b = put, sets: string[] = [...chat.sets], args: unknown[] = [...chat.args];
         if (typeof b.bumpOn === 'boolean') { sets.push('bump_on=?', 'bump_next_at=COALESCE(bump_next_at,?)'); args.push(b.bumpOn ? 1 : 0, now); }
         if (typeof b.bumpNew === 'boolean') {
             if (!isManager(u) && gradeInfo(u.grade).rank < 3) fail(403, '새 글 자동 포함은 엘리트부터 가능합니다.');
@@ -577,6 +645,14 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
             sets.push('decline_on=?'); args.push(b.declineOn ? 1 : 0);
         }
         if (!sets.length) fail(400, '설정을 확인해 주세요.');
+        // Only chat settings (the chat page's '+' and '지금 자리 비움', the '채팅' card): the row and the chat part.
+        if (Object.keys(b).every(k => CHAT_KEYS.includes(k))) {
+            await db().batch([
+                db().prepare('INSERT OR IGNORE INTO automation(user_id,bump_on,bump_new,bump_next_at,updated_at) VALUES(?,?,?,?,?)').bind(u.id, isManager(u) ? 0 : 1, gradeInfo(u.grade).rank >= 3 ? 1 : 0, now, now),
+                db().prepare(`UPDATE automation SET ${sets.join(',')},updated_at=? WHERE user_id=?`).bind(...args, now, u.id),
+            ]);
+            return json({ chat: await chatState(u) });
+        }
         await automationState(u);
         await db().prepare(`UPDATE automation SET ${sets.join(',')},updated_at=? WHERE user_id=?`).bind(...args, now, u.id).run();
         return json(await automationState(u));
