@@ -859,8 +859,9 @@ async function listPosts(req: Request, url: URL) {
 }
 
 // GET /api/tags (WP70): the board's '태그' filter. The manager's pinned tags (sys:pinned_tags, default
-// '불새상류') first, then the 12 most used tags of the last 30 days, counted over the newest 300 tag rows
-// (one read of at most 301 rows, kept in this isolate for 10 minutes).
+// '불새상류') first, then the 12 most used tags of the last 30 days, counted over the newest 300 tag rows of
+// posts the boards show (a post the manager hid, or one hidden by 회원 탈퇴, never lends its tags to the
+// filter), one read of about 600 rows, kept in this isolate for 10 minutes.
 export const DEFAULT_PINNED_TAGS = '불새상류';
 const TAG_CACHE_MS = 10 * 60000;
 let tagCache: { at: number; tags: string[] } | null = null;
@@ -872,8 +873,8 @@ export async function tagsHandler() {
     const now = Date.now();
     if (!tagCache || now - tagCache.at > TAG_CACHE_MS) {
         // The first post of the last 30 days through posts_created (1 row); post ids grow with time.
-        const r = await db().prepare(`SELECT tag,COUNT(*) AS n FROM (SELECT tag FROM post_tags WHERE post_id>=(SELECT id FROM posts WHERE created_at>? ORDER BY created_at LIMIT 1)
-            ORDER BY post_id DESC LIMIT 300) GROUP BY tag ORDER BY n DESC,tag LIMIT 12`).bind(now - 30 * DAY).all<{ tag: string }>();
+        const r = await db().prepare(`SELECT tag,COUNT(*) AS n FROM (SELECT t.tag FROM post_tags t JOIN posts tp ON tp.id=t.post_id AND tp.hidden=0
+            WHERE t.post_id>=(SELECT id FROM posts WHERE created_at>? ORDER BY created_at LIMIT 1) ORDER BY t.post_id DESC LIMIT 300) GROUP BY tag ORDER BY n DESC,tag LIMIT 12`).bind(now - 30 * DAY).all<{ tag: string }>();
         tagCache = { at: now, tags: r.results.map(x => x.tag) };
     }
     const pinned = await pinnedTags();
@@ -1390,12 +1391,18 @@ async function matchesOf(u: User, own: any, url: URL) {
 
 type Valid = Awaited<ReturnType<typeof validatePost>>;
 
-// 클랜 래더 and 특징 태그 (WP70) rows of a post, one statement per table (a JSON list each), for the post
-// that `target` selects (bind targetArgs). Nothing for an empty list.
-function extraRows(v: Pick<Valid, 'clanTags' | 'wantedClanTags' | 'featureTags'>, target: string, targetArgs: unknown[]) {
+// The side rows of a post, one set-based statement per table (a JSON list each, never one statement per
+// tag: '전체 선택' on a few tiers gives 60+ season tags, over the Free plan's 50 queries a request), for the
+// post that `target` selects (bind targetArgs): 래더 기록 and 원하는 래더, 시즌 비공개 (WP68), 클랜 래더 and 특징
+// 태그 (WP70). Nothing for an empty list.
+function extraRows(v: Pick<Valid, 'tags' | 'wantedTags' | 'ladderHidden' | 'clanTags' | 'wantedClanTags' | 'featureTags'>, target: string, targetArgs: unknown[]) {
     const seasons = (table: string, list: SeasonTag[]) => list.length ? [db().prepare(`INSERT INTO ${table}(post_id,tier,season) SELECT n.id,json_extract(j.value,'$.tier'),json_extract(j.value,'$.season')
         FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...targetArgs, JSON.stringify(list))] : [];
     return [
+        ...seasons('post_seasons', v.tags),
+        ...seasons('post_wanted_seasons', v.wantedTags),
+        ...Object.keys(v.ladderHidden).length ? [db().prepare(`INSERT INTO post_ladder_hidden(post_id,tier,count) SELECT n.id,j.key,j.value FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`)
+            .bind(...targetArgs, JSON.stringify(v.ladderHidden))] : [],
         ...seasons('post_clan_seasons', v.clanTags),
         ...seasons('post_wanted_clan_seasons', v.wantedClanTags),
         ...v.featureTags.length ? [db().prepare(`INSERT INTO post_tags(post_id,tag) SELECT n.id,j.value FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...targetArgs, JSON.stringify(v.featureTags))] : [],
@@ -1495,9 +1502,6 @@ async function createPost(u: User, v: Valid, print: NewPrint, now: number, stric
             SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${placeSql},?,?,?,?,?,?,?,? WHERE ${guard}`)
             .bind(u.id, v.kind, v.title, v.content, v.price, 'open', v.category, v.mode, v.accepts, v.details, v.images, v.thumb, now, now, now, ...placeArgs, key,
                 relist ? 1 : 0, relist ? 1 : 0, hidden, hiddenReason, v.linkPreview, v.bodyStyle, perks.adSlots ? now : null, ...strict ? [u.id, rules.openPosts, u.id, dayStart, rules.postsPerDay] : []),
-        ...v.tags.map(t => db().prepare(`INSERT INTO post_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
-        ...v.wantedTags.map(t => db().prepare(`INSERT INTO post_wanted_seasons(post_id,tier,season) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(t.tier, t.season, ...newArgs)),
-        ...Object.entries(v.ladderHidden).map(([tier, count]) => db().prepare(`INSERT INTO post_ladder_hidden(post_id,tier,count) SELECT id,?,? FROM ${newPost} WHERE id IS NOT NULL`).bind(tier, count, ...newArgs)),
         ...extraRows(v, newPost, newArgs),
         db().prepare(`INSERT INTO post_images(post_id,upload_id) SELECT n.id,j.value FROM ${newPost} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...newArgs, v.images),
         ...strict ? [
@@ -1564,13 +1568,7 @@ async function editPost(u: User, existing: any, v: Valid, print: NewPrint, now: 
             bumped_at=CASE WHEN ? THEN MIN(bumped_at,?) ELSE bumped_at END,relist=CASE WHEN ? THEN 1 ELSE relist END,bump_count=CASE WHEN ? THEN MAX(bump_count,1) ELSE bump_count END
             WHERE id=? AND status!='closed'`)
             .bind(v.kind, v.title, key, v.content, v.price, v.category, v.mode, v.accepts, v.details, v.images, v.thumb, v.linkPreview, v.bodyStyle, now, now, move ? 1 : 0, move?.anchor_at ?? 0, move ? 1 : 0, move ? 1 : 0, existing.id),
-        db().prepare('DELETE FROM post_seasons WHERE post_id=?').bind(existing.id),
-        ...v.tags.map(t => db().prepare('INSERT INTO post_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
-        db().prepare('DELETE FROM post_wanted_seasons WHERE post_id=?').bind(existing.id),
-        ...v.wantedTags.map(t => db().prepare('INSERT INTO post_wanted_seasons(post_id,tier,season) VALUES(?,?,?)').bind(existing.id, t.tier, t.season)),
-        db().prepare('DELETE FROM post_ladder_hidden WHERE post_id=?').bind(existing.id),
-        ...Object.entries(v.ladderHidden).map(([tier, count]) => db().prepare('INSERT INTO post_ladder_hidden(post_id,tier,count) VALUES(?,?,?)').bind(existing.id, tier, count)),
-        ...['post_clan_seasons', 'post_wanted_clan_seasons', 'post_tags'].map(table => db().prepare(`DELETE FROM ${table} WHERE post_id=?`).bind(existing.id)),
+        ...['post_seasons', 'post_wanted_seasons', 'post_ladder_hidden', 'post_clan_seasons', 'post_wanted_clan_seasons', 'post_tags'].map(table => db().prepare(`DELETE FROM ${table} WHERE post_id=?`).bind(existing.id)),
         ...extraRows(v, '(SELECT ? AS id)', [existing.id]),
         db().prepare('DELETE FROM post_images WHERE post_id=?').bind(existing.id),
         db().prepare('INSERT INTO post_images(post_id,upload_id) SELECT ?,value FROM json_each(?)').bind(existing.id, v.images),

@@ -142,8 +142,9 @@ try {
     // verify-push (WP64) runs a mock push service: inline pushes, the queue of tick B, failures and the keys.
     // verify-chat-live (WP69) reads the meter: a send in ≤ 2 D1 calls, and the long poll's calls and timing.
     // verify-search (WP70) seeds 20,000 posts too and checks the posts_fts search with the meter.
+    // verify-step5-fixes (R3 step 5 review) reads the meter: a post with 70+ season tags within 45 statements.
     // verify-budget stays last: it seeds 20,000 posts and removes them at the end.
-    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-stats.mjs', 'tests/verify-providers.mjs', 'tests/verify-push.mjs', 'tests/verify-chat-live.mjs', 'tests/verify-search.mjs', 'tests/verify-budget.mjs'])) {
+    for (const suite of pick(['tests/verify-storage.mjs', 'tests/verify-perks.mjs', 'tests/verify-cleanup.mjs', 'tests/verify-trial.mjs', 'tests/verify-deals.mjs', 'tests/verify-dup.mjs', 'tests/verify-alerts.mjs', 'tests/verify-alerts-posts.mjs', 'tests/verify-auto.mjs', 'tests/verify-auto-drop.mjs', 'tests/verify-auto-bulk.mjs', 'tests/verify-promo.mjs', 'tests/verify-stats.mjs', 'tests/verify-providers.mjs', 'tests/verify-push.mjs', 'tests/verify-chat-live.mjs', 'tests/verify-search.mjs', 'tests/verify-step5-fixes.mjs', 'tests/verify-budget.mjs'])) {
         // verify-auto, verify-alerts-posts, verify-perks (45 calls), verify-stats and verify-dup (about 60 calls) set
         // up their scenarios with wrangler d1 execute (about 1.7 s a call, 4-5 s on a busy machine), so they get
         // longer; verify-perks also uploads 121 photos and fires the cron twice, and verify-search seeds 20,000 posts.
