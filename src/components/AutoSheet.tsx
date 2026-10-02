@@ -5,6 +5,7 @@ import { AUTO_TEXT } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
 import { CIcon, Modal } from './ui';
 import { kstClock } from './Wallet';
+import { offerPush } from '../app/state';
 
 type Listed = { id: number; title: string; kind: string; thumb: string | null; image: string | null };
 
@@ -56,6 +57,7 @@ export async function setBumpRemind(postId: number): Promise<number | null> {
     try {
         const d = await api<{ remindAt: number | null }>(`posts/${postId}/auto`, 'PUT', { remind: true });
         toast('알림 설정 완료');
+        offerPush();
         return d.remindAt;
     } catch (e) { toast.error(errorText(e)); return null; }
 }

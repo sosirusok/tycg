@@ -11,6 +11,7 @@ import { ApplyModal } from './app/ApplyModal';
 import { TrialPopup } from './app/TrialPopup';
 import { PROVIDER_TEXT, trialStatus } from '../shared/membership';
 import { GradeCelebration } from './components/GradeCelebration';
+import { PushBar } from './app/PushBar';
 import { Home } from './pages/Home';
 import { Board } from './pages/Board';
 import { Detail } from './pages/Detail';
@@ -213,6 +214,7 @@ function Shell() {
         <ApplyModal />
         <TrialPopup />
         <GradeCelebration />
+        <PushBar />
     </>;
 }
 

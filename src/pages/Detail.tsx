@@ -10,7 +10,7 @@ import { ApiError, api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, takeScrollRestore, withParams } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
 import { sharePost } from '../lib/share';
-import { setPageTitle, useApp } from '../app/state';
+import { offerPush, setPageTitle, useApp } from '../app/state';
 import { Avatar, EmptyState, Modal, NameLine, SkeletonRows } from '../components/ui';
 import { PriceLine } from '../components/PostCard';
 import { RichBody } from '../components/RichBody';
@@ -133,7 +133,7 @@ export function Detail({ id }: { id: string }) {
         if (!post || followBusy) return;
         const active = !post.author_followed;
         setFollowBusy(true);
-        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        try { await api(`users/${post.author_id}/follow`, 'POST', { active }); setPost(p => p && { ...p, author_followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); if (active) offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setFollowBusy(false); }
     });
@@ -431,7 +431,7 @@ function OfferModal({ open, onClose, post }: { open: boolean; onClose: () => voi
     async function send() {
         if (won === null || Number.isNaN(won)) { toast.error('제시가를 만원 단위로 입력해 주세요. 예: 45'); return; }
         setBusy(true);
-        try { const d = await api<{ chatId: string }>('offers', 'POST', { postId: post.id, amount: won, note }); onClose(); toast('제시 완료'); void navigate('/chat/' + d.chatId); }
+        try { const d = await api<{ chatId: string }>('offers', 'POST', { postId: post.id, amount: won, note }); onClose(); toast('제시 완료'); void navigate('/chat/' + d.chatId); offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setBusy(false); }
     }

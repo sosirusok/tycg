@@ -5,9 +5,11 @@ import type { ApplicationKind, Earn, PlanId, TrialState } from '../../shared/mem
 import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
+import { closePush, pushClosed, pushOn, pushSupported, refreshPush, subscribePush, unbindPush } from '../lib/push';
 
-// earn: the 수익 홍보 texts (WP66), from manage 설정 or their defaults.
-export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn };
+// earn: the 수익 홍보 texts (WP66), from manage 설정 or their defaults. vapidPublicKey: the 웹 푸시 key (WP64);
+// null while the site has no push keys.
+export type SiteConfig = { latestSeason: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn; vapidPublicKey?: string | null };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -36,6 +38,10 @@ type AppState = {
     openApply: (preset?: ApplyPreset) => void;
     closeApply: () => void;
     logout: () => Promise<void>;
+    // The '알림 켜기' bar (WP64, PushBar): shown after offerPush(), never on page load.
+    pushBar: boolean;
+    enablePush: () => Promise<void>;
+    closePushBar: () => void;
 };
 
 const Ctx = createContext<AppState>(null!);
@@ -97,6 +103,12 @@ export function useAdaptivePoll(poll: () => void, enabled: boolean, every = 0) {
 
 const defaultConfig: SiteConfig = { latestSeason: LATEST_SEASON, paymentNotice: '', manager: null };
 
+// 웹 푸시 (WP64): the member just sent a chat message or turned on an 알림, the moments a push helps.
+// AppProvider then shows the '알림 켜기' bar, if this browser can take pushes, does not get the member's
+// pushes yet, has not blocked notifications and the bar was not closed in the last 30 days.
+const PUSH_OFFER = 'zg:push-offer';
+export function offerPush() { window.dispatchEvent(new Event(PUSH_OFFER)); }
+
 export function AppProvider({ children }: { children: ReactNode }) {
     const [me, setMe] = useState<User | null>(null);
     const [ready, setReady] = useState(false);
@@ -108,6 +120,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [alerts, setAlerts] = useState(0);
     const [authMode, setAuthMode] = useState<'' | 'login' | 'register'>('');
     const [apply, setApply] = useState<ApplyPreset | 'open' | null>(null);
+    const [pushBar, setPushBar] = useState(false);
     const pending = useRef<((u: User) => void) | null>(null);
 
     // Keeps the same object when nothing changed, so effects that depend on `me` do not rerun.
@@ -180,15 +193,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const logout = useCallback(async () => {
-        try { await api('auth/logout', 'POST', {}); setMe(null); setTrial(null); void navigate('/'); toast('로그아웃 완료'); }
+        try { await unbindPush(); await api('auth/logout', 'POST', {}); setMe(null); setTrial(null); void navigate('/'); toast('로그아웃 완료'); }
         catch (e) { toast.error(errorText(e)); }
     }, []);
+
+    // 웹 푸시 (WP64). The bar answers offerPush() only, never a page load. A member who turned pushes on in
+    // this browser keeps them across sign-ins (refreshPush); nobody is subscribed without pressing the button.
+    const vapidKey = config.vapidPublicKey || '';
+    useEffect(() => {
+        if (!vapidKey) return;
+        const offer = () => {
+            const user = meRef.current;
+            if (!user || !pushSupported() || pushClosed() || Notification.permission === 'denied') return;
+            if (Notification.permission === 'default') { setPushBar(true); return; }
+            pushOn(vapidKey, user.id).then(on => { if (!on && meRef.current?.id === user.id) setPushBar(true); }, () => { /* not offered */ });
+        };
+        window.addEventListener(PUSH_OFFER, offer);
+        return () => window.removeEventListener(PUSH_OFFER, offer);
+    }, [vapidKey]);
+    const myId = me?.id;
+    useEffect(() => {
+        if (!myId) { setPushBar(false); return; }
+        if (vapidKey) refreshPush(vapidKey, myId).catch(() => { /* tried again at the next sign-in */ });
+    }, [myId, vapidKey]);
+    const enablePush = useCallback(async () => {
+        const user = meRef.current;
+        if (!user || !vapidKey) return;
+        let permission: NotificationPermission;
+        try { permission = await Notification.requestPermission(); }
+        catch { permission = Notification.permission; }
+        setPushBar(false);
+        if (permission === 'denied') { toast.error('알림이 차단되어 있습니다. 브라우저 설정에서 허용해 주세요.'); return; }
+        if (permission !== 'granted') return;
+        try { await subscribePush(vapidKey, user.id); toast('알림 설정 완료'); }
+        catch (e) { toast.error(e instanceof DOMException ? '이 브라우저에서는 알림을 켜지 못했습니다.' : errorText(e)); }
+    }, [vapidKey]);
+    const closePushBar = useCallback(() => { closePush(); setPushBar(false); }, []);
 
     const value = useMemo<AppState>(() => ({
         me, ready, trial, setTrial, config, unread, alerts, setAlerts, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
         authMode, openAuth: setAuthMode, closeAuth: () => { pending.current = null; setAuthMode(''); }, finishAuth,
         apply, openApply: preset => setApply(preset || 'open'), closeApply: () => setApply(null), logout,
-    }), [me, ready, trial, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout]);
+        pushBar, enablePush, closePushBar,
+    }), [me, ready, trial, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout, pushBar, enablePush, closePushBar]);
 
     return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

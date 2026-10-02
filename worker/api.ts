@@ -21,6 +21,7 @@ import { notificationsHandler } from './notifications';
 import { automationHandler } from './automation';
 import { followAllowedHandler, followHandler, followsList } from './alerts';
 import { commentsHandler, myComments, postCommentsHandler } from './comments';
+import { pushHandler, withPushes } from './push';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -87,7 +88,8 @@ async function withdraw(req: Request) {
     await db().batch([
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
         db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
-        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        // 웹 푸시 (WP64): no device gets the member's pushes any more.
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
@@ -333,10 +335,12 @@ async function stats() {
 
 // With the test meter on (READ_BUDGET=on, requests to 127.0.0.1 or localhost only), the response
 // carries X-Rows-Read, X-Rows-Written, X-D1-Calls and X-D1-Statements for the whole request.
-export async function handleApi(req: Request) {
+// ctx: the members a request reached (a chat message, 제시, 댓글) get their 웹 푸시 after the response (WP64).
+export async function handleApi(req: Request, ctx?: ExecutionContext) {
     allowKvTestFailure(req);
-    if (!meterOn() || !localRequest(req)) return route(req);
-    const { result, meter } = await metered(() => route(req));
+    const run = () => withPushes(ctx, () => route(req));
+    if (!meterOn() || !localRequest(req)) return run();
+    const { result, meter } = await metered(run);
     for (const [k, v] of Object.entries(meterHeaders(meter))) result.headers.set(k, v);
     return result;
 }
@@ -396,6 +400,8 @@ async function route(req: Request): Promise<Response> {
             case 'trades': { const r = await reviewsHandler(req, p, url); if (r) return r; break; }
             // 중개/가측 tab (WP66).
             case 'providers': { const r = await providersHandler(req, p, url); if (r) return r; break; }
+            // 웹 푸시 (WP64): POST and DELETE push/subscribe.
+            case 'push': { const r = await pushHandler(req, p); if (r) return r; break; }
             default: { const r = await communityHandler(req, p); if (r) return r; }
         }
         fail(404, '요청을 찾을 수 없습니다.');

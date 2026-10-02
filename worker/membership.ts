@@ -7,6 +7,7 @@ import { latestSeason } from './posts';
 import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from './reviews';
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
+import { vapidPublicKey } from './push';
 import {
     AUTO_TEXT, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
     type ApplicationKind, type BadgeId, type Earn, type GradeId, type PlanId, type TrialState,
@@ -27,7 +28,8 @@ export async function siteConfig() {
     const earn = Object.fromEntries((Object.keys(EARN_KEYS) as (keyof Earn)[]).map(k => [k, value(EARN_KEYS[k]) || EARN_DEFAULTS[k]])) as Earn;
     // storage ('r2', 'kv' or 'd1') sets how far the browser shrinks photos before upload (WP45).
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
-    return { latestSeason: await latestSeason(), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn };
+    // vapidPublicKey: the key browsers subscribe to 웹 푸시 with (WP64); null while push is off.
+    return { latestSeason: await latestSeason(), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn, vapidPublicKey: vapidPublicKey() };
 }
 
 const DAY = 86400000;

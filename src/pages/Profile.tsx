@@ -6,7 +6,7 @@ import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProvi
 import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { setPageTitle, useApp } from '../app/state';
+import { offerPush, setPageTitle, useApp } from '../app/state';
 import { isPaidGrade, nextBenefit } from '../../shared/benefits';
 import { Avatar, CIcon, EmptyState, Modal, NameLine, SkeletonRows, Tabs, VerifiedMark } from '../components/ui';
 import { PostCard } from '../components/PostCard';
@@ -127,7 +127,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         if (followBusy) return;
         const active = !user.followed;
         setFollowBusy(true);
-        try { await api(`users/${user.id}/follow`, 'POST', { active }); setUser(v => v && { ...v, followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); }
+        try { await api(`users/${user.id}/follow`, 'POST', { active }); setUser(v => v && { ...v, followed: active }); toast(active ? ALERT_TEXT.followed : ALERT_TEXT.unfollowed); if (active) offerPush(); }
         catch (e) { toast.error(errorText(e)); }
         finally { setFollowBusy(false); }
     });

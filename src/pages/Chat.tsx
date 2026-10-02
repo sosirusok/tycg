@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, Check, ImagePlus, LoaderCircle, MoreHorizontal, Plus, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
+import { ArrowLeft, Check, Clock3, ImagePlus, LoaderCircle, MoreHorizontal, Plus, Send, ThumbsDown, ThumbsUp, UserCog, X } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
@@ -7,10 +7,10 @@ import {
     type Post, type Review, type User,
 } from '../../shared/market';
 import { APPLICATION_STATUS_NAMES, BADGES, CHAT_AUTO_TEXT, PROVIDER_TEXT, TEMPLATE_MAX, applicationTitle, gradeInfo, managerChatOrder, perksOf, type Application } from '../../shared/membership';
-import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto, UPLOAD_BUSY } from '../lib/api';
+import { ApiError, api, dragsFiles, errorText, imageFiles, imageUrl, pastesText, uploadPhoto } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
-import { useAdaptivePoll, useApp } from '../app/state';
+import { offerPush, useAdaptivePoll, useApp } from '../app/state';
 import { CHAT_DRAFT_EVENT, chatDraftKey } from '../app/ApplyModal';
 import { Avatar, CIcon, EmptyState, Modal, NameLine } from '../components/ui';
 import { MemberPanel } from '../components/MemberPanel';
@@ -23,7 +23,15 @@ import { RichBody } from '../components/RichBody';
 type ChatItem = { id: string; updated_at: number; partner_id: string; nickname: string; role: string; grade: string; grade_trial?: boolean; badges: string[]; last_message: string | null; unread: number; pending_applications: number; last_post_title: string | null; last_post_thumb: string | null;
     // 프로필 사진 (WP59): the 64px copy, inline.
     avatar_thumb?: string; priority?: number; unread_since?: number | null };
-type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null };
+// cid: the room's own id for a message it sent (낙관적 전송, WP69), on the member's own messages only.
+type Message = { id: number; sender_id: string; body: string; type: string; reference_id: string | null; attachments: string[]; created_at: number; read_at: number | null; cid?: string | null };
+// A photo in the composer or in a message being sent: the local preview while it uploads, then its id.
+type Photo = { key: string; preview: string; file: File; id?: string; job?: Promise<string> };
+// A message shown before the server has it (WP69), in send order; failed holds the reason after a failure.
+// match: the post goes as a '채팅 보내기' from a 자동 매칭 (WP58).
+type Outgoing = { cid: string; body: string; photos: Photo[]; postId?: number; match?: boolean; at: number; failed?: string };
+// What GET messages, the long poll (changed) and the first load return.
+type RoomData = { messages: Message[]; offers: Offer[]; applications: Application[]; trades?: Trade[]; readThrough: number; blocked: boolean; hasMore: boolean };
 type Offer = { id: string; post_id: number; sender_id: string; amount: number; note: string; status: string; title: string; post_kind: string; post_price: number | null; post_author_id: string; post_status?: string; post_current_offer: number | null };
 type Partner = Pick<User, 'id' | 'nickname' | 'role' | 'grade' | 'grade_trial' | 'badges' | 'created_at'> & { deleted?: boolean; last_seen_at?: number | null; suspended?: boolean; avatar_thumb?: string };
 // The post the chat is about, pinned under the room header.
@@ -49,6 +57,16 @@ const REJECT_NOTES = ['입금 확인 안 됨', '자료 부족', '명의 불일�
 const LOOKUP = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}|\d{2,6}-\d{2,6}-\d{2,8}|\d{10,14}/g;
 const hasLookup = (text: string) => [...text.matchAll(LOOKUP)].some(([m]) => m.replace(/\D/g, '').length >= 10);
 const PHOTOS_PER_MESSAGE = 6;
+// 실시간 수신 (WP69): the long poll runs while the room is on screen and the member did something in the
+// last 30 minutes; after 2 failures in a row the room reads every 5 s for a minute, then tries again.
+// The first wait starts a second after the room's first read (which is fresh), so a page that just
+// opened has a quiet moment before its one long request.
+const IDLE_MS = 30 * 60000, FALLBACK_MS = 5000, FALLBACK_FOR = 60000, WAIT_START_MS = 1000;
+// A random id for a message the room shows before sending it (its cid).
+function newCid() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('').slice(0, 24);
+}
 
 // 거래 전 확인 (WP51): the safety steps for the post's kind of trade, shown on the client only (no writes)
 // at the top of a chat about a post. The 더치트 step is in every set.
@@ -191,7 +209,18 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // The 완료 sheet from the pinned bar, with this chat's partner preselected (WP43).
     const [tradeSheet, setTradeSheet] = useState(false);
     const [readThrough, setReadThrough] = useState(0), [loaded, setLoaded] = useState(false), [hasMore, setHasMore] = useState(false);
-    const [text, setText] = useState(''), [photos, setPhotos] = useState<string[]>([]), [sending, setSending] = useState(false), [uploading, setUploading] = useState(false);
+    // The composer, mirrored in refs so a send takes exactly what is in it once (a double tap sends nothing more).
+    const [text, setTextState] = useState(''), [photos, setPhotosState] = useState<Photo[]>([]);
+    const textRef = useRef(''), photosRef = useRef<Photo[]>([]);
+    const setText = (v: string) => { textRef.current = v; setTextState(v); };
+    const setPhotos = (next: (list: Photo[]) => Photo[]) => { photosRef.current = next(photosRef.current); setPhotosState(photosRef.current); };
+    // 낙관적 전송 (WP69): messages on screen before the server answers, until their server copy arrives
+    // (matched by cid); a failed one stays with '다시 보내기' and '삭제'. Sent one at a time, in order.
+    const [outbox, setOutbox] = useState<Outgoing[]>([]), [, setUploadTick] = useState(0);
+    const queue = useRef<Outgoing[]>([]), draining = useRef(false), uploadChain = useRef<Promise<unknown>>(Promise.resolve());
+    // Local previews of photos this room uploaded (upload id → object URL), so a sent photo does not flash.
+    const previews = useRef(new Map<string, string>());
+    const readRef = useRef(0), readSent = useRef(0), messagesRef = useRef<Message[]>([]), waitCtl = useRef<AbortController | null>(null);
     const [savingTemplate, setSavingTemplate] = useState(false);
     const [panel, setPanel] = useState(false), [listing, setListing] = useState<Listing | null>(null), [statusBusy, setStatusBusy] = useState(false), [reporting, setReporting] = useState(false);
     // After the manager decides an application here: the next chat with a waiting one (null: none left).
@@ -203,17 +232,24 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // '채팅 보내기' from a 자동 매칭 (WP58, /chat/:id?post=N&match=1): the post is the member's own, sent as a
     // match with the first message (엘리트 and up, 20 a day).
     const matchSend = useRef(params.get('match') === '1');
-    const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), idle = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
+    const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), stick = useRef(true), last = useRef(0), fileInput = useRef<HTMLInputElement>(null), input = useRef<HTMLTextAreaElement>(null);
     // The application template ApplyModal left for this room goes into the composer once.
     const takeDraft = () => {
         try { const draft = sessionStorage.getItem(chatDraftKey(id)); if (draft) { setText(draft); sessionStorage.removeItem(chatDraftKey(id)); setTimeout(() => input.current?.focus(), 50); } } catch { /* ignore */ }
     };
 
-    const merge = (incoming: Message[]) => setMessages(prev => {
-        const map = new Map(prev.map(m => [m.id, m]));
-        for (const m of incoming) map.set(m.id, m);
-        return [...map.values()].sort((a, b) => a.id - b.id);
-    });
+    const merge = (incoming: Message[]) => {
+        setMessages(prev => {
+            const map = new Map(prev.map(m => [m.id, m]));
+            for (const m of incoming) map.set(m.id, m);
+            return messagesRef.current = [...map.values()].sort((a, b) => a.id - b.id);
+        });
+        // The server copy replaces the message shown before it (also after a lost answer: the long poll brings it).
+        const sent = new Set(incoming.map(m => m.cid).filter(Boolean));
+        if (sent.size) setOutbox(list => list.some(o => sent.has(o.cid)) ? list.filter(o => !sent.has(o.cid)) : list);
+    };
+    // readThrough only moves forward, whichever answer comes last.
+    const moveRead = (n: number) => { if (n > readRef.current) { readRef.current = n; setReadThrough(n); } };
 
     // The pinned bar follows the post: it is read again when a 제시 changes state, when a post card,
     // 제시 or system line arrives (수락, 완료, 마감), and once a minute while the room is open,
@@ -228,22 +264,35 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         }).catch(() => {});
     }, [id]);
 
+    // Marks the partner's messages read while the room is on screen (the other side's '1' goes away), once per message.
     const markRead = useCallback((list: Message[]) => {
+        if (document.hidden) return;
         const lastIncoming = [...list].reverse().find(m => m.sender_id !== me.id && !m.read_at);
-        if (lastIncoming) api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(() => activity.current()).catch(() => {});
+        if (!lastIncoming || lastIncoming.id <= readSent.current) return;
+        const before = readSent.current;
+        readSent.current = lastIncoming.id;
+        api(`chats/${id}/read`, 'POST', { lastId: lastIncoming.id }).then(() => activity.current()).catch(() => { if (readSent.current === lastIncoming.id) readSent.current = before; });
     }, [id, me.id]);
 
-    // The trades for the review cards come with the first load, with a poll that brings a card or a
-    // system line, and when asked (`withTrades`, after this member writes a 후기); other polls leave them.
-    const poll = useCallback(async (initial = false, withTrades = false) => {
-        const d = await api<{ messages: Message[]; offers: Offer[]; applications: Application[]; trades?: Trade[]; readThrough: number; blocked: boolean; hasMore: boolean }>(`chats/${id}/messages` + (initial ? '' : `?after=${last.current}` + (withTrades ? '&trades=1' : '')));
+    // New messages from any answer (the first load, the long poll, a send, a read): merged, last moved on,
+    // marked read while on screen, and the pinned bar read again after a post card, 제시 or system line.
+    const absorb = useCallback((list: Message[], initial = false) => {
+        if (!list.length) return;
+        merge(list);
+        last.current = Math.max(last.current, ...list.map(m => m.id));
+        markRead(list);
+        if (!initial && list.some(m => m.type === 'listing' || m.type === 'offer' || m.type === 'system')) void refreshListing();
+    }, [markRead, refreshListing]);
+
+    // The trades for the review cards come with the first load, with a read that brings a card or a
+    // system line, and when asked (`withTrades`, after this member writes a 후기); other reads leave them.
+    const applyRoom = useCallback((d: RoomData, initial = false) => {
         if (initial) setHasMore(d.hasMore);
-        if (d.messages.length) { merge(d.messages); last.current = Math.max(last.current, ...d.messages.map(m => m.id)); idle.current = 0; markRead(d.messages); }
-        else idle.current++;
-        setOffers(d.offers); setApps(d.applications); setReadThrough(d.readThrough); setBlocked(d.blocked);
+        absorb(d.messages, initial);
+        setOffers(d.offers); setApps(d.applications); moveRead(d.readThrough); setBlocked(d.blocked);
         if (d.trades) setTrades(d.trades);
         const offerKey = d.offers.map(o => o.id + ':' + o.status).join(',');
-        if (!initial && (offerKey !== offerState.current || d.messages.some(m => m.type === 'listing' || m.type === 'offer' || m.type === 'system') || Date.now() - listingAt.current > 60000)) void refreshListing();
+        if (!initial && offerKey !== offerState.current) void refreshListing();
         offerState.current = offerKey;
         // When an application is decided, the member's badges and the manager's panel update right away.
         let decided = false;
@@ -253,8 +302,12 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
             appStatus.current.set(a.id, a.status);
         }
         if (decided) { setPanelVersion(v => v + 1); grant.current(); }
+    }, [absorb, refreshListing]);
+    const poll = useCallback(async (initial = false, withTrades = false) => {
+        const d = await api<RoomData>(`chats/${id}/messages` + (initial ? '' : `?after=${last.current}` + (withTrades ? '&trades=1' : '')));
+        applyRoom(d, initial);
         return d.messages.length;
-    }, [id, markRead, refreshListing]);
+    }, [id, applyRoom]);
 
     useEffect(() => {
         let alive = true;
@@ -268,12 +321,64 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         }).catch(e => { if (alive) setError(errorText(e)); });
         poll(true).then(() => { if (alive) setLoaded(true); }).catch(e => { if (alive) setError(errorText(e)); });
         takeDraft();
-        // New messages: every 4 s while active, slowing to 15 s after a quiet minute.
-        let timer: ReturnType<typeof setTimeout>;
-        const tick = () => { timer = setTimeout(async () => { if (!document.hidden) await poll().catch(() => {}); if (alive) tick(); }, idle.current > 15 ? 15000 : 4000); };
-        tick();
-        return () => { alive = false; clearTimeout(timer); };
+        return () => { alive = false; };
     }, [id, poll]);
+
+    // 실시간 수신 (WP69): one GET chats/:id/wait at a time, from the newest message the room has; the server
+    // holds it up to 20 s and answers as soon as a message arrives or the partner reads. Hidden tab or 30
+    // quiet minutes: it stops, and a visit or any activity starts it again. Two failures in a row: plain
+    // reads every 5 s for a minute. A send cancels the wait in flight so the next one starts after it.
+    useEffect(() => {
+        if (!loaded) return;
+        let alive = true, busy = false, failures = 0, fallbackUntil = 0, active = Date.now();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const awake = () => !document.hidden && Date.now() - active < IDLE_MS;
+        const later = (ms: number) => { clearTimeout(timer); if (alive) timer = setTimeout(() => void cycle(), ms); };
+        async function cycle() {
+            if (!alive || busy || !awake()) return;
+            busy = true;
+            let next = 0;
+            try {
+                if (Date.now() < fallbackUntil) { await poll(); next = FALLBACK_MS; }
+                else {
+                    const ctl = new AbortController();
+                    waitCtl.current = ctl;
+                    const d = await api<RoomData & { changed: boolean }>(`chats/${id}/wait?after=${last.current}&read=${readRef.current}`, 'GET', undefined, { signal: ctl.signal });
+                    if (alive && d.changed) applyRoom(d);
+                    else if (alive) moveRead(d.readThrough);
+                }
+                failures = 0;
+                if (Date.now() - listingAt.current > 60000) void refreshListing();
+            } catch (e) {
+                if (!(e instanceof DOMException && e.name === 'AbortError')) {
+                    if (++failures >= 2) { failures = 0; fallbackUntil = Date.now() + FALLBACK_FOR; }
+                    next = 1500;
+                }
+            } finally { busy = false; waitCtl.current = null; }
+            later(next);
+        }
+        const wake = () => { const sleeping = !awake(); active = Date.now(); if (sleeping) later(0); };
+        const onVisibility = () => {
+            if (document.hidden) { waitCtl.current?.abort(); return; }
+            active = Date.now();
+            markRead(messagesRef.current);
+            later(0);
+        };
+        const events = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+        document.addEventListener('visibilitychange', onVisibility);
+        for (const ev of events) window.addEventListener(ev, wake, { passive: true });
+        later(WAIT_START_MS);
+        return () => {
+            alive = false; clearTimeout(timer); waitCtl.current?.abort();
+            document.removeEventListener('visibilitychange', onVisibility);
+            for (const ev of events) window.removeEventListener(ev, wake);
+        };
+    }, [id, loaded, poll, applyRoom, refreshListing, markRead]);
+    // Local previews go with the room.
+    useEffect(() => () => {
+        for (const url of previews.current.values()) URL.revokeObjectURL(url);
+        for (const p of photosRef.current) URL.revokeObjectURL(p.preview);
+    }, []);
 
     // An application sent while this room is already open (same route, no remount) fills the composer
     // too, and its card is fetched right away instead of on the next poll.
@@ -286,7 +391,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     // Stays at the newest message while the reader is at the bottom: after new messages, when a photo
     // finishes loading, and whenever the content or the visible area changes size (composer, keyboard).
     const toBottom = useCallback(() => { const el = scroller.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, []);
-    useLayoutEffect(toBottom, [messages, loaded, toBottom]);
+    useLayoutEffect(toBottom, [messages, outbox, loaded, toBottom]);
     useEffect(() => {
         if (typeof ResizeObserver === 'undefined') return;
         const ro = new ResizeObserver(toBottom);
@@ -305,24 +410,68 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         requestAnimationFrame(() => { if (el) el.scrollTop = el.scrollHeight - before; });
     }
 
-    async function send(e?: FormEvent) {
+    // 낙관적 전송 (WP69): Enter or the button puts the message on screen at once (with a clock until the
+    // server has it), clears the composer and never waits for the network; photos show their local
+    // preview while they upload. The queue sends one message at a time, so they keep their order.
+    function send(e?: FormEvent) {
         e?.preventDefault();
-        if (sending || uploading || (!text.trim() && !photos.length)) return;
-        setSending(true);
+        const body = textRef.current, list = photosRef.current;
+        if (!body.trim() && !list.length) return;
         const postId = aboutPost.current && /^\d+$/.test(aboutPost.current) ? Number(aboutPost.current) : undefined;
+        const item: Outgoing = { cid: newCid(), body, photos: list, postId, match: postId !== undefined && matchSend.current, at: Date.now() };
+        setText(''); setPhotos(() => []); stick.current = true;
+        setOutbox(o => [...o, item]);
+        queue.current.push(item);
+        void drain();
+        input.current?.focus();
+    }
+    async function drain() {
+        if (draining.current) return;
+        draining.current = true;
+        try { for (let item = queue.current.shift(); item; item = queue.current.shift()) await deliver(item); }
+        finally { draining.current = false; }
+    }
+    async function deliver(item: Outgoing) {
         try {
-            await api(`chats/${id}/messages`, 'POST', { body: text, images: photos, postId, ...postId !== undefined && matchSend.current ? { match: true } : {} });
-            if (postId !== undefined) forgetPost();
-            setText(''); setPhotos([]); stick.current = true;
-            await poll(); activity.current();
+            const images: string[] = [];
+            for (const p of item.photos) images.push(await uploaded(p));
+            // after: the newest message the room has, so the answer also brings what came meanwhile (before the
+            // first load has anything, the server takes its own newest instead).
+            const after = messagesRef.current.length ? last.current : undefined;
+            const d = await api<{ message: Message; messages: Message[]; readThrough: number }>(`chats/${id}/messages`, 'POST', { body: item.body, images, postId: item.postId, cid: item.cid, after, ...item.postId !== undefined && item.match ? { match: true } : {} });
+            merge([d.message]);
+            absorb(d.messages);
+            moveRead(d.readThrough);
+            // The post went with this message (its card is in the chat now).
+            if (item.postId !== undefined) forgetPost();
+            // The wait in flight started before this message: the next one starts after it.
+            waitCtl.current?.abort();
+            // 웹 푸시 (WP64): the moment the reply matters, the '알림 켜기' bar may show.
+            offerPush();
+            activity.current();
         } catch (err) {
-            // A post that is gone (or not the partner's) must not block the chat: the next try goes
-            // without it. Other errors, such as a message that is too long, keep the post for the retry.
-            // A match send over the day's limit (429) or without the grade (403) goes on as a plain chat.
-            if (postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH || (matchSend.current && (err.status === 429 || err.status === 403)))) forgetPost();
-            toast.error(errorText(err));
+            // A post that is gone (or not the partner's) must not block the chat: the retry goes without it.
+            // Other errors, such as a message that is too long, keep the post for the retry. A match send over
+            // the day's limit (429) or without the grade (403) goes on as a plain chat (WP58).
+            if (item.postId !== undefined && err instanceof ApiError && (err.status === 404 || err.message === POST_MISMATCH || (item.match && (err.status === 429 || err.status === 403)))) { item.postId = undefined; item.match = false; forgetPost(); }
+            if (err instanceof ApiError && err.status === 403 && err.message === '차단된 회원입니다.') setBlocked(true);
+            const reason = errorText(err);
+            setOutbox(list => list.map(o => o.cid === item.cid ? { ...o, failed: reason } : o));
+            // Offline: the bubble says it; a refusal also names its reason.
+            if (!(err instanceof ApiError && err.status === 0)) toast.error(reason);
         }
-        finally { setSending(false); input.current?.focus(); }
+    }
+    // '다시 보내기' sends the same message again (same cid, so it is never written twice); '삭제' drops it.
+    function retry(item: Outgoing) {
+        if (!item.failed) return;
+        const again = { ...item, failed: undefined };
+        setOutbox(list => list.map(o => o.cid === item.cid ? again : o));
+        queue.current.push(again);
+        void drain();
+    }
+    function drop(item: Outgoing) {
+        setOutbox(list => list.filter(o => o.cid !== item.cid));
+        for (const p of item.photos) { URL.revokeObjectURL(p.preview); if (p.id) previews.current.delete(p.id); }
     }
     // The post goes with one message only; the address loses the param too.
     function forgetPost() {
@@ -336,19 +485,49 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         }
     }
     function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send(); }
+        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); send(); }
     }
-    // Photos from the picker, a paste or a drop; at most 6 per message, one batch at a time.
-    async function attach(files: File[]) {
+    // One photo up after the ones before it (one compression at a time); its id and preview are kept.
+    function upload(p: Photo) {
+        const job = uploadChain.current.then(() => uploadPhoto(p.file)).then(upId => {
+            p.id = upId;
+            previews.current.set(upId, p.preview);
+            setUploadTick(t => t + 1);
+            return upId;
+        });
+        uploadChain.current = job.catch(() => {});
+        return job;
+    }
+    // A message's photo id: the upload already done, the one under way, or a new one (after a failure).
+    async function uploaded(p: Photo) {
+        if (p.id) return p.id;
+        try { return await (p.job ??= upload(p)); }
+        catch (err) { p.job = undefined; throw err; }
+    }
+    // Photos from the picker, a paste or a drop, at most 6 per message: on screen at once, uploaded meanwhile.
+    function attach(files: File[]) {
+        if (fileInput.current) fileInput.current.value = '';
         if (!files.length) return;
-        if (uploading) { toast.error(UPLOAD_BUSY); return; }
-        const list = files.slice(0, Math.max(0, PHOTOS_PER_MESSAGE - photos.length));
+        const list = files.slice(0, Math.max(0, PHOTOS_PER_MESSAGE - photosRef.current.length));
         if (files.length > list.length) toast.error(`사진은 한 번에 ${PHOTOS_PER_MESSAGE}장까지입니다.`);
-        if (!list.length) { if (fileInput.current) fileInput.current.value = ''; return; }
-        setUploading(true);
-        try { for (const f of list) { const up = await uploadPhoto(f); setPhotos(p => [...p, up]); } }
-        catch (err) { toast.error(errorText(err)); }
-        finally { setUploading(false); if (fileInput.current) fileInput.current.value = ''; }
+        const added: Photo[] = list.map(file => ({ key: newCid(), preview: URL.createObjectURL(file), file }));
+        setPhotos(current => [...current, ...added]);
+        for (const p of added) {
+            p.job = upload(p);
+            // A photo that fails while still in the composer leaves it with its reason (one sent already
+            // fails its message instead, which uploads it again on '다시 보내기').
+            p.job.catch(err => {
+                p.job = undefined;
+                if (!photosRef.current.includes(p)) return;
+                setPhotos(current => current.filter(x => x !== p));
+                URL.revokeObjectURL(p.preview);
+                toast.error(errorText(err));
+            });
+        }
+    }
+    function unattach(p: Photo) {
+        setPhotos(current => current.filter(x => x !== p));
+        if (!p.id) URL.revokeObjectURL(p.preview);
     }
     // A member under 이용 정지 writes only to the manager; elsewhere the composer says until when.
     const suspended = !!me.suspended_until && me.suspended_until > Date.now();
@@ -360,14 +539,14 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
         const files = imageFiles(e.clipboardData.files);
         if (!files.length || closed || pastesText(e.target, e.clipboardData)) return;
         e.preventDefault();
-        void attach(files);
+        attach(files);
     }
     function onDragOver(e: DragEvent<HTMLElement>) { if (dragsFiles(e.dataTransfer.types)) e.preventDefault(); }
     function onDrop(e: DragEvent<HTMLElement>) {
         if (!dragsFiles(e.dataTransfer.types)) return;
         // Even a refused drop must not open the file in place of the app.
         e.preventDefault();
-        if (!closed) void attach(imageFiles(e.dataTransfer.files));
+        if (!closed) attach(imageFiles(e.dataTransfer.files));
     }
     async function offerAction(offer: Offer, action: string) {
         try { await api('offers/' + offer.id, 'PATCH', { action }); toast(action === 'accepted' ? '수락 완료' : action === 'declined' ? '거절 완료' : action === 'released' ? '수락 취소 완료' : '제시 취소 완료'); await poll(); activity.current(); }
@@ -423,7 +602,6 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
 
     const managerView = me.role === 'manager' && partner && partner.role !== 'manager';
     let prevDay = '';
-    const lastMine = [...messages].reverse().find(m => m.sender_id === me.id);
     const ownListing = !!listing && listing.author_id === me.id;
     // Quick replies: any trade chat before my first text message (never in an application chat or a
     // chat with the manager that is not about a post), hidden as soon as the composer has text.
@@ -431,7 +609,7 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
     const usable = loaded && !apps.length && !blocked && !partner?.deleted && !suspendedUntil;
     const replies = quickReplies(listing, ownListing);
     const quick = usable && !text && (!!listing || (me.role !== 'manager' && partner?.role !== 'manager'))
-        && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? replies : [];
+        && !outbox.length && !messages.some(m => m.sender_id === me.id && m.type === 'text') ? replies : [];
     // 내 빠른 답장 (WP57): first in the row whenever the composer is empty; with text in it, a '+' chip
     // saves that text as one more (while under the grade's count and not saved already).
     const own = usable && !text && auto ? auto.templates : [];
@@ -521,13 +699,31 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
                             : <div className={'bubble-row' + (mine ? ' mine' : '') + (m.type === 'auto' ? ' is-auto' : '')}>
                                 <div className="bubble-col">
                                     {m.type === 'auto' && <span className="bubble-auto">{CHAT_AUTO_TEXT.label}</span>}
-                                    {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
+                                    {m.attachments.length > 0 && <div className={'bubble-photos n' + Math.min(m.attachments.length, 3)}>{m.attachments.map(a => <a key={a} href={imageUrl(a)} target="_blank" rel="noreferrer"><img src={previews.current.get(a) ?? imageUrl(a)} alt="보낸 사진" loading="lazy" onLoad={toBottom} /></a>)}</div>}
                                     {m.body && <p className="bubble"><RichBody text={m.body} /></p>}
                                 </div>
-                                <span className="bubble-meta">{mine && m.id === lastMine?.id && readThrough >= m.id && <span className="read">읽음</span>}{timeLabel(m.created_at)}</span>
+                                {/* 읽음 표시 (WP69): '1' until the partner has read it, as in KakaoTalk. */}
+                                <span className="bubble-meta">{mine && m.id > readThrough && <span className="unread-mark" aria-label="안 읽음">1</span>}{timeLabel(m.created_at)}</span>
                             </div>}
                         {/* Under the bubble row, so the time stays beside the bubble. */}
                         {lookup && <a className="lookup-link" href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트 조회</a>}
+                    </div>;
+                })}
+                {/* Sent from this room and not on the server yet (WP69): a clock while sending; after a failure
+                    '전송 실패 · 다시 보내기' and '삭제'. */}
+                {loaded && outbox.map(o => {
+                    const day = dayLabel(o.at), showDay = day !== prevDay; prevDay = day;
+                    const body = o.body.trim();
+                    return <div key={o.cid}>
+                        {showDay && <div className="day-sep"><span>{day}</span></div>}
+                        <div className={'bubble-row mine is-pending' + (o.failed ? ' is-failed' : '')}>
+                            <div className="bubble-col">
+                                {o.photos.length > 0 && <div className={'bubble-photos n' + Math.min(o.photos.length, 3)}>{o.photos.map(p => <span key={p.key} className={p.id ? undefined : 'is-uploading'}><img src={p.preview} alt="보낸 사진" onLoad={toBottom} /></span>)}</div>}
+                                {body && <p className="bubble"><RichBody text={body} /></p>}
+                                {o.failed && <span className="bubble-fail" role="status" title={o.failed}>전송 실패 · <button type="button" onClick={() => retry(o)}>다시 보내기</button><button type="button" onClick={() => drop(o)}>삭제</button></span>}
+                            </div>
+                            <span className="bubble-meta">{!o.failed && <Clock3 className="pending-mark" size={12} aria-label="보내는 중" />}{timeLabel(o.at)}</span>
+                        </div>
                     </div>;
                 })}
                 </div>
@@ -541,12 +737,12 @@ function Room({ id, me, auto, setAuto, onActivity, onGrant }: { id: string; me: 
                         {quick.filter(q => !own.includes(q)).map(q => <button type="button" key={q} className="chip chip-sm" onClick={() => { setText(q); input.current?.focus(); }}>{q}</button>)}
                         {canSave && <button type="button" className="chip chip-sm chip-add" aria-label="빠른 답장 저장" disabled={savingTemplate} onClick={() => void saveTemplate()}><Plus size={14} aria-hidden="true" />빠른 답장</button>}
                     </div>}
-                    {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p}><img src={imageUrl(p)} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => setPhotos(photos.filter(x => x !== p))}><X size={12} /></button></span>)}</div>}
+                    {photos.length > 0 && <div className="composer-photos">{photos.map(p => <span key={p.key} className={p.id ? undefined : 'is-uploading'}><img src={p.preview} alt="" /><button type="button" aria-label="사진 빼기" onClick={() => unattach(p)}><X size={12} /></button></span>)}</div>}
                     <div className="composer-row">
-                        <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => void attach(Array.from(e.target.files || []))} />
-                        <button type="button" className="icon-btn" aria-label="사진 보내기" disabled={uploading || photos.length >= PHOTOS_PER_MESSAGE} onClick={() => fileInput.current?.click()}>{uploading ? <LoaderCircle size={20} className="spin" /> : <ImagePlus size={22} />}</button>
+                        <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={e => attach(Array.from(e.target.files || []))} />
+                        <button type="button" className="icon-btn" aria-label="사진 보내기" disabled={photos.length >= PHOTOS_PER_MESSAGE} onClick={() => fileInput.current?.click()}><ImagePlus size={22} /></button>
                         <textarea ref={input} rows={Math.min(6, Math.max(1, text.split('\n').length))} value={text} maxLength={2000} onChange={e => setText(e.target.value)} onKeyDown={onKey} placeholder="메시지 입력" aria-label="메시지" />
-                        <button type="submit" className="send-btn" aria-label="보내기" disabled={sending || uploading || (!text.trim() && !photos.length)}>{sending ? <LoaderCircle size={20} className="spin" /> : <Send size={20} />}</button>
+                        <button type="submit" className="send-btn" aria-label="보내기" disabled={!text.trim() && !photos.length}><Send size={20} /></button>
                     </div>
                 </>}
             </form>
