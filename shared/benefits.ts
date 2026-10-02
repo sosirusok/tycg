@@ -24,8 +24,8 @@ export const monthly = (price: number, months: number) => priceText(Math.floor(p
 // The tier table's daily formula: the 3 new posts on top, then the full wallet and a day of refills.
 export const dailyTops = (k: Perks) => SITE_RULES.freshPerDay + k.bumpMax + Math.floor(1440 / k.bumpRefillMinutes);
 // The grade chips and avatar rings in the grade metals (WP66).
-const NAME_STYLE: Record<string, string> = { normal: '-', plus: '동색 테두리', premium: '은색 바탕', elite: '금색 바탕' };
-const RING_STYLE: Record<string, string> = { normal: '회색', plus: '동색', premium: '은색', elite: '금색 (반짝임)' };
+const NAME_STYLE: Record<string, string> = { normal: '-', plus: '동색 테두리', premium: '은색 바탕', elite: '금색 바탕', admin: '검정 테두리' };
+const RING_STYLE: Record<string, string> = { normal: '회색', plus: '동색', premium: '은색', elite: '금색 (반짝임)', admin: '금색 (반짝임)' };
 const STYLE_LADDER = ['굵게', '+ 글자색·밑줄·취소선', '+ 글자 크기', '+ 배경 강조·가운데 정렬'];
 
 export const BENEFIT_ROWS: BenefitRow[] = [

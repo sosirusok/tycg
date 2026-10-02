@@ -109,7 +109,7 @@ try {
     await waitFor(base, server);
     // verify-ladder (WP68) is a unit suite that reads the latest season from this server's config.
     // verify-push runs here too (TEST_PHASE=main): without PUSH_TEST an http endpoint is refused.
-    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-ladder.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs', 'tests/verify-push.mjs'])) {
+    for (const suite of pick(['tests/verify-market.mjs', 'tests/verify-ladder.mjs', 'tests/verify-membership.mjs', 'tests/verify-fixes.mjs', 'tests/verify-copy.mjs', 'tests/verify-trade2.mjs', 'tests/verify-accounts.mjs', 'tests/verify-roles.mjs', 'tests/verify-admin-parity.mjs', 'tests/verify-chat.mjs', 'tests/verify-cafe.mjs', 'tests/verify-conveniences.mjs', 'tests/verify-sanctions.mjs', 'tests/verify-reviews.mjs', 'tests/verify-parity.mjs', 'tests/verify-content.mjs', 'tests/verify-comments.mjs', 'tests/verify-chat-auto.mjs', 'tests/verify-push.mjs'])) {
         await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: base, PREVIEW_TEST_ORIGIN: preview.origin, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password', ...suite.includes('verify-push') ? { TEST_PHASE: 'main' } : {} } }), 180000);
     }
     const exited = server.exitCode === null ? once(server, 'exit') : null;
