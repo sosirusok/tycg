@@ -66,9 +66,10 @@ async function changePassword(req: Request, legacy: boolean) {
     if (typeof b.next !== 'string' || b.next.length < 8 || b.next.length > 128 || b.next === b.current) fail(400, '새 비밀번호는 8~128자, 현재와 다르게 입력해 주세요.');
     const salt = random();
     // Every other device is signed out; this one keeps its session. The Naver link goes too, so a leaked
-    // password that was used to link someone else's Naver account stops working; the manager links again in 설정.
+    // password that was used to link someone else's Naver account stops working (its phone hash goes with it);
+    // the manager links again in 설정.
     await db().batch([
-        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
+        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
         db().prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').bind(u.id, await digest(tokenOf(req))),
     ]);
     return json({ ok: true });
