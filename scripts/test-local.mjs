@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { startPreviewServer } from '../tests/fixtures/preview-server.mjs';
+import { startNaverMock } from '../tests/fixtures/naver-mock.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
@@ -46,9 +47,13 @@ async function completed(p, ms) {
 // The 링크 미리보기 fixture (WP48), in this process on a free 127.0.0.1 port; the 8790 Worker sends its
 // preview fetches there (PREVIEW_TEST_ORIGIN).
 let preview = null;
+// The 네이버 로그인 mock (tests/fixtures/naver-mock.mjs), started for the verify-naver phase only.
+let naverMock = null;
 async function cleanup() {
     await preview?.close().catch(() => {});
     preview = null;
+    await naverMock?.close().catch(() => {});
+    naverMock = null;
     const active = [...children];
     active.forEach(p => stop(p));
     await Promise.race([Promise.all(active.map(p => p.exitCode === null ? once(p, 'exit') : null)), delay(3000)]);
@@ -90,6 +95,10 @@ const vapidKeys = (() => {
     const point = Buffer.concat([Buffer.from([4]), Buffer.from(pub.x, 'base64url'), Buffer.from(pub.y, 'base64url')]).toString('base64url');
     return ['--var', 'VAPID_PRIVATE_KEY:' + JSON.stringify({ kty, crv, x, y, d }), '--var', 'VAPID_PUBLIC_KEY:' + point, '--var', 'VAPID_SUBJECT:https://zombiego-market.test'];
 })();
+// 네이버 로그인 replaced the ID/password sign-up and login. LEGACY_AUTH_TEST=on keeps them for requests to
+// 127.0.0.1 on the suite servers, so the suites can make members without Naver; verify-naver runs on a server
+// without it, where they answer 410 as in production.
+const legacyAuth = ['--var', 'LEGACY_AUTH_TEST:on'];
 try {
     await completed(child([wrangler, 'd1', 'migrations', 'apply', 'DB', '--local', '--config', 'wrangler.jsonc'], { stdio: 'inherit' }), 90000);
     // Rate limits and settings from earlier local runs must not leak into this run.
@@ -107,7 +116,7 @@ try {
     // so these suites can post freely. The strict 8791 server below checks the caps (verify-perks).
     preview = await startPreviewServer();
     const server = child([wrangler, 'dev', '--config', config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT), '--inspector-port', '0',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin, ...vapidKeys], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'POST_LIMITS:relaxed', '--var', 'PREVIEW_TEST_ORIGIN:' + preview.origin, ...vapidKeys, ...legacyAuth], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(base, server);
     // verify-ladder (WP68) is a unit suite that reads the latest season from this server's config.
     // verify-push runs here too (TEST_PHASE=main): without PUSH_TEST an http endpoint is refused.
@@ -129,7 +138,7 @@ try {
     // READ_BUDGET=on turns on the read and call meter (worker/meter.ts) on this server only: responses
     // carry X-Rows-Read and friends, and the cron stores its counts in settings 'sys:last_cron_meter'.
     const fallback = child([wrangler, 'dev', '--config', noR2, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
-        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on', ...vapidKeys, '--var', 'PUSH_TEST:on'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'READ_BUDGET:on', '--var', 'TEST_HOOKS:on', ...vapidKeys, '--var', 'PUSH_TEST:on', ...legacyAuth], { stdio: ['ignore', 'pipe', 'pipe'] });
     await waitFor(strictBase, fallback);
     // verify-deals (WP43) runs on this strict server, so completing posts and trade records meet the
     // real post caps, and so does verify-dup (WP44: 같은 매물, the allowance, prints), and verify-alerts (WP50: 알림함, its cron rows and read costs).
@@ -151,7 +160,8 @@ try {
         // up their scenarios with wrangler d1 execute (about 1.7 s a call, 4-5 s on a busy machine), so they get
         // longer; verify-perks also uploads 121 photos and fires the cron twice, and verify-search seeds 20,000 posts.
         const long = ['verify-auto', 'verify-alerts-posts', 'verify-perks', 'verify-stats', 'verify-dup', 'verify-search'].some(name => suite.includes(name));
-        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), long ? 480000 : 180000);
+        // TEST_LONG_MS (default 480000) raises the limit of these long suites on a slow machine.
+        await completed(child([suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), long ? Number(process.env.TEST_LONG_MS) || 480000 : 180000);
     }
     const fallbackExited = fallback.exitCode === null ? once(fallback, 'exit') : null;
     stop(fallback);
@@ -169,16 +179,23 @@ try {
     delete withR2.assets;
     const moverConfig = path.join(path.dirname(config), 'wrangler.mover.json');
     await writeFile(moverConfig, JSON.stringify({ ...withR2, kv_namespaces: kvNamespaces }));
+    // 네이버 로그인 (verify-naver): the mock's origin for the token and profile calls (TEST_HOOKS=on, local
+    // requests only), test client values, and no LEGACY_AUTH_TEST; then once more without the client values.
+    const naverPhases = pick(['tests/verify-naver.mjs']).length;
+    if (naverPhases) naverMock = await startNaverMock(0, { clientId: 'test-client', clientSecret: 'test-secret' });
+    const naverVars = naverMock ? ['--var', 'NAVER_CLIENT_ID:test-client', '--var', 'NAVER_CLIENT_SECRET:test-secret', '--var', 'NAVER_AUTH_BASE:' + naverMock.origin, '--var', 'NAVER_API_BASE:' + naverMock.origin] : [];
     const phases = [
-        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: [], phase: 'main' },
-        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: ['--var', 'KV_TEST_FAIL:on'], phase: 'fail' },
-        { suite: 'tests/verify-parity.mjs', config: moverConfig, vars: [], phase: 'mover' },
+        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: legacyAuth, phase: 'main' },
+        { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: ['--var', 'KV_TEST_FAIL:on', ...legacyAuth], phase: 'fail' },
+        { suite: 'tests/verify-parity.mjs', config: moverConfig, vars: legacyAuth, phase: 'mover' },
+        { suite: 'tests/verify-naver.mjs', config: noR2, vars: naverVars, phase: 'main' },
+        { suite: 'tests/verify-naver.mjs', config: noR2, vars: [], phase: 'unset' },
     ].filter(p => pick([p.suite]).length);
     for (const p of phases) {
         const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
             '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'TEST_HOOKS:on', ...p.vars], { stdio: ['ignore', 'pipe', 'pipe'] });
         await waitFor(strictBase, kvServer);
-        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_PHASE: p.phase, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_PHASE: p.phase, NAVER_MOCK_ORIGIN: naverMock?.origin || '', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
         const kvExited = kvServer.exitCode === null ? once(kvServer, 'exit') : null;
         stop(kvServer);
         await kvExited;

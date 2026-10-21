@@ -192,11 +192,11 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
     // names (none: '회원 없음'; a member who left counts as none) and whether they hold 본인 인증. The
     // manager issues a temporary password (POST manage/users/:id/password) and marks the request done.
     if (p[1] === 'reset-requests' && !p[2] && method === 'GET') {
-        const r = await db().prepare(`SELECT r.id,r.username,r.contact,r.created_at,m.id AS user_id,m.nickname,m.role,
+        const r = await db().prepare(`SELECT r.id,r.username,r.contact,r.created_at,m.id AS user_id,m.nickname,m.role,(m.naver_id IS NOT NULL) AS naver,
                 EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=m.id AND b.badge='identity') AS identity
             FROM reset_requests r LEFT JOIN users m ON m.username=r.username AND m.deleted_at IS NULL
             WHERE r.status='pending' ORDER BY r.created_at DESC LIMIT 100`).all<any>();
-        return json({ requests: r.results.map(row => ({ ...row, identity: !!row.identity })) });
+        return json({ requests: r.results.map(row => ({ ...row, identity: !!row.identity, naver: !!row.naver })) });
     }
     if (p[1] === 'reset-requests' && p[2] && !p[3] && method === 'PATCH') {
         const r = await db().prepare("UPDATE reset_requests SET status='done',done_at=? WHERE id=? AND status='pending'").bind(Date.now(), p[2]).run();

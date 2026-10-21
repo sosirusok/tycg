@@ -184,9 +184,10 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     check(asked.status === 200 && asked.data.trade?.id, 'the member completes it naming the other member (a pending trade)');
     equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).status, 200, 'the member holds 본인 인증');
     equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the member holds 플러스');
-    const wrong = await w('auth/withdraw', 'POST', { password: 'wrong-password' });
-    equal([wrong.status, wrong.data.error], [400, '비밀번호가 맞지 않습니다.'], 'withdraw with a wrong password is 400');
-    equal((await w('auth/withdraw', 'POST', { password })).status, 200, 'withdraw with the right password');
+    // Members have no password since 네이버 로그인: the member types '회원 탈퇴' to confirm.
+    const wrong = await w('auth/withdraw', 'POST', { password });
+    equal([wrong.status, wrong.data.error], [400, '확인 문구가 맞지 않습니다.'], 'withdraw without the confirm text is 400');
+    equal((await w('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'withdraw with the confirm text');
     equal((await w('auth/me')).data.user, null, 'the withdrawn member is signed out');
     let started = Date.now();
     equal((await login('withdraw', password)).status, 401, 'the old id no longer logs in');
@@ -226,7 +227,7 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     const hidden = (await manager('manage')).data.hidden;
     check(!hidden.some(p => p.id === post.data.id), 'withdrawn posts stay out of the manager\'s 숨긴 글');
     equal((await register('wagain', `withdraw${run}`)).user.nickname, `withdraw${run}`, 'the freed nickname can be registered again');
-    const mine = await manager('auth/withdraw', 'POST', { password: managerPassword });
+    const mine = await manager('auth/withdraw', 'POST', { confirm: '회원 탈퇴' });
     equal([mine.status, mine.data.error], [403, '매니저 계정은 탈퇴할 수 없습니다.'], 'the manager cannot withdraw');
     equal((await manager('auth/me')).data.user?.role, 'manager', 'the manager is still signed in');
 }

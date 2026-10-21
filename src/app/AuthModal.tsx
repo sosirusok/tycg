@@ -1,78 +1,33 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { LoaderCircle } from 'lucide-react';
-import { toast } from 'sonner';
-import type { User } from '../../shared/market';
-import type { TrialState } from '../../shared/membership';
-import { api, errorText } from '../lib/api';
 import { Modal } from '../components/ui';
 import { useApp } from './state';
 
+// The Naver 'N' mark (white on the green button), as inline SVG.
+export function NaverMark() {
+    return <svg className="naver-mark" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path fill="#fff" d="M10.85 8.56 4.97 0H0v16h5.15V7.44L11.03 16H16V0h-5.15z" />
+    </svg>;
+}
+
+// The address that starts 네이버 로그인 and comes back to `next` (this page by default).
+export function naverStart(next = location.pathname + location.search) {
+    return '/api/auth/naver/start?next=' + encodeURIComponent(next);
+}
+
+// 네이버로 로그인: the official green button (the one exception to the single brand colour). It is a full
+// page move, so the site comes back to the same page after Naver.
+export function NaverButton({ next, label = '네이버로 로그인', disabled = false }: { next?: string; label?: string; disabled?: boolean }) {
+    if (disabled) return <button type="button" className="btn btn-lg btn-block btn-naver" disabled><NaverMark />{label}</button>;
+    return <a className="btn btn-lg btn-block btn-naver" href={naverStart(next)}><NaverMark />{label}</a>;
+}
+
+// Login and sign-up are one step: a new Naver account picks a nickname on the next screen (/naver).
 export function AuthModal() {
-    const { authMode, openAuth, closeAuth, finishAuth } = useApp();
-    const [username, setUsername] = useState(''), [password, setPassword] = useState(''), [nickname, setNickname] = useState('');
-    const [confirm, setConfirm] = useState('');
-    const [error, setError] = useState(''), [busy, setBusy] = useState(false);
-    // 비밀번호 찾기 (WP59): from the login view, a guest form ('form') and its answer ('sent').
-    const [reset, setReset] = useState<'' | 'form' | 'sent'>(''), [contact, setContact] = useState('');
-    const register = authMode === 'register';
-    // Sign-up asks for the password twice; a typo would otherwise lock the new member out.
-    const mismatch = register && confirm !== '' && confirm !== password;
-    useEffect(() => { setError(''); setPassword(''); setConfirm(''); setReset(''); }, [authMode]);
-    const showReset = (view: '' | 'form' | 'sent') => { setError(''); setReset(view); };
-
-    async function requestReset(e: FormEvent) {
-        e.preventDefault();
-        if (busy) return;
-        setBusy(true); setError('');
-        try { await api('auth/reset-request', 'POST', { username, contact }); setContact(''); setReset('sent'); toast('요청 완료'); }
-        catch (err) { setError(errorText(err)); }
-        finally { setBusy(false); }
-    }
-
-    if (reset) return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title="비밀번호 찾기">
-        {reset === 'sent' ? <p className="reset-done" role="status">매니저가 확인 후 연락합니다.</p>
-            : <form className="form-stack" onSubmit={requestReset}>
-                <label className="field"><span className="field-label">아이디</span>
-                    <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} minLength={4} maxLength={24} required autoFocus /></label>
-                <div className="field"><label className="field-label" htmlFor="reset-contact">연락받을 곳</label>
-                    <input id="reset-contact" className="input" autoComplete="off" value={contact} onChange={e => setContact(e.target.value)} maxLength={100} required aria-describedby="reset-contact-hint" />
-                    <span id="reset-contact-hint" className="field-hint">오픈채팅 링크 또는 연락처</span></div>
-                {error && <p className="field-error" role="alert">{error}</p>}
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username.trim() || !contact.trim()}>{busy ? <LoaderCircle size={20} className="spin" /> : '요청'}</button>
-            </form>}
-        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => showReset('')}>로그인</button></p>
-    </Modal>;
-
-    async function submit(e: FormEvent) {
-        e.preventDefault();
-        if (busy || register && password !== confirm) return;
-        setBusy(true); setError('');
-        try {
-            const d = await api<{ user: User; trial?: TrialState | null }>('auth/' + (register ? 'register' : 'login'), 'POST', { username, password, nickname });
-            setPassword(''); setConfirm('');
-            finishAuth(d.user, d.trial);
-            // The trial popup that follows already confirms the sign-up.
-            if (register && !d.trial?.popup) toast('가입 완료');
-        } catch (err) { setError(errorText(err)); }
-        finally { setBusy(false); }
-    }
-
-    return <Modal open={!!authMode} onClose={() => { if (!busy) closeAuth(); }} title={register ? '회원가입' : '로그인'}>
-        <form className="form-stack" onSubmit={submit}>
-            <label className="field"><span className="field-label">아이디</span>
-                <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="영문 소문자, 숫자, _ 4~24자" minLength={4} maxLength={24} required autoFocus /></label>
-            {register && <label className="field"><span className="field-label">닉네임</span>
-                <input className="input" autoComplete="nickname" value={nickname} onChange={e => setNickname(e.target.value)} placeholder="2~16자" minLength={2} maxLength={16} required /></label>}
-            <label className="field"><span className="field-label">비밀번호</span>
-                <input className="input" type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="8자 이상" minLength={8} maxLength={128} required /></label>
-            {register && <div className="field"><label className="field-label" htmlFor="auth-confirm">비밀번호 확인</label>
-                <input id="auth-confirm" className="input" type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} minLength={8} maxLength={128} required
-                    aria-invalid={mismatch} aria-describedby={mismatch ? 'auth-confirm-error' : undefined} />
-                {mismatch && <span id="auth-confirm-error" className="field-error" role="alert">비밀번호가 서로 다릅니다.</span>}</div>}
-            {error && <p className="field-error" role="alert">{error}</p>}
-            <button className="btn btn-primary btn-lg btn-block" disabled={busy || mismatch}>{busy ? <LoaderCircle size={20} className="spin" /> : register ? '가입하기' : '로그인'}</button>
-        </form>
-        <p className="auth-switch"><button type="button" disabled={busy} onClick={() => openAuth(register ? 'login' : 'register')}>{register ? '로그인' : '회원가입'}</button>
-            {!register && <button type="button" disabled={busy} onClick={() => showReset('form')}>비밀번호 찾기</button>}</p>
+    const { authMode, closeAuth, config } = useApp();
+    const ready = config.naverLogin !== false;
+    return <Modal open={!!authMode} onClose={closeAuth} title="로그인">
+        <div className="form-stack auth-naver">
+            <NaverButton disabled={!ready} />
+            <p className="auth-note">{ready ? '처음이면 닉네임만 정하면 가입됩니다.' : '네이버 로그인 설정이 아직 끝나지 않았습니다.'}</p>
+        </div>
     </Modal>;
 }

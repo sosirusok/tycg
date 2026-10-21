@@ -22,6 +22,8 @@ import { automationHandler } from './automation';
 import { followAllowedHandler, followHandler, followsList } from './alerts';
 import { commentsHandler, myComments, postCommentsHandler } from './comments';
 import { pushHandler, withPushes } from './push';
+import { naverHandler, NAVER_MOVED } from './naver';
+import { env } from 'cloudflare:workers';
 
 async function discardUnreadBody(req: Request) {
     // Drain bounded rejected payloads before responding so workerd can reuse the connection.
@@ -53,16 +55,20 @@ async function passwordMatches(password: unknown, row: { salt: string; password_
 const passwordRow = (id: string) => db().prepare('SELECT salt,password_hash FROM users WHERE id=?').bind(id).first<{ salt: string; password_hash: string }>();
 
 // Wrong passwords answer 400, not 401: the app treats every 401 as an ended session.
-async function changePassword(req: Request) {
+// Only the manager has a password now (/manager-login); members sign in with Naver (410), except on the
+// local test switch (legacy).
+async function changePassword(req: Request, legacy: boolean) {
     const u = await requireUser(req);
+    if (u.role !== 'manager' && !legacy) fail(410, NAVER_MOVED);
     await limit('pw:' + u.id, 10, 600000);
     const b = await body(req);
     if (!await passwordMatches(b.current, await passwordRow(u.id))) fail(400, '현재 비밀번호가 맞지 않습니다.');
     if (typeof b.next !== 'string' || b.next.length < 8 || b.next.length > 128 || b.next === b.current) fail(400, '새 비밀번호는 8~128자, 현재와 다르게 입력해 주세요.');
     const salt = random();
-    // Every other device is signed out; this one keeps its session.
+    // Every other device is signed out; this one keeps its session. The Naver link goes too, so a leaked
+    // password that was used to link someone else's Naver account stops working; the manager links again in 설정.
     await db().batch([
-        db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
+        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
         db().prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').bind(u.id, await digest(tokenOf(req))),
     ]);
     return json({ ok: true });
@@ -71,23 +77,26 @@ async function changePassword(req: Request) {
 // Offers 회원 탈퇴 ends: the member's pending offers and the ones on their posts, plus accepted ones
 // whose post is not 거래완료 yet (a finished deal keeps its accepted offer). Bind the member's id twice.
 const WITHDRAW_ENDS_OFFERS = "(sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?)) AND (status='pending' OR (status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status!='closed')))";
-// 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id and
-// nickname, removes the password, bio and saved data, hides every post and ends open offers and
-// applications. Grade and badge rows stay as the manager's record of each grant; memberColumns
-// shows none of them for a withdrawn member, and only the manager ever writes them.
+// 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id, the
+// nickname and the Naver link (that Naver account may sign up again), removes the password, bio and
+// saved data, hides every post and ends open offers and applications. Grade and badge rows stay as
+// the manager's record of each grant; memberColumns shows none of them for a withdrawn member, and only
+// the manager ever writes them.
 // Each chat with an ended offer gets one line from the post author, as endOffersStatements does;
 // the lines and the post change come before the UPDATE that cancels the offers they select.
+const WITHDRAW_CONFIRM = '회원 탈퇴';
 async function withdraw(req: Request) {
     const u = await requireUser(req);
     if (u.role === 'manager') fail(403, '매니저 계정은 탈퇴할 수 없습니다.');
     await limit('pw:' + u.id, 10, 600000);
     const b = await body(req);
-    if (!await passwordMatches(b.password, await passwordRow(u.id))) fail(400, '비밀번호가 맞지 않습니다.');
+    // Members have no password (네이버 로그인): the screen asks to type '회원 탈퇴' instead.
+    if (b.confirm !== WITHDRAW_CONFIRM) fail(400, '확인 문구가 맞지 않습니다.');
     const now = Date.now();
     const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
-        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
+        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
         // 웹 푸시 (WP64): no device gets the member's pushes any more.
         ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
@@ -173,21 +182,44 @@ async function celebrated(req: Request) {
     return json({ rank });
 }
 
-async function authHandler(req: Request, p: string[]) {
-    const method = req.method;
-    if (p[1] === 'me' && method === 'GET') {
-        const user = await currentUser(req);
-        return json({ user, trial: user ? await trialState(user) : null });
+// Test only: LEGACY_AUTH_TEST=on (scripts/test-local.mjs sets it on the suite servers; wrangler.jsonc and
+// deploys never do) keeps the old ID/password sign-up, login, password change and 비밀번호 찾기 for requests
+// to 127.0.0.1 or localhost, so the suites can make members without Naver. Production refuses them (410).
+const legacyAuth = (req: Request) => (env as Partial<Env>).LEGACY_AUTH_TEST === 'on' && localRequest(req);
+
+// A new session row; returns its Set-Cookie line.
+async function startSession(req: Request, id: string) {
+    const token = random();
+    await db().batch([
+        db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()),
+        db().prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').bind(await digest(token), id, Date.now() + SESSION_DAYS * 86400000),
+    ]);
+    return sessionCookie(req, token);
+}
+
+// Signs the member in and answers {user, trial} (plus `extra`) with the session cookie and `cookies`.
+async function signedIn(req: Request, id: string, capped: boolean, cookies: string[] = [], extra: Record<string, unknown> = {}) {
+    const session = await startSession(req, id);
+    const user = withMember(await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(id).first<any>());
+    // The session already exists: a failed trial read must not turn the sign-in into an error.
+    let trial: TrialState;
+    try { trial = await trialState(user, capped); }
+    catch (e) {
+        console.warn('Trial state not read', e instanceof Error ? e.message : 'unknown');
+        trial = { endsAt: user.grade_trial ? user.grade_expires_at ?? null : null, popup: !!user.grade_trial, ended: false, capped };
     }
-    if (method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
-    if (p[1] === 'logout') {
-        await db().prepare('DELETE FROM sessions WHERE token=?').bind(await digest(tokenOf(req))).run();
-        return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
-    }
-    if (p[1] === 'password') return changePassword(req);
-    if (p[1] === 'withdraw') return withdraw(req);
-    if (p[1] === 'reset-request') return resetRequest(req);
-    const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
+    const r = json({ ...extra, user, trial });
+    r.headers.append('Set-Cookie', session);
+    for (const c of cookies) r.headers.append('Set-Cookie', c);
+    return r;
+}
+
+const naverDeps = { session: startSession, signedIn, signUpTrial, passwordMatches };
+
+// ID/password sign-in. managerOnly: /manager-login (and auth/login outside the test switch), where only the
+// reserved manager account may sign in; any other id gets the same 401 after the same hash cost.
+async function passwordAuth(req: Request, b: any, mode: 'register' | 'login', managerOnly: boolean) {
+    const username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
     if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
     // Limits are per address, and per id from each address, so nobody can lock
@@ -197,7 +229,7 @@ async function authHandler(req: Request, p: string[]) {
     await limit('auth-user:' + username + ':' + ip, 15, 600000);
     await initManager();
     let id: string, capped = false;
-    if (p[1] === 'register') {
+    if (mode === 'register') {
         // 'deleted_' ids are what 회원 탈퇴 leaves behind.
         if (username === MANAGER_USERNAME || username.startsWith('deleted_')) fail(409, '이미 사용 중인 아이디입니다.');
         const nickname = nicknameField(b.nickname), key = nicknameKey(nickname);
@@ -215,27 +247,53 @@ async function authHandler(req: Request, p: string[]) {
             throw e;
         }
         capped = await signUpTrial(id, ip, createdAt);
-    } else if (p[1] === 'login') {
-        const found = await db().prepare('SELECT id,salt,password_hash FROM users WHERE username=?').bind(username).first<any>();
+    } else {
+        const found = managerOnly && username !== MANAGER_USERNAME ? null
+            : await db().prepare('SELECT id,salt,password_hash FROM users WHERE username=?').bind(username).first<any>();
         if (!await passwordMatches(b.password, found)) fail(401, '아이디 또는 비밀번호가 맞지 않습니다.');
         id = found.id;
         // Older 100,000-iteration hashes are replaced once the password is known.
         if (isLegacyHash(found.password_hash)) await db().prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await storedHash(b.password, found.salt), id).run();
-    } else fail(404, '페이지를 찾을 수 없습니다.');
-    const token = random();
-    await db().batch([
-        db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()),
-        db().prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').bind(await digest(token), id, Date.now() + SESSION_DAYS * 86400000),
-    ]);
-    const user = withMember(await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(id).first<any>());
-    // The session already exists: a failed trial read must not turn the sign-in into an error.
-    let trial: TrialState;
-    try { trial = await trialState(user, capped); }
-    catch (e) {
-        console.warn('Trial state not read', e instanceof Error ? e.message : 'unknown');
-        trial = { endsAt: user.grade_trial ? user.grade_expires_at ?? null : null, popup: !!user.grade_trial, ended: false, capped };
     }
-    return json({ user, trial }, 200, { 'Set-Cookie': sessionCookie(req, token) });
+    return signedIn(req, id, capped);
+}
+
+// Whether the manager linked a Naver account (매니저 설정 '네이버 계정 연결').
+const naverLinked = async (id: string) => !!(await db().prepare('SELECT naver_id FROM users WHERE id=?').bind(id).first<{ naver_id: string | null }>())?.naver_id;
+
+async function authHandler(req: Request, p: string[], url: URL) {
+    const method = req.method;
+    if (p[1] === 'me' && method === 'GET') {
+        const user = await currentUser(req);
+        return json({ user, trial: user ? await trialState(user) : null, ...user?.role === 'manager' ? { naver: await naverLinked(user.id) } : {} });
+    }
+    // 네이버 로그인 (worker/naver.ts).
+    if (p[1] === 'naver') { const r = await naverHandler(req, p, url, naverDeps); if (r) return r; fail(404, '페이지를 찾을 수 없습니다.'); }
+    if (method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
+    if (p[1] === 'logout') {
+        await db().prepare('DELETE FROM sessions WHERE token=?').bind(await digest(tokenOf(req))).run();
+        return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(req, '', 0) });
+    }
+    if (p[1] === 'password') return changePassword(req, legacyAuth(req));
+    if (p[1] === 'withdraw') return withdraw(req);
+    if (p[1] === 'reset-request') {
+        if (!legacyAuth(req)) fail(410, NAVER_MOVED);
+        return resetRequest(req);
+    }
+    // The hidden /manager-login page: the reserved manager account only.
+    if (p[1] === 'manager-login') return passwordAuth(req, await body(req), 'login', true);
+    if (p[1] === 'register' || p[1] === 'signup') {
+        if (!legacyAuth(req)) fail(410, NAVER_MOVED);
+        return passwordAuth(req, await body(req), 'register', false);
+    }
+    if (p[1] === 'login') {
+        const b = await body(req);
+        if (legacyAuth(req)) return passwordAuth(req, b, 'login', false);
+        // Members sign in with Naver; the manager's ID/password still works here as on /manager-login.
+        if (typeof b?.username !== 'string' || b.username.toLowerCase().trim() !== MANAGER_USERNAME) fail(410, NAVER_MOVED);
+        return passwordAuth(req, b, 'login', true);
+    }
+    fail(404, '페이지를 찾을 수 없습니다.');
 }
 
 async function usersHandler(req: Request, p: string[]) {
@@ -350,7 +408,7 @@ async function route(req: Request): Promise<Response> {
         const url = new URL(req.url), p = url.pathname.slice(5).split('/').filter(Boolean), method = req.method;
         if (method !== 'GET') csrf(req);
         switch (p[0]) {
-            case 'auth': return await authHandler(req, p);
+            case 'auth': return await authHandler(req, p, url);
             case 'users': {
                 // users/:id/reviews (WP23) is the 후기 tab and users/:id/trades (WP51) the 거래 기록 tab; users/:id is the profile.
                 if (p[2] === 'reviews' || p[2] === 'trades') { const r = await reviewsHandler(req, p, url); if (r) return r; break; }

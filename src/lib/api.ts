@@ -9,7 +9,7 @@ export const LOGIN_REQUIRED = '로그인이 필요합니다.';
 // Every 401 means the session is gone, except a login attempt's (a wrong id or password).
 // AppProvider listens and signs the member out on the page.
 function sessionEnded(path: string) {
-    if (path !== 'auth/login') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (path !== 'auth/login' && path !== 'auth/manager-login') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
 }
 
 // signal: a request the caller may cancel (the chat room's long poll, WP69); a cancelled one rejects with

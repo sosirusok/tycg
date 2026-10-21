@@ -24,6 +24,8 @@ const Manage = lazy(() => import('./pages/Manage'));
 const Guide = lazy(() => import('./pages/Guide'));
 const Alerts = lazy(() => import('./pages/Alerts'));
 const Providers = lazy(() => import('./pages/Providers'));
+const Naver = lazy(() => import('./pages/Naver'));
+const ManagerLogin = lazy(() => import('./pages/ManagerLogin'));
 
 export default function App() {
     return <AppProvider><Shell /></AppProvider>;
@@ -102,7 +104,7 @@ function Shell() {
         setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : params.get('q') ? '검색 결과' : '전체')
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
             : page === 'me' ? (parts[1] === 'alerts' ? '알림' : '내 거래')
-            : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : '');
+            : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : page === 'naver' ? '네이버 로그인' : page === 'manager-login' ? '매니저 로그인' : '');
     }, [page, params, parts]);
     // Back/Forward returns to the stored scroll position; the board and a post do it themselves
     // once their data is on screen.
@@ -172,7 +174,7 @@ function Shell() {
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void logout()}>로그아웃</DropdownMenu.Item>
                             </DropdownMenu.Content>
                         </DropdownMenu.Portal>
-                    </DropdownMenu.Root> : <button type="button" className="header-link header-login" onClick={() => openAuth('login')}><span className="label-long">로그인 / 회원가입</span><span className="label-short">로그인</span></button>}
+                    </DropdownMenu.Root> : <button type="button" className="header-link header-login" onClick={() => openAuth()}><span className="label-long">로그인 / 회원가입</span><span className="label-short">로그인</span></button>}
                     <button type="button" className="btn btn-primary btn-sm header-write" onClick={compose}><PenLine size={16} />글쓰기</button>
                 </div>
             </div>
@@ -192,6 +194,10 @@ function Shell() {
                     : page === 'manage' ? <Manage tab={parts[1] || 'applications'} />
                     : page === 'guide' ? <Guide />
                     : page === 'providers' ? <Providers />
+                    // 가입 마무리 after a first 네이버 로그인, and the callback's error lines.
+                    : page === 'naver' ? <Naver key={search} />
+                    // The manager's hidden ID/password sign-in; nothing links here.
+                    : page === 'manager-login' ? <ManagerLogin />
                     : <NotFound />}
             </Suspense>
         </main>
@@ -208,7 +214,7 @@ function Shell() {
             <Link to={tradeHref} aria-current={page === 'trade' ? 'page' : undefined}><LayoutList size={22} />거래</Link>
             <button type="button" onClick={compose}><PenLine size={22} />글쓰기</button>
             <button type="button" onClick={() => go('/chat')} aria-current={page === 'chat' ? 'page' : undefined}><MessageCircle size={22} />채팅{unread > 0 && <b className="badge-count">{unread > 99 ? '99+' : unread}</b>}</button>
-            <button type="button" onClick={() => me ? void navigate('/profile/' + me.id) : openAuth('login')} aria-current={page === 'profile' || page === 'me' ? 'page' : undefined}><UserRound size={22} />내 정보</button>
+            <button type="button" onClick={() => me ? void navigate('/profile/' + me.id) : openAuth()} aria-current={page === 'profile' || page === 'me' ? 'page' : undefined}><UserRound size={22} />내 정보</button>
         </nav>}
         <AuthModal />
         <ApplyModal />

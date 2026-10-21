@@ -7,7 +7,7 @@ import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
 import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/ui';
-import { MemberPanel, TempPassword } from '../components/MemberPanel';
+import { MemberPanel, TempPassword, oldId } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
 import { RichBody } from '../components/RichBody';
 
@@ -73,7 +73,7 @@ function Applications({ onChange }: { onChange: () => void }) {
         <div className="mt-16">{apps === null ? <SkeletonRows count={3} height={72} /> : apps.length ? <ul className="simple-list">{apps.map(a => <li key={a.id}>
             <span className="grow">
                 <strong>{applicationTitle(a)}</strong>
-                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">@{a.username}{a.grade_trial && ' · 플러스 체험'} · {relativeTime(a.created_at)}</span></span>
+                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">{[oldId(a.username), a.grade_trial && '플러스 체험', relativeTime(a.created_at)].filter(Boolean).join(' · ')}</span></span>
             </span>
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
@@ -89,7 +89,7 @@ function Applications({ onChange }: { onChange: () => void }) {
 
 // 비밀번호 재설정 (WP59): pending 비밀번호 찾기 requests, newest first. '회원 있음' names the member (with 본인
 // 인증 or not, to judge the request); the temporary password goes to '연락받을 곳', then '처리 완료'.
-type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean };
+type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean; naver: boolean };
 function Resets({ onChange }: { onChange: () => void }) {
     const [rows, setRows] = useState<ResetRow[] | null>(null), [busy, setBusy] = useState(0), [member, setMember] = useState<string | null>(null);
     // The request whose member gets a temporary password; it stays set so the password stays on screen.
@@ -113,7 +113,7 @@ function Resets({ onChange }: { onChange: () => void }) {
                 <span className="muted small">{relativeTime(r.created_at)}</span>
             </span>
             <span className="report-actions">
-                {r.user_id && r.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
+                {r.user_id && r.role !== 'manager' && !r.naver && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
                 <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => void done(r)}>처리 완료</button>
             </span>
         </li>)}</ul> : <EmptyState icon="file" title="대기 중인 요청이 없습니다" />}
@@ -134,7 +134,7 @@ function Members() {
         <form className="search-input" onSubmit={submit} role="search"><Search size={20} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="닉네임 또는 아이디" aria-label="회원 검색" /></form>
         <div className="chip-row mt-12">{[['', '전체'], ['badged', '인증 보유'], ['graded', '등급 보유']].map(([id, label]) => <button type="button" key={id} className="chip chip-sm" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}</div>
         <div className="mt-16">{users === null ? <SkeletonRows count={4} height={60} /> : users.length ? <ul className="simple-list">{users.map(u => <li key={u.id}>
-            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} /><span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · 글 {u.postCount}{u.grade_trial && ' · 플러스 체험'}{u.suspended && ' · 이용 정지 중'}</span></span>
+            <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} /><span className="muted small">{oldId(u.username) && <>{oldId(u.username)} · </>}{dateText(u.created_at)} 가입 · 글 {u.postCount}{u.grade_trial && ' · 플러스 체험'}{u.suspended && ' · 이용 정지 중'}</span></span>
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
         </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
@@ -271,6 +271,20 @@ const kstInput = (t: number) => new Date(t + KST).toISOString().slice(0, 16);
 const fromKstInput = (v: string) => { const t = Date.parse(v + ':00Z'); return Number.isFinite(t) ? t - KST + 59999 : NaN; };
 
 // '플러스 무료 체험': the sign-up window, the counts, 종료일 변경 (up to 90 days ahead) and 지금 마감.
+// 네이버 계정 연결 (매니저 설정): after the link the manager signs in with Naver too; /manager-login keeps working.
+function NaverLinkCard() {
+    const { config } = useApp();
+    const [linked, setLinked] = useState<boolean | null>(null);
+    useEffect(() => { api<{ naver?: boolean }>('auth/me').then(d => setLinked(!!d.naver)).catch(() => setLinked(null)); }, []);
+    if (linked === null) return null;
+    return <section className="card card-pad naver-admin">
+        <h2 className="card-title">네이버 계정 연결</h2>
+        <p className="muted small">{linked ? '연결됨' : '연결 안 됨'}</p>
+        {config.naverLogin === false ? <p className="muted small">네이버 로그인 설정이 아직 끝나지 않았습니다.</p>
+            : <div className="row mt-8"><a className="btn btn-line btn-sm" href={'/api/auth/naver/start?link=1&next=' + encodeURIComponent('/manage/settings')}>{linked ? '다른 네이버 계정 연결' : '네이버 계정 연결'}</a></div>}
+    </section>;
+}
+
 function TrialCard() {
     const { refreshConfig } = useApp();
     const [info, setInfo] = useState<TrialInfo | null>(null);
@@ -409,7 +423,7 @@ function Settings({ usage }: { usage?: { relistsYesterday: number; autoYesterday
         catch (err) { toast.error(errorText(err)); }
         finally { setBusy(false); }
     }
-    return <><UsageCard usage={usage} /><TrialCard /><LinkBlockCard /><form className="settings-form" onSubmit={save}>
+    return <><UsageCard usage={usage} /><NaverLinkCard /><TrialCard /><LinkBlockCard /><form className="settings-form" onSubmit={save}>
         <label className="field"><span className="field-label">등급 입금 안내</span>
             <textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={notice} onChange={e => setNotice(e.target.value)} placeholder="예: 국민은행 000000-00-000000 (예금주 ○○○)" />
             <span className="field-hint">신청 창 입금 안내에 표시. 비우면 ‘채팅으로 안내’로 표시.</span></label>

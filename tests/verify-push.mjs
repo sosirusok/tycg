@@ -275,7 +275,7 @@ try {
     equal(sql('SELECT COUNT(*) AS n FROM push_queue')[0].n, 0, 'the queue is empty');
 
     // ---- 7. 회원 탈퇴 removes the member's devices ----
-    equal((await subscribers[0]('auth/withdraw', 'POST', { password })).status, 200, 'a subscriber leaves (회원 탈퇴)');
+    equal((await subscribers[0]('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'a subscriber leaves (회원 탈퇴)');
     equal(sql(`SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id='${subscribers[0].user.id}'`)[0].n, 0, 'their subscription is gone');
 } finally {
     mock.close();

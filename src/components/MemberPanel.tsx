@@ -15,7 +15,10 @@ type ReviewRow = Review & { nickname: string };
 // One of the member's trades (WP23, WP43) with 거래가 and backing; confirmed once the other member answered.
 type TradeRow = { id: string; post_id: number; created_at: number; confirmed: number; title: string | null; partner_nickname: string; price: number | null; backing: number | null; backing_offer?: number };
 type TradeCounts = { confirmed: number; pending: number; denied: number };
-type Detail = { user: User & { username: string; deleted_at?: number | null; suspend_reason?: string; ad_off?: number; avatar_thumb?: string | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
+type Detail = { user: User & { username: string; naver?: boolean; deleted_at?: number | null; suspend_reason?: string; ad_off?: number; avatar_thumb?: string | null }; grants: Grant[]; badges: { badge: string; granted_at: number }[]; applications: Application[]; sanctions?: Sanction[]; trades?: TradeRow[]; tradeCounts?: TradeCounts };
+// The old ID of a member who signed up with one; a 네이버 로그인 sign-up's generated username is never shown.
+export const oldId = (username: string) => /^n_[0-9a-f]{16}$/.test(username) ? '' : '@' + username;
+
 // Reason chips for 이용 정지: the member report reasons except 기타 (typed in instead).
 const SUSPEND_REASONS = MEMBER_REPORT_REASONS.filter(r => r !== '기타');
 
@@ -89,7 +92,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         <div className="mp-head">
             <div className="mp-who"><Avatar name={u.nickname} src={u.avatar_thumb} grade={u.grade} trial={u.grade_trial} role={u.role} />
                 <span className="grow"><NameLine nickname={u.nickname} grade={u.grade} trial={u.grade_trial} role={u.role} badges={u.badges} />
-                    <span className="muted small">@{u.username} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span></span></div>
+                    <span className="muted small">{oldId(u.username) && <>{oldId(u.username)} · </>}{u.naver ? '네이버 연결' : '네이버 미연결'} · {dateText(u.created_at)} 가입 · <Link to={'/profile/' + u.id}>프로필</Link></span></span></div>
         </div>
         {pending.length > 0 && !inChat && <div className="mp-block">
             <h4>신청 대기</h4>
@@ -171,7 +174,8 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
         {u.role !== 'manager' && !u.deleted_at && <div className="mp-block">
             <h4>계정</h4>
             <div className="row">
-                <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>
+                {/* A temporary password only helps a member who has not linked Naver yet (기존 계정 연결). */}
+                {!u.naver && <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setResetting(true)}>임시 비밀번호 발급</button>}
                 {!suspendedUntil && <button type="button" className="btn btn-line btn-sm grow" disabled={busy} onClick={() => setSuspendForm(true)}>이용 정지</button>}
             </div>
             {u.avatar_thumb && <button type="button" className="btn btn-line btn-sm btn-block mt-8" disabled={busy} onClick={() => setRemovingPhoto(true)}>프로필 사진 삭제</button>}
