@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mockMobile } from './fixtures/naver-mock.mjs';
 
 // 네이버 로그인: start and callback (state cookie, safe next), 가입 마무리 (nickname rules, 플러스 체험), a linked
 // Naver account signing in, 기존 계정 연결 with the old ID/password (once), the 410 for the old member
@@ -294,6 +295,31 @@ const manager = browser();
     equal(seen.filter(s => profile.some(v => s.text.includes(v))).map(s => s.p), [], 'no response carries a Naver nickname, name, email or photo');
 }
 
+// 같은 휴대전화번호: a second Naver account with an active member's number cannot sign up.
+{
+    const phone = mockMobile(NAVER('n'));
+    const same = await naverLogin(browser(), NAVER('p') + '|' + phone.replace(/-/g, ''));
+    equal(same.location, '/naver?error=phone', 'another Naver account with the same number (no dashes) is refused');
+    check(!same.cookies.some(c => c.startsWith('zg_naver_pending=') && !c.startsWith('zg_naver_pending=;')), 'no pending sign-up for it');
+    equal((await naverLogin(browser(), NAVER('p2') + '|+82 ' + phone.slice(1))).location, '/naver?error=phone', 'the +82 form is the same number');
+    equal((await naverLogin(browser(), NAVER('n'))).location, '/', 'the member who has the number still signs in');
+    equal((await naverLogin(browser(), NAVER('q') + '|-')).location, '/naver', 'without a number from Naver the sign-up goes on');
+    const hash = sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash;
+    check(/^[0-9a-f]{64}$/.test(hash), 'the member has a phone hash, not the number');
+    // Two sign-ups with one number at once: the second 가입 마무리 is refused.
+    const shared = mockMobile(NAVER('race')), r1 = browser(), r2 = browser();
+    equal((await naverLogin(r1, NAVER('r1') + '|' + shared)).location, '/naver', 'first pending sign-up');
+    equal((await naverLogin(r2, NAVER('r2') + '|' + shared)).location, '/naver', 'second pending sign-up before the first finished');
+    equal((await r1('auth/naver/finish', 'POST', { nickname: '번호하나' + run, agree: true })).status, 200, 'the first one joins');
+    const second = await r2('auth/naver/finish', 'POST', { nickname: '번호둘' + run, agree: true });
+    equal([second.status, second.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], 'the second is refused at 가입 마무리');
+    // A member from before the check gets the hash at the next Naver login.
+    sql(`UPDATE users SET phone_hash=NULL WHERE id='${member.id}'`);
+    await naverLogin(browser(), NAVER('n'));
+    equal(sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash, hash, 'the hash is stored at the next login');
+    equal(seen.filter(s => /phone_hash/.test(s.text) || s.text.includes(phone) || s.text.includes(phone.replace(/-/g, ''))).map(s => s.p), [], 'no response carries the number or its hash');
+}
+
 // Nothing from Naver is stored but response.id: no access or refresh token, no profile field (raw database files).
 {
     const { log } = await (await fetch(mock + '/__log')).json();
@@ -305,8 +331,9 @@ const manager = browser();
     walk(path.join(root, persist, 'v3', 'd1'));
     const bytes = files.map(f => readFileSync(f));
     check(bytes.some(b => b.includes(Buffer.from(NAVER('n')))), 'the search reaches the stored rows (a naver_id is found)');
-    const found = [...tokens, '홍길동목업', 'mock-user@naver.example', '네이버별명목'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
-    equal(found, [], `no token or Naver profile field in the D1 files (${files.length} files)`);
+    const numbers = [NAVER('n'), NAVER('race')].map(mockMobile).flatMap(m => [m, m.replace(/-/g, '')]);
+    const found = [...tokens, ...numbers, '홍길동목업', 'mock-user@naver.example', '네이버별명목'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
+    equal(found, [], `no token, phone number or Naver profile field in the D1 files (${files.length} files)`);
 }
 
 // 회원 탈퇴 frees the Naver account, which may then sign up again.
@@ -318,6 +345,8 @@ const manager = browser();
     equal((await w('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'the member withdraws');
     equal(sql(`SELECT naver_id FROM users WHERE id='${joined.data.user.id}'`)[0].naver_id, null, 'the Naver link is removed');
     equal((await naverLogin(browser(), NAVER('x'))).location, '/naver', 'the same Naver account goes to 가입 마무리 again');
+    equal(sql(`SELECT phone_hash FROM users WHERE id='${joined.data.user.id}'`)[0].phone_hash, null, 'the phone hash is removed');
+    equal((await naverLogin(browser(), NAVER('x2') + '|' + mockMobile(NAVER('x')))).location, '/naver', 'another Naver account with that number may sign up after the withdrawal');
 }
 
 sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");

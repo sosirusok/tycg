@@ -9,6 +9,8 @@ import { countFetch, localRequest } from './meter';
 // per-app user id (users.naver_id), never the Naver access token. Only response.id of the profile is read:
 // the member types a separate site 닉네임 on 가입 마무리, and that is all the site ever shows. naver_id is an
 // internal key: no API response carries it (the manager's member panel shows only whether one is linked).
+// 휴대전화번호: when Naver sends response.mobile (제공 정보 '휴대전화번호'), only its keyed hash is kept
+// (users.phone_hash), and a new Naver account whose number an active member already has cannot sign up.
 //
 //   GET  auth/naver/start?next=/path[&link=1]  302 to nid.naver.com with a fresh state in a short-lived cookie
 //   GET  auth/naver/callback?code&state        state check, token exchange, profile read, then one of:
@@ -26,6 +28,7 @@ export const NAVER_NOT_READY = '네이버 로그인 설정이 아직 끝나지 �
 export const NAVER_MOVED = '네이버 로그인으로 바뀌었습니다.';
 const PENDING_GONE = '네이버 로그인 시간이 지났습니다. 다시 로그인해 주세요.';
 const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네이버를 연결해 주세요.';
+export const PHONE_TAKEN = '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.';
 
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
@@ -69,6 +72,22 @@ async function mac(data: string) {
     const key = await crypto.subtle.importKey('raw', enc.encode('zg-naver-cookie-v1:' + secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     return hex(await crypto.subtle.sign('HMAC', key, enc.encode(data)));
 }
+// The Naver mobile number as 01012345678 ('010-1234-5678' or '+82 10-1234-5678'); anything else is none.
+export function phoneDigits(raw: unknown) {
+    if (typeof raw !== 'string') return null;
+    let d = raw.replace(/[^0-9]/g, '');
+    if (d.startsWith('82')) d = '0' + d.slice(2);
+    return /^01[016789][0-9]{7,8}$/.test(d) ? d : null;
+}
+// HMAC-SHA256 of the digits. PHONE_HASH_KEY (a Worker secret) keys it; without one, a key derived from
+// NAVER_CLIENT_SECRET does (local runs). Changing the key makes earlier hashes stop matching.
+async function phoneHash(digits: string) {
+    const v = vars(), secret = v.PHONE_HASH_KEY || 'zg-phone-v1:' + (v.NAVER_CLIENT_SECRET || '');
+    const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return hex(await crypto.subtle.sign('HMAC', key, enc.encode(digits)));
+}
+const phoneInUse = async (h: string) => !!await db().prepare('SELECT 1 FROM users WHERE phone_hash=? AND deleted_at IS NULL LIMIT 1').bind(h).first();
+
 async function seal(data: Record<string, unknown>) {
     const payload = b64url(JSON.stringify(data));
     return payload + '.' + await mac(payload);
@@ -98,7 +117,7 @@ function redirect(to: string, cookies: string[] = []) {
 }
 
 type StateCookie = { p: 'state'; e: number; s: string; n: string; m: 'login' | 'link'; u?: string };
-export type PendingCookie = { p: 'pending'; e: number; id: string; n: string };
+export type PendingCookie = { p: 'pending'; e: number; id: string; n: string; h?: string };
 
 async function start(req: Request, url: URL) {
     if (!naverReady()) return redirect('/naver?error=config');
@@ -129,11 +148,13 @@ async function naverProfile(req: Request, code: string, state: string) {
     const token = await tokenRes.json().catch(() => null) as { access_token?: unknown } | null;
     if (!tokenRes.ok || typeof token?.access_token !== 'string' || !token.access_token) throw new Error('token');
     const meRes = await fetch(`${api}/v1/nid/me`, { headers: { Authorization: 'Bearer ' + token.access_token }, signal: AbortSignal.timeout(8000) });
-    // Only response.id is read: the Naver name, email, nickname and photo are never requested, kept or shown.
-    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown } } | null;
+    // Only response.id and response.mobile are read: the Naver name, email, nickname and photo are never
+    // kept or shown, and the mobile number only as its hash.
+    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown; mobile?: unknown } } | null;
     const id = me?.response?.id;
     if (!meRes.ok || me?.resultcode !== '00' || typeof id !== 'string' || !id || id.length > 128) throw new Error('profile');
-    return { id };
+    const digits = phoneDigits(me.response?.mobile);
+    return { id, phone: digits ? await phoneHash(digits) : null };
 }
 
 async function callback(req: Request, url: URL, signIn: (id: string) => Promise<string>) {
@@ -150,7 +171,7 @@ async function callback(req: Request, url: URL, signIn: (id: string) => Promise<
     if (url.searchParams.get('error') || !code) return back('denied');
     try { await limit('naver-ip:' + await digest(req.headers.get('cf-connecting-ip') || 'local'), 40, 600000); }
     catch (e) { if (e instanceof ApiError && e.status === 429) return back('busy'); throw e; }
-    let profile: { id: string };
+    let profile: { id: string; phone: string | null };
     try { profile = await naverProfile(req, code, state); }
     catch (e) {
         console.warn('Naver login failed', e instanceof Error ? e.message : 'unknown');
@@ -164,9 +185,15 @@ async function callback(req: Request, url: URL, signIn: (id: string) => Promise<
         catch (e) { if (String(e).includes('UNIQUE')) return back('taken'); throw e; }
         return redirect(st.n, [clear]);
     }
-    const found = await db().prepare('SELECT id FROM users WHERE naver_id=? AND deleted_at IS NULL').bind(profile.id).first<{ id: string }>();
-    if (found) return redirect(st.n, [clear, await signIn(found.id)]);
-    const pending = await seal({ p: 'pending', e: now + PENDING_MS, id: profile.id, n: st.n });
+    const found = await db().prepare('SELECT id,phone_hash FROM users WHERE naver_id=? AND deleted_at IS NULL').bind(profile.id).first<{ id: string; phone_hash: string | null }>();
+    if (found) {
+        // A member who joined before the number was asked for gets it now, so a second account is refused later.
+        if (profile.phone && found.phone_hash !== profile.phone) await db().prepare('UPDATE users SET phone_hash=? WHERE id=?').bind(profile.phone, found.id).run();
+        return redirect(st.n, [clear, await signIn(found.id)]);
+    }
+    // 같은 휴대전화번호: another Naver account of a number an active member has cannot start a sign-up.
+    if (profile.phone && await phoneInUse(profile.phone)) return back('phone');
+    const pending = await seal({ p: 'pending', e: now + PENDING_MS, id: profile.id, n: st.n, ...profile.phone ? { h: profile.phone } : {} });
     return redirect('/naver', [clear, cookie(req, PENDING_COOKIE, pending, PENDING_MS)]);
 }
 
@@ -198,10 +225,12 @@ async function finish(req: Request, signUpTrial: (id: string, ip: string, at: nu
     let username = 'n_' + (await digest('naver:' + pending.id)).slice(0, 16);
     for (let attempt = 0; ; attempt++) {
         try {
-            // The key and the Naver id are checked again inside the insert, so two sign-ups at once cannot both pass.
-            const r = await db().prepare("INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at,naver_id,naver_linked_at) SELECT ?,?,?,?,'','','member','',?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?)")
-                .bind(id, username, nickname, key, createdAt, pending.id, createdAt, key).run();
-            if (!r.meta.changes) fail(409, '비슷한 닉네임이 이미 있습니다.');
+            // The key, the number and the Naver id are checked again inside the insert, so two sign-ups at once
+            // cannot both pass.
+            const h = pending.h ?? null;
+            const r = await db().prepare("INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at,naver_id,naver_linked_at,phone_hash) SELECT ?,?,?,?,'','','member','',?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?) AND NOT EXISTS(SELECT 1 FROM users WHERE phone_hash=? AND deleted_at IS NULL)")
+                .bind(id, username, nickname, key, createdAt, pending.id, createdAt, h, key, h).run();
+            if (!r.meta.changes) fail(409, h && await phoneInUse(h) ? PHONE_TAKEN : '비슷한 닉네임이 이미 있습니다.');
             break;
         } catch (e) {
             const s = String(e);
@@ -235,8 +264,8 @@ async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Pr
     if (found.role === 'manager') fail(403, MANAGER_LINK_HERE);
     if (found.naver_id) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
     try {
-        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='' WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager'")
-            .bind(pending.id, Date.now(), found.id).run();
+        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='',phone_hash=COALESCE(?,phone_hash) WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager'")
+            .bind(pending.id, Date.now(), pending.h ?? null, found.id).run();
         if (!r.meta.changes) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
     } catch (e) {
         if (String(e).includes('UNIQUE')) fail(409, '이미 다른 아이디에 연결된 네이버 계정입니다.');
