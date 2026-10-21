@@ -70,7 +70,7 @@ export default function Naver() {
             <section className="card card-pad naver-card">
                 <h1 className="naver-title">네이버 로그인</h1>
                 <p className="naver-message" role="alert">{(error && NAVER_ERRORS[error]) || PENDING_GONE}</p>
-                {me ? <Link className="btn btn-line btn-lg btn-block" to="/">홈으로</Link> : <NaverButton next="/" />}
+                {me ? <Link className="btn btn-line btn-lg btn-block" to="/">홈으로</Link> : <NaverButton next={params.get('next') || '/'} />}
             </section>
         </div>;
     }

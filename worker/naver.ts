@@ -25,6 +25,7 @@ import { countFetch, localRequest } from './meter';
 export const NAVER_NOT_READY = '네이버 로그인 설정이 아직 끝나지 않았습니다.';
 export const NAVER_MOVED = '네이버 로그인으로 바뀌었습니다.';
 const PENDING_GONE = '네이버 로그인 시간이 지났습니다. 다시 로그인해 주세요.';
+const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네이버를 연결해 주세요.';
 
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
@@ -137,11 +138,14 @@ async function naverProfile(req: Request, code: string, state: string) {
 
 async function callback(req: Request, url: URL, signIn: (id: string) => Promise<string>) {
     const clear = cookie(req, STATE_COOKIE, '', 0);
-    const back = (code: string) => redirect('/naver?error=' + code, [clear]);
+    // Once the state cookie checks out, an error keeps its return path, so a retry from /naver lands there.
+    let keep = '';
+    const back = (code: string) => redirect('/naver?error=' + code + keep, [clear]);
     if (!naverReady()) return back('config');
     const st = await open<StateCookie>(cookieOf(req, STATE_COOKIE), 'state');
     const state = url.searchParams.get('state') || '', code = url.searchParams.get('code') || '';
     if (!st || !state || !safeEqual(state, st.s)) return back('state');
+    if (st.n !== '/') keep = '&next=' + encodeURIComponent(st.n);
     // Naver sends error=access_denied when the member cancels on its screen.
     if (url.searchParams.get('error') || !code) return back('denied');
     try { await limit('naver-ip:' + await digest(req.headers.get('cf-connecting-ip') || 'local'), 40, 600000); }
@@ -213,9 +217,9 @@ async function finish(req: Request, signUpTrial: (id: string, ip: string, at: nu
 }
 
 // 기존 계정 연결: the old ID/password, once. Limits as login had them (per address, and per id from each
-// address). The member's old password is removed with the link, so it never signs in again; the manager
-// keeps theirs for /manager-login.
-async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Promise<boolean>, isLegacy: (h: string) => boolean, rehash: (pw: string, salt: string) => Promise<string>, signedIn: SignedIn) {
+// address). The old password is removed with the link, so it never signs in again. The manager account is
+// refused here: it links only from its own signed-in session (start?link=1 in 설정).
+async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Promise<boolean>, signedIn: SignedIn) {
     if (!naverReady()) fail(503, NAVER_NOT_READY);
     const pending = await pendingOf(req);
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
@@ -228,17 +232,16 @@ async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Pr
     const found = await db().prepare('SELECT id,role,salt,password_hash,naver_id FROM users WHERE username=? AND deleted_at IS NULL').bind(username).first<any>();
     // 400, not 401: nobody is signed in here, and the app treats a 401 as an ended session.
     if (!await passwordMatches(b.password, found)) fail(400, '아이디 또는 비밀번호가 맞지 않습니다.');
+    if (found.role === 'manager') fail(403, MANAGER_LINK_HERE);
     if (found.naver_id) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
-    const manager = found.role === 'manager';
     try {
-        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash=CASE WHEN role='manager' THEN password_hash ELSE '' END,salt=CASE WHEN role='manager' THEN salt ELSE '' END WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL")
+        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='' WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager'")
             .bind(pending.id, Date.now(), found.id).run();
         if (!r.meta.changes) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
     } catch (e) {
         if (String(e).includes('UNIQUE')) fail(409, '이미 다른 아이디에 연결된 네이버 계정입니다.');
         throw e;
     }
-    if (manager && isLegacy(found.password_hash)) await db().prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await rehash(b.password, found.salt), found.id).run();
     return signedIn(req, found.id, false, [clearPending(req)], { next: pending.n });
 }
 
@@ -247,8 +250,6 @@ export type NaverDeps = {
     signedIn: SignedIn;
     signUpTrial: (id: string, ip: string, at: number) => Promise<boolean>;
     passwordMatches: (pw: unknown, row: any) => Promise<boolean>;
-    isLegacy: (h: string) => boolean;
-    rehash: (pw: string, salt: string) => Promise<string>;
 };
 
 export async function naverHandler(req: Request, p: string[], url: URL, deps: NaverDeps): Promise<Response | null> {
@@ -262,6 +263,6 @@ export async function naverHandler(req: Request, p: string[], url: URL, deps: Na
         return Response.json(pending ? { pending: true, trial: trialOpen(w) } : { pending: false }, { headers: { 'Cache-Control': 'no-store' } });
     }
     if (method === 'POST' && p[2] === 'finish' && !p[3]) return finish(req, deps.signUpTrial, deps.signedIn);
-    if (method === 'POST' && p[2] === 'link' && !p[3]) return link(req, deps.passwordMatches, deps.isLegacy, deps.rehash, deps.signedIn);
+    if (method === 'POST' && p[2] === 'link' && !p[3]) return link(req, deps.passwordMatches, deps.signedIn);
     return null;
 }

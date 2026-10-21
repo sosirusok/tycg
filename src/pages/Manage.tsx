@@ -73,7 +73,7 @@ function Applications({ onChange }: { onChange: () => void }) {
         <div className="mt-16">{apps === null ? <SkeletonRows count={3} height={72} /> : apps.length ? <ul className="simple-list">{apps.map(a => <li key={a.id}>
             <span className="grow">
                 <strong>{applicationTitle(a)}</strong>
-                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">{oldId(a.username)}{a.grade_trial && ' · 플러스 체험'} · {relativeTime(a.created_at)}</span></span>
+                <span className="row small"><button type="button" className="link-btn" onClick={() => setMember(a.user_id)}><NameLine nickname={a.nickname} grade={a.grade} trial={a.grade_trial} badges={a.badges} /></button><span className="muted">{[oldId(a.username), a.grade_trial && '플러스 체험', relativeTime(a.created_at)].filter(Boolean).join(' · ')}</span></span>
             </span>
             <span className={'event-status st-' + a.status}>{APPLICATION_STATUS_NAMES[a.status]}</span>
             {a.conversation_id && <Link to={'/chat/' + a.conversation_id} className="btn btn-line btn-xs">채팅</Link>}
@@ -89,7 +89,7 @@ function Applications({ onChange }: { onChange: () => void }) {
 
 // 비밀번호 재설정 (WP59): pending 비밀번호 찾기 requests, newest first. '회원 있음' names the member (with 본인
 // 인증 or not, to judge the request); the temporary password goes to '연락받을 곳', then '처리 완료'.
-type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean };
+type ResetRow = { id: number; username: string; contact: string; created_at: number; user_id: string | null; nickname: string | null; role: string | null; identity: boolean; naver: boolean };
 function Resets({ onChange }: { onChange: () => void }) {
     const [rows, setRows] = useState<ResetRow[] | null>(null), [busy, setBusy] = useState(0), [member, setMember] = useState<string | null>(null);
     // The request whose member gets a temporary password; it stays set so the password stays on screen.
@@ -113,7 +113,7 @@ function Resets({ onChange }: { onChange: () => void }) {
                 <span className="muted small">{relativeTime(r.created_at)}</span>
             </span>
             <span className="report-actions">
-                {r.user_id && r.role !== 'manager' && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
+                {r.user_id && r.role !== 'manager' && !r.naver && <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => { setTarget(r); setConfirming(true); }}>임시 비밀번호 발급</button>}
                 <button type="button" className="btn btn-line btn-sm" disabled={!!busy} onClick={() => void done(r)}>처리 완료</button>
             </span>
         </li>)}</ul> : <EmptyState icon="file" title="대기 중인 요청이 없습니다" />}

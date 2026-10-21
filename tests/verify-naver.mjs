@@ -135,6 +135,9 @@ equal((await guest('config')).data.naverLogin, true, 'config says 네이버 로�
     const b3 = browser();
     const s3 = new URL((await b3('auth/naver/start?next=/')).location).searchParams.get('state');
     equal((await b3(`auth/naver/callback?code=bad&state=${s3}`)).location, '/naver?error=naver', 'a refused token exchange goes to the failure message');
+    const b4 = browser();
+    const s4 = new URL((await b4('auth/naver/start?next=/posts/123')).location).searchParams.get('state');
+    equal((await b4(`auth/naver/callback?error=access_denied&state=${s4}`)).location, '/naver?error=denied&next=%2Fposts%2F123', 'an error after the state check keeps the return path');
     equal(sql(`SELECT COUNT(*) AS n FROM users WHERE naver_id='${NAVER('w')}'`)[0].n, 0, 'no account from refused callbacks');
 }
 
@@ -243,7 +246,7 @@ const manager = browser();
     // A member cannot start a link.
     equal((await fresh('auth/naver/start?link=1&next=/manage/settings')).location, '/naver?error=state', 'link=1 needs the manager session');
     // A Naver account a member already uses cannot be linked to the manager.
-    equal((await naverLogin(manager, NAVER('n'), '/manage/settings', { link: true })).location, '/naver?error=taken', 'a Naver account in use is refused');
+    equal((await naverLogin(manager, NAVER('n'), '/manage/settings', { link: true })).location, '/naver?error=taken&next=%2Fmanage%2Fsettings', 'a Naver account in use is refused, keeping the return path');
     const linked = await naverLogin(manager, NAVER('m'), '/manage/settings', { link: true });
     equal([linked.status, linked.location], [302, '/manage/settings'], 'the manager links a Naver account');
     equal((await manager('auth/me')).data.naver, true, 'auth/me: linked');
@@ -251,11 +254,17 @@ const manager = browser();
     await naverLogin(viaNaver, NAVER('m'));
     equal((await viaNaver('auth/me')).data.user.role, 'manager', 'the manager signs in with Naver');
     equal((await browser()('auth/manager-login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'and with the password, both work');
-    // 기존 계정 연결 with the manager account, now that it has a Naver link: refused.
+    // 기존 계정 연결 with the manager account: refused (it links only from its own session).
     const other = browser();
     await naverLogin(other, NAVER('m2'));
     const twice = await other('auth/naver/link', 'POST', { username: 'sosirusok', password: managerPassword });
-    equal([twice.status, twice.data.error], [409, '이미 네이버 계정이 연결된 아이디입니다.'], 'an already-linked account is refused');
+    equal([twice.status, twice.data.error], [403, '관리자 계정은 로그인한 뒤 설정에서 네이버를 연결해 주세요.'], '기존 계정 연결 refuses the manager account');
+    // A manager password change drops the Naver link, so a link made with a leaked password stops working.
+    const changed = 'changed-' + managerPassword;
+    equal((await manager('auth/password', 'POST', { current: managerPassword, next: changed })).status, 200, 'the manager changes the password');
+    equal((await manager('auth/me')).data.naver, false, 'the password change removed the Naver link');
+    equal((await naverLogin(browser(), NAVER('m'))).location, '/naver', 'the old Naver link no longer signs in as the manager');
+    equal((await manager('auth/password', 'POST', { current: changed, next: managerPassword })).status, 200, 'and the password is put back');
     // The member panel shows only whether a Naver account is linked, and no temporary password for a linked member.
     const panel = await manager('manage/users/' + member.id);
     equal(panel.data.user.naver, true, 'the member panel: 네이버 연결 yes');
