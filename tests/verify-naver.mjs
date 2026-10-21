@@ -88,13 +88,15 @@ if (phase === 'unset') {
 assert.ok(mock, 'NAVER_MOCK_ORIGIN required.');
 sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%' OR key LIKE 'naver-ip:%' OR key LIKE 'trial-ip:%'");
 // An earlier run's 네이버 계정 연결 of the manager is undone, so this run links it again.
-sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL WHERE id='manager'");
+sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id='manager'");
 // The 플러스 무료 체험 window is open for this suite and closed again at the end.
 sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0),('sys:trial_end','${Date.now() + 86400000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
 
 // Old ID/password members, as they were made before 네이버 로그인 (20,000-iteration PBKDF2).
 const oldPass = 'old-pass-' + run;
 const hash = (pw, salt) => `pbkdf2-sha256$20000$${pbkdf2Sync(pw, salt, 20000, 32, 'sha256').toString('hex')}`;
+// The manager's password is the suite's again (a run that stopped inside the password-change check leaves another).
+{ const salt = randomBytes(8).toString('hex'); sql(`UPDATE users SET password_hash='${hash(managerPassword, salt)}',salt='${salt}' WHERE id='manager'`); }
 const olds = ['a', 'b', 'c'].map(k => ({ id: `nv-old-${k}-${run}`, username: `nvold_${k}_${run}`, nickname: `옛${k}${run}` }));
 sql(olds.map(o => { const salt = randomBytes(8).toString('hex'); return `INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${o.id}','${o.username}','${o.nickname}','${hash(oldPass, salt)}','${salt}','member','',${Date.now() - 86400000 * 40})`; }).join(';'));
 
