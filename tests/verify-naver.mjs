@@ -315,6 +315,16 @@ const manager = browser();
     equal((await r1('auth/naver/finish', 'POST', { nickname: '번호하나' + run, agree: true })).status, 200, 'the first one joins');
     const second = await r2('auth/naver/finish', 'POST', { nickname: '번호둘' + run, agree: true });
     equal([second.status, second.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], 'the second is refused at 가입 마무리');
+    // 기존 계정 연결 with a pending sign-in from before the number was taken: refused too.
+    const linkShared = mockMobile(NAVER('lrace')), l1 = browser(), l2 = browser();
+    await naverLogin(l1, NAVER('l3') + '|' + linkShared);
+    await naverLogin(l2, NAVER('l4') + '|' + linkShared);
+    equal((await l1('auth/naver/finish', 'POST', { nickname: '연결번호' + run, agree: true })).status, 200, 'one Naver account takes the number');
+    const spare = { id: `nv-old-d-${run}`, username: `nvold_d_${run}` }, spareSalt = randomBytes(8).toString('hex');
+    sql(`INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${spare.id}','${spare.username}','옛d${run}','${hash(oldPass, spareSalt)}','${spareSalt}','member','',${Date.now() - 86400000 * 40})`);
+    const lateLink = await l2('auth/naver/link', 'POST', { username: spare.username, password: oldPass });
+    equal([lateLink.status, lateLink.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], '기존 계정 연결 with the same number is refused');
+    equal(sql(`SELECT naver_id FROM users WHERE id='${spare.id}'`)[0].naver_id, null, 'the old account stays unlinked');
     // A member from before the check gets the hash at the next Naver login.
     sql(`UPDATE users SET phone_hash=NULL WHERE id='${member.id}'`);
     await naverLogin(browser(), NAVER('n'));

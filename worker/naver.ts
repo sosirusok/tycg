@@ -79,10 +79,12 @@ export function phoneDigits(raw: unknown) {
     if (d.startsWith('82')) d = '0' + d.slice(2);
     return /^01[016789][0-9]{7,8}$/.test(d) ? d : null;
 }
-// HMAC-SHA256 of the digits. PHONE_HASH_KEY (a Worker secret) keys it; without one, a key derived from
-// NAVER_CLIENT_SECRET does (local runs). Changing the key makes earlier hashes stop matching.
-async function phoneHash(digits: string) {
-    const v = vars(), secret = v.PHONE_HASH_KEY || 'zg-phone-v1:' + (v.NAVER_CLIENT_SECRET || '');
+// HMAC-SHA256 of the digits, keyed by PHONE_HASH_KEY (a Worker secret, set once: a new key makes earlier
+// hashes stop matching). Local test servers (TEST_HOOKS=on) use a fixed key; anywhere else without the key
+// there is no hash, so the number check is off rather than keyed by a value that may change.
+async function phoneHash(req: Request, digits: string) {
+    const v = vars(), secret = v.PHONE_HASH_KEY || (v.TEST_HOOKS === 'on' && localRequest(req) ? 'zg-phone-test' : '');
+    if (!secret) { console.warn('PHONE_HASH_KEY is not set: the phone number check is off'); return null; }
     const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     return hex(await crypto.subtle.sign('HMAC', key, enc.encode(digits)));
 }
@@ -154,7 +156,7 @@ async function naverProfile(req: Request, code: string, state: string) {
     const id = me?.response?.id;
     if (!meRes.ok || me?.resultcode !== '00' || typeof id !== 'string' || !id || id.length > 128) throw new Error('profile');
     const digits = phoneDigits(me.response?.mobile);
-    return { id, phone: digits ? await phoneHash(digits) : null };
+    return { id, phone: digits ? await phoneHash(req, digits) : null };
 }
 
 async function callback(req: Request, url: URL, signIn: (id: string) => Promise<string>) {
@@ -264,9 +266,11 @@ async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Pr
     if (found.role === 'manager') fail(403, MANAGER_LINK_HERE);
     if (found.naver_id) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
     try {
-        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='',phone_hash=COALESCE(?,phone_hash) WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager'")
-            .bind(pending.id, Date.now(), pending.h ?? null, found.id).run();
-        if (!r.meta.changes) fail(409, '이미 네이버 계정이 연결된 아이디입니다.');
+        // The number is checked again here, as in finish: another sign-in may have taken it since the callback.
+        const h = pending.h ?? null;
+        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='',phone_hash=COALESCE(?,phone_hash) WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager' AND NOT EXISTS(SELECT 1 FROM users o WHERE o.phone_hash=? AND o.deleted_at IS NULL AND o.id!=?)")
+            .bind(pending.id, Date.now(), h, found.id, h, found.id).run();
+        if (!r.meta.changes) fail(409, h && await phoneInUse(h) ? PHONE_TAKEN : '이미 네이버 계정이 연결된 아이디입니다.');
     } catch (e) {
         if (String(e).includes('UNIQUE')) fail(409, '이미 다른 아이디에 연결된 네이버 계정입니다.');
         throw e;
