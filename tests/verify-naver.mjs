@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mockMobile } from './fixtures/naver-mock.mjs';
 
 // 네이버 로그인: start and callback (state cookie, safe next), 가입 마무리 (nickname rules, 플러스 체험), a linked
 // Naver account signing in, 기존 계정 연결 with the old ID/password (once), the 410 for the old member
@@ -87,13 +88,15 @@ if (phase === 'unset') {
 assert.ok(mock, 'NAVER_MOCK_ORIGIN required.');
 sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%' OR key LIKE 'naver-ip:%' OR key LIKE 'trial-ip:%'");
 // An earlier run's 네이버 계정 연결 of the manager is undone, so this run links it again.
-sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL WHERE id='manager'");
+sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id='manager'");
 // The 플러스 무료 체험 window is open for this suite and closed again at the end.
 sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0),('sys:trial_end','${Date.now() + 86400000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
 
 // Old ID/password members, as they were made before 네이버 로그인 (20,000-iteration PBKDF2).
 const oldPass = 'old-pass-' + run;
 const hash = (pw, salt) => `pbkdf2-sha256$20000$${pbkdf2Sync(pw, salt, 20000, 32, 'sha256').toString('hex')}`;
+// The manager's password is the suite's again (a run that stopped inside the password-change check leaves another).
+{ const salt = randomBytes(8).toString('hex'); sql(`UPDATE users SET password_hash='${hash(managerPassword, salt)}',salt='${salt}' WHERE id='manager'`); }
 const olds = ['a', 'b', 'c'].map(k => ({ id: `nv-old-${k}-${run}`, username: `nvold_${k}_${run}`, nickname: `옛${k}${run}` }));
 sql(olds.map(o => { const salt = randomBytes(8).toString('hex'); return `INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${o.id}','${o.username}','${o.nickname}','${hash(oldPass, salt)}','${salt}','member','',${Date.now() - 86400000 * 40})`; }).join(';'));
 
@@ -294,6 +297,41 @@ const manager = browser();
     equal(seen.filter(s => profile.some(v => s.text.includes(v))).map(s => s.p), [], 'no response carries a Naver nickname, name, email or photo');
 }
 
+// 같은 휴대전화번호: a second Naver account with an active member's number cannot sign up.
+{
+    const phone = mockMobile(NAVER('n'));
+    const same = await naverLogin(browser(), NAVER('p') + '|' + phone.replace(/-/g, ''));
+    equal(same.location, '/naver?error=phone', 'another Naver account with the same number (no dashes) is refused');
+    check(!same.cookies.some(c => c.startsWith('zg_naver_pending=') && !c.startsWith('zg_naver_pending=;')), 'no pending sign-up for it');
+    equal((await naverLogin(browser(), NAVER('p2') + '|+82 ' + phone.slice(1))).location, '/naver?error=phone', 'the +82 form is the same number');
+    equal((await naverLogin(browser(), NAVER('n'))).location, '/', 'the member who has the number still signs in');
+    equal((await naverLogin(browser(), NAVER('q') + '|-')).location, '/naver', 'without a number from Naver the sign-up goes on');
+    const stored = sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash;
+    check(/^[0-9a-f]{64}$/.test(stored), 'the member has a phone hash, not the number');
+    // Two sign-ups with one number at once: the second 가입 마무리 is refused.
+    const shared = mockMobile(NAVER('race')), r1 = browser(), r2 = browser();
+    equal((await naverLogin(r1, NAVER('r1') + '|' + shared)).location, '/naver', 'first pending sign-up');
+    equal((await naverLogin(r2, NAVER('r2') + '|' + shared)).location, '/naver', 'second pending sign-up before the first finished');
+    equal((await r1('auth/naver/finish', 'POST', { nickname: '번호하나' + run, agree: true })).status, 200, 'the first one joins');
+    const second = await r2('auth/naver/finish', 'POST', { nickname: '번호둘' + run, agree: true });
+    equal([second.status, second.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], 'the second is refused at 가입 마무리');
+    // 기존 계정 연결 with a pending sign-in from before the number was taken: refused too.
+    const linkShared = mockMobile(NAVER('lrace')), l1 = browser(), l2 = browser();
+    await naverLogin(l1, NAVER('l3') + '|' + linkShared);
+    await naverLogin(l2, NAVER('l4') + '|' + linkShared);
+    equal((await l1('auth/naver/finish', 'POST', { nickname: '연결번호' + run, agree: true })).status, 200, 'one Naver account takes the number');
+    const spare = { id: `nv-old-d-${run}`, username: `nvold_d_${run}` }, spareSalt = randomBytes(8).toString('hex');
+    sql(`INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${spare.id}','${spare.username}','옛d${run}','${hash(oldPass, spareSalt)}','${spareSalt}','member','',${Date.now() - 86400000 * 40})`);
+    const lateLink = await l2('auth/naver/link', 'POST', { username: spare.username, password: oldPass });
+    equal([lateLink.status, lateLink.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], '기존 계정 연결 with the same number is refused');
+    equal(sql(`SELECT naver_id FROM users WHERE id='${spare.id}'`)[0].naver_id, null, 'the old account stays unlinked');
+    // A member from before the check gets the hash at the next Naver login.
+    sql(`UPDATE users SET phone_hash=NULL WHERE id='${member.id}'`);
+    await naverLogin(browser(), NAVER('n'));
+    equal(sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash, stored, 'the hash is stored at the next login');
+    equal(seen.filter(s => /phone_hash/.test(s.text) || s.text.includes(phone) || s.text.includes(phone.replace(/-/g, ''))).map(s => s.p), [], 'no response carries the number or its hash');
+}
+
 // Nothing from Naver is stored but response.id: no access or refresh token, no profile field (raw database files).
 {
     const { log } = await (await fetch(mock + '/__log')).json();
@@ -305,8 +343,9 @@ const manager = browser();
     walk(path.join(root, persist, 'v3', 'd1'));
     const bytes = files.map(f => readFileSync(f));
     check(bytes.some(b => b.includes(Buffer.from(NAVER('n')))), 'the search reaches the stored rows (a naver_id is found)');
-    const found = [...tokens, '홍길동목업', 'mock-user@naver.example', '네이버별명목'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
-    equal(found, [], `no token or Naver profile field in the D1 files (${files.length} files)`);
+    const numbers = [NAVER('n'), NAVER('race')].map(mockMobile).flatMap(m => [m, m.replace(/-/g, '')]);
+    const found = [...tokens, ...numbers, '홍길동목업', 'mock-user@naver.example', '네이버별명목'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
+    equal(found, [], `no token, phone number or Naver profile field in the D1 files (${files.length} files)`);
 }
 
 // 회원 탈퇴 frees the Naver account, which may then sign up again.
@@ -318,6 +357,8 @@ const manager = browser();
     equal((await w('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'the member withdraws');
     equal(sql(`SELECT naver_id FROM users WHERE id='${joined.data.user.id}'`)[0].naver_id, null, 'the Naver link is removed');
     equal((await naverLogin(browser(), NAVER('x'))).location, '/naver', 'the same Naver account goes to 가입 마무리 again');
+    equal(sql(`SELECT phone_hash FROM users WHERE id='${joined.data.user.id}'`)[0].phone_hash, null, 'the phone hash is removed');
+    equal((await naverLogin(browser(), NAVER('x2') + '|' + mockMobile(NAVER('x')))).location, '/naver', 'another Naver account with that number may sign up after the withdrawal');
 }
 
 sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");

@@ -26,6 +26,8 @@ interface Env {
     NAVER_CLIENT_SECRET?: string;
     // Optional: the Callback URL registered at 네이버 개발자센터, when it is not <request origin>/api/auth/naver/callback.
     NAVER_REDIRECT_URI?: string;
+    // Keys users.phone_hash (같은 휴대전화번호 중복 가입 방지). Set once; changing it stops older hashes matching.
+    PHONE_HASH_KEY?: string;
     // Test only: with TEST_HOOKS=on, requests to 127.0.0.1 or localhost send the token call to NAVER_AUTH_BASE
     // and the profile call to NAVER_API_BASE (tests/fixtures/naver-mock.mjs). Set by scripts/test-local.mjs only.
     NAVER_AUTH_BASE?: string;

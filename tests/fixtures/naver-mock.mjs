@@ -4,7 +4,9 @@
 //
 //   POST /oauth2.0/token   form: grant_type=authorization_code, client_id, client_secret, code, state.
 //                          code 'ok:<naver id>' gives a fresh access token for that id; any other code an error.
-//   GET  /v1/nid/me        Bearer <token>: {resultcode:'00', response:{id, nickname, name, email, profile_image}}.
+//                          'ok:<naver id>|<mobile>' sets the mobile number ('-': none); otherwise it is made
+//                          from the id (mockMobile), so different ids have different numbers.
+//   GET  /v1/nid/me        Bearer <token>: {resultcode:'00', response:{id, mobile, nickname, name, email, profile_image}}.
 //                          The extra fields are there so tests can check the Worker never keeps or shows them.
 //   GET  /oauth2.0/authorize  for screen checks in a browser: straight back to redirect_uri with
 //                          code 'ok:<random id>' and the same state (verify-naver calls the callback itself).
@@ -12,10 +14,16 @@
 //
 // Standalone (for screen checks): node tests/fixtures/naver-mock.mjs [port]
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const MOCK_PROFILE = { nickname: '네이버별명목', name: '홍길동목업', email: 'mock-user@naver.example', profile_image: 'https://phinf.example/mock.png' };
+
+// The default mobile number of a mock Naver id: 010-XXXX-XXXX from a hash of the id.
+export function mockMobile(id) {
+    const n = String(parseInt(createHash('sha256').update(id).digest('hex').slice(0, 12), 16) % 1e8).padStart(8, '0');
+    return `010-${n.slice(0, 4)}-${n.slice(4)}`;
+}
 
 export function startNaverMock(port = 0, { clientId = 'test-client', clientSecret = 'test-secret' } = {}) {
     const tokens = new Map(), log = [];
@@ -49,9 +57,11 @@ export function startNaverMock(port = 0, { clientId = 'test-client', clientSecre
         if (url.pathname === '/v1/nid/me' && req.method === 'GET') {
             const token = (req.headers.authorization || '').replace(/^Bearer /, '');
             log.push({ path: url.pathname, token });
-            const id = tokens.get(token);
-            if (!id) return send(401, { resultcode: '024', message: 'Authentication failed' });
-            return send(200, { resultcode: '00', message: 'success', response: { id, ...MOCK_PROFILE } });
+            const entry = tokens.get(token);
+            if (!entry) return send(401, { resultcode: '024', message: 'Authentication failed' });
+            const [id, phone] = entry.split('|');
+            const mobile = phone === undefined ? mockMobile(id) : phone === '-' ? undefined : phone;
+            return send(200, { resultcode: '00', message: 'success', response: { id, ...mobile ? { mobile } : {}, ...MOCK_PROFILE } });
         }
         send(404, { error: 'not found' });
     });

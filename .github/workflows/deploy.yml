@@ -11,6 +11,8 @@ name: Deploy to Cloudflare
 #   NAVER_CLIENT_SECRET    optional  with Naver only). Each is passed to the Worker as a secret of the same name only
 #                                    when it is set here; a missing one never removes or blanks the Worker's own
 #                                    value (e.g. one set directly on the Worker). Never printed.
+#   PHONE_HASH_KEY         optional  key of the 휴대전화번호 hash (중복 가입 방지); passed the same way. Set it once and
+#                                    never change it, or earlier hashes stop matching.
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
 # USE_KV ("false" keeps photos in D1 while R2 is off), CRON_LIMIT (the account's Cron Trigger limit: 5 on
 # Workers Free, the default; 250 on Workers Paid), PAGES_PROJECT (the Cloudflare Pages project of the public
@@ -391,6 +393,7 @@ jobs:
           MANAGER_PASSWORD_SALT: ${{ secrets.MANAGER_PASSWORD_SALT }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          PHONE_HASH_KEY: ${{ secrets.PHONE_HASH_KEY }}
           VAPID_MAKE: ${{ steps.vapid.outputs.make }}
         run: |
           set -euo pipefail
@@ -407,7 +410,7 @@ jobs:
           for (const n of pair) out[n] = process.env[n];
           // 네이버 로그인: each value only when its GitHub secret is set. --secrets-file is additive, so a
           // missing one leaves the Worker's existing secret as it is.
-          for (const n of ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"]) if (process.env[n]) out[n] = process.env[n];
+          for (const n of ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET", "PHONE_HASH_KEY"]) if (process.env[n]) out[n] = process.env[n];
           // Web push keys, only when the check step found none: a P-256 key pair, the private key as a JWK
           // and the public key as the base64url of its 65-byte point; the subject is the site's address.
           // A failure here only skips push for this deploy.

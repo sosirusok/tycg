@@ -66,9 +66,10 @@ async function changePassword(req: Request, legacy: boolean) {
     if (typeof b.next !== 'string' || b.next.length < 8 || b.next.length > 128 || b.next === b.current) fail(400, '새 비밀번호는 8~128자, 현재와 다르게 입력해 주세요.');
     const salt = random();
     // Every other device is signed out; this one keeps its session. The Naver link goes too, so a leaked
-    // password that was used to link someone else's Naver account stops working; the manager links again in 설정.
+    // password that was used to link someone else's Naver account stops working (its phone hash goes with it);
+    // the manager links again in 설정.
     await db().batch([
-        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
+        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
         db().prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').bind(u.id, await digest(tokenOf(req))),
     ]);
     return json({ ok: true });
@@ -78,7 +79,7 @@ async function changePassword(req: Request, legacy: boolean) {
 // whose post is not 거래완료 yet (a finished deal keeps its accepted offer). Bind the member's id twice.
 const WITHDRAW_ENDS_OFFERS = "(sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?)) AND (status='pending' OR (status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status!='closed')))";
 // 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id, the
-// nickname and the Naver link (that Naver account may sign up again), removes the password, bio and
+// nickname, the Naver link and the phone hash (that Naver account and number may sign up again), removes the password, bio and
 // saved data, hides every post and ends open offers and applications. Grade and badge rows stay as
 // the manager's record of each grant; memberColumns shows none of them for a withdrawn member, and only
 // the manager ever writes them.
@@ -96,7 +97,7 @@ async function withdraw(req: Request) {
     const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
-        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
+        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
         // 웹 푸시 (WP64): no device gets the member's pushes any more.
         ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
