@@ -306,8 +306,8 @@ const manager = browser();
     equal((await naverLogin(browser(), NAVER('p2') + '|+82 ' + phone.slice(1))).location, '/naver?error=phone', 'the +82 form is the same number');
     equal((await naverLogin(browser(), NAVER('n'))).location, '/', 'the member who has the number still signs in');
     equal((await naverLogin(browser(), NAVER('q') + '|-')).location, '/naver', 'without a number from Naver the sign-up goes on');
-    const hash = sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash;
-    check(/^[0-9a-f]{64}$/.test(hash), 'the member has a phone hash, not the number');
+    const stored = sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash;
+    check(/^[0-9a-f]{64}$/.test(stored), 'the member has a phone hash, not the number');
     // Two sign-ups with one number at once: the second 가입 마무리 is refused.
     const shared = mockMobile(NAVER('race')), r1 = browser(), r2 = browser();
     equal((await naverLogin(r1, NAVER('r1') + '|' + shared)).location, '/naver', 'first pending sign-up');
@@ -328,7 +328,7 @@ const manager = browser();
     // A member from before the check gets the hash at the next Naver login.
     sql(`UPDATE users SET phone_hash=NULL WHERE id='${member.id}'`);
     await naverLogin(browser(), NAVER('n'));
-    equal(sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash, hash, 'the hash is stored at the next login');
+    equal(sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash, stored, 'the hash is stored at the next login');
     equal(seen.filter(s => /phone_hash/.test(s.text) || s.text.includes(phone) || s.text.includes(phone.replace(/-/g, ''))).map(s => s.p), [], 'no response carries the number or its hash');
 }
 
