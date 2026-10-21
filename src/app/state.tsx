@@ -9,7 +9,8 @@ import { closePush, pushClosed, pushOn, pushSupported, refreshPush, subscribePus
 
 // earn: the 수익 홍보 texts (WP66), from manage 설정 or their defaults. vapidPublicKey: the 웹 푸시 key (WP64);
 // null while the site has no push keys. clanMinSeason: the first clan-ladder season (WP70, manager setting).
-export type SiteConfig = { latestSeason: number; clanMinSeason?: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn; vapidPublicKey?: string | null };
+// naverLogin: whether 네이버 로그인 is set up on the server (false: the login dialog says so).
+export type SiteConfig = { naverLogin?: boolean; latestSeason: number; clanMinSeason?: number; paymentNotice: string; manager: { id: string; nickname: string } | null; trial?: { open: boolean; endsAt: number | null }; storage?: PhotoStorage; blockedLinks?: string[]; earn?: Earn; vapidPublicKey?: string | null };
 export type ApplyPreset = { kind: ApplicationKind; target: string; plan?: PlanId };
 
 type AppState = {
@@ -27,11 +28,11 @@ type AppState = {
     refreshMe: () => Promise<void>;
     refreshUnread: () => void;
     refreshConfig: () => void;
-    // Runs `next` right away when signed in; otherwise opens the login dialog and runs it
-    // after login with the member who just signed in.
+    // Runs `next` right away when signed in; otherwise opens the login dialog (네이버 로그인 leaves the
+    // page and comes back to it, so `next` does not run after it).
     requireLogin: (next?: (u: User) => void) => boolean;
-    authMode: '' | 'login' | 'register';
-    openAuth: (mode: 'login' | 'register') => void;
+    authMode: '' | 'login';
+    openAuth: () => void;
     closeAuth: () => void;
     finishAuth: (u: User, trial?: TrialState | null) => void;
     apply: ApplyPreset | 'open' | null;
@@ -118,7 +119,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const setConfig = useCallback((c: SiteConfig) => { setPhotoStorage(c.storage); setSiteConfig(c); }, []);
     const [unread, setUnread] = useState(0);
     const [alerts, setAlerts] = useState(0);
-    const [authMode, setAuthMode] = useState<'' | 'login' | 'register'>('');
+    const [authMode, setAuthMode] = useState<'' | 'login'>('');
     const [apply, setApply] = useState<ApplyPreset | 'open' | null>(null);
     const [pushBar, setPushBar] = useState(false);
     const pending = useRef<((u: User) => void) | null>(null);
@@ -232,7 +233,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const value = useMemo<AppState>(() => ({
         me, ready, trial, setTrial, config, unread, alerts, setAlerts, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
-        authMode, openAuth: setAuthMode, closeAuth: () => { pending.current = null; setAuthMode(''); }, finishAuth,
+        authMode, openAuth: () => setAuthMode('login'), closeAuth: () => { pending.current = null; setAuthMode(''); }, finishAuth,
         apply, openApply: preset => setApply(preset || 'open'), closeApply: () => setApply(null), logout,
         pushBar, enablePush, closePushBar,
     }), [me, ready, trial, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout, pushBar, enablePush, closePushBar]);

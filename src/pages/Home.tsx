@@ -130,7 +130,7 @@ export function Home() {
             </nav>
             {me && trial?.ended ? <TrialEndBand />
                 // Guests while the sign-up event runs: the band in the promo's place opens 회원가입.
-                : ready && !me && config.trial?.open ? <button type="button" className="promo" onClick={() => openAuth('register')}>
+                : ready && !me && config.trial?.open ? <button type="button" className="promo" onClick={() => openAuth()}>
                     <span className="promo-icon"><Gift size={24} strokeWidth={1.75} aria-hidden="true" /></span>
                     <span className="promo-text">
                         <span className="promo-eyebrow">신규 가입 이벤트</span>

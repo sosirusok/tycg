@@ -8,6 +8,7 @@ import { memberTrades, memberTradesStatement, memberTradeCountsStatement } from 
 import { enrolStatements } from './automation';
 import { adFillStatement } from './ads';
 import { vapidPublicKey } from './push';
+import { naverReady } from './naver';
 import {
     AUTO_TEXT, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
     type ApplicationKind, type BadgeId, type Earn, type GradeId, type PlanId, type TrialState,
@@ -31,7 +32,8 @@ export async function siteConfig() {
     // blockedLinks: the manager's 링크 차단 list, so stored links to those hosts render as plain text (WP48).
     // vapidPublicKey: the key browsers subscribe to 웹 푸시 with (WP64); null while push is off.
     // clanMinSeason: the first clan-ladder season (WP70) for the clan season pickers.
-    return { latestSeason: await latestSeason(), clanMinSeason: clanMinFrom(value('sys:clan_min_season')), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn, vapidPublicKey: vapidPublicKey() };
+    // naverLogin: whether 네이버 로그인 is set up (both Worker secrets); the login dialog says so when not.
+    return { latestSeason: await latestSeason(), clanMinSeason: clanMinFrom(value('sys:clan_min_season')), paymentNotice: value('payment_notice'), manager: manager || null, trial: { open, endsAt: open ? w.end : null }, storage: storageMode(), blockedLinks: await blockedDomains(), earn, vapidPublicKey: vapidPublicKey(), naverLogin: naverReady() };
 }
 
 const DAY = 86400000;
@@ -354,7 +356,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
     }
     if (p[1] === 'users' && p[2]) {
-        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,u.ad_off,u.avatar_thumb,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
+        const target = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.bio,u.created_at,u.deleted_at,u.suspended_until,u.suspend_reason,u.ad_off,u.avatar_thumb,(u.naver_id IS NOT NULL) AS naver,${memberColumns('u')} FROM users u WHERE u.id=?`).bind(p[2]).first<any>();
         if (!target) fail(404, '회원을 찾을 수 없습니다.');
         if (!p[3] && method === 'GET') {
             const [grants, badges, apps, sanctions, trades, tradeCounts] = await db().batch([
@@ -368,6 +370,8 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             ]);
             // A suspension that has ended reads as none.
             const user = withMember(target);
+            // 네이버 로그인: only whether a Naver account is linked, never its id.
+            user.naver = !!user.naver;
             if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
             return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results), tradeCounts: tradeCounts.results[0] });
         }
@@ -436,6 +440,8 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         if (p[3] === 'password' && !p[4] && method === 'POST') {
             if (target.role === 'manager') fail(400, '매니저 계정에는 임시 비밀번호를 발급하지 않습니다.');
             if (target.deleted_at) fail(400, WITHDRAWN);
+            // 네이버 로그인: a temporary password only helps a member who has not linked yet (기존 계정 연결).
+            if (target.naver) fail(409, '네이버 계정이 연결된 회원입니다.');
             const password = tempPassword(), salt = random();
             await db().batch([
                 db().prepare('UPDATE users SET password_hash=?,salt=? WHERE id=?').bind(await storedHash(password, salt), salt, target.id),

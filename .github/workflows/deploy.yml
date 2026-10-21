@@ -7,6 +7,10 @@ name: Deploy to Cloudflare
 #                                    (sosirusok / 우와오). Used only to create that account; the deploy
 #                                    fails while the account does not exist and this secret is missing.
 #   CLOUDFLARE_ACCOUNT_ID  optional  needed only when the token can see more than one account
+#   NAVER_CLIENT_ID        optional  네이버 로그인 Client ID and Client Secret from 네이버 개발자센터 (members sign in
+#   NAVER_CLIENT_SECRET    optional  with Naver only). Each is passed to the Worker as a secret of the same name only
+#                                    when it is set here; a missing one never removes or blanks the Worker's own
+#                                    value (e.g. one set directly on the Worker). Never printed.
 # Optional repository variables: WORKERS_SUBDOMAIN (wanted <name>.workers.dev), USE_R2 ("false" keeps photos in D1),
 # USE_KV ("false" keeps photos in D1 while R2 is off), CRON_LIMIT (the account's Cron Trigger limit: 5 on
 # Workers Free, the default; 250 on Workers Paid), PAGES_PROJECT (the Cloudflare Pages project of the public
@@ -385,6 +389,8 @@ jobs:
           MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
           MANAGER_PASSWORD_HASH: ${{ secrets.MANAGER_PASSWORD_HASH }}
           MANAGER_PASSWORD_SALT: ${{ secrets.MANAGER_PASSWORD_SALT }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           VAPID_MAKE: ${{ steps.vapid.outputs.make }}
         run: |
           set -euo pipefail
@@ -399,6 +405,9 @@ jobs:
           const pair = ["MANAGER_PASSWORD_HASH", "MANAGER_PASSWORD_SALT"].filter((n) => process.env[n]);
           if (pair.length === 1) throw new Error("MANAGER_PASSWORD_HASH와 MANAGER_PASSWORD_SALT는 함께 등록해야 합니다.");
           for (const n of pair) out[n] = process.env[n];
+          // 네이버 로그인: each value only when its GitHub secret is set. --secrets-file is additive, so a
+          // missing one leaves the Worker's existing secret as it is.
+          for (const n of ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"]) if (process.env[n]) out[n] = process.env[n];
           // Web push keys, only when the check step found none: a P-256 key pair, the private key as a JWK
           // and the public key as the base64url of its 65-byte point; the subject is the site's address.
           // A failure here only skips push for this deploy.

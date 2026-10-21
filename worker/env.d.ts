@@ -19,6 +19,20 @@ interface Env {
     VAPID_PRIVATE_KEY?: string;
     VAPID_PUBLIC_KEY?: string;
     VAPID_SUBJECT?: string;
+    // 네이버 로그인 (worker/naver.ts), Worker secrets that deploy.yml passes from the GitHub secrets of the
+    // same names when they are set. Without both, members cannot sign in and /api/auth/naver/start says so.
+    // NAVER_CLIENT_SECRET also keys the HMAC of the short-lived login cookies.
+    NAVER_CLIENT_ID?: string;
+    NAVER_CLIENT_SECRET?: string;
+    // Optional: the Callback URL registered at 네이버 개발자센터, when it is not <request origin>/api/auth/naver/callback.
+    NAVER_REDIRECT_URI?: string;
+    // Test only: with TEST_HOOKS=on, requests to 127.0.0.1 or localhost send the token call to NAVER_AUTH_BASE
+    // and the profile call to NAVER_API_BASE (tests/fixtures/naver-mock.mjs). Set by scripts/test-local.mjs only.
+    NAVER_AUTH_BASE?: string;
+    NAVER_API_BASE?: string;
+    // Test only: 'on' keeps the old ID/password sign-up and login for requests to 127.0.0.1 or localhost, so
+    // the API suites can make members without Naver. Set by scripts/test-local.mjs only; deploys never do.
+    LEGACY_AUTH_TEST?: string;
     // Test only: 'on' lets a request to 127.0.0.1 or localhost subscribe an http://127.0.0.1 endpoint (the
     // mock push service of tests/verify-push.mjs). Set by scripts/test-local.mjs only; deploys never do.
     PUSH_TEST?: string;

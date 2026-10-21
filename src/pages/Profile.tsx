@@ -268,9 +268,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                     <label className="switch"><input type="checkbox" role="switch" checked={user.follow_allowed !== false} disabled={followBusy} onChange={e => void setFollowAllowed(e.target.checked)} />{ALERT_TEXT.allow}</label>
                     {user.follower_count !== undefined && <span className="muted small">구독자 {user.follower_count}명</span>}
                 </div>
+                {/* Members sign in with Naver and have no password; the manager keeps one for /manager-login. */}
                 <div className="row">
-                    <button type="button" className="btn btn-line btn-sm" onClick={() => { setEditing(false); setAccount('password'); }}>비밀번호 변경</button>
-                    {user.role !== 'manager' && <button type="button" className="btn btn-text small" style={{ marginLeft: 'auto' }} onClick={() => { setEditing(false); setAccount('withdraw'); }}>회원 탈퇴</button>}
+                    {user.role === 'manager' ? <button type="button" className="btn btn-line btn-sm" onClick={() => { setEditing(false); setAccount('password'); }}>비밀번호 변경</button>
+                        : <button type="button" className="btn btn-text small" style={{ marginLeft: 'auto' }} onClick={() => { setEditing(false); setAccount('withdraw'); }}>회원 탈퇴</button>}
                 </div>
             </div>
         </Modal>
@@ -403,23 +404,26 @@ function PasswordModal({ open, onClose }: { open: boolean; onClose: () => void }
     </Modal>;
 }
 
-// The server signs the member out everywhere; `onDone` clears the app state and goes home.
+// The server signs the member out everywhere; `onDone` clears the app state and goes home. Members have no
+// password (네이버 로그인), so the member types '회원 탈퇴' to confirm.
+const WITHDRAW_CONFIRM = '회원 탈퇴';
 function WithdrawModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
-    const [password, setPassword] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
-    useEffect(() => { if (!open) { setPassword(''); setError(''); } }, [open]);
+    const [confirm, setConfirm] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+    useEffect(() => { if (!open) { setConfirm(''); setError(''); } }, [open]);
+    const ready = confirm.trim() === WITHDRAW_CONFIRM;
     async function submit(e: FormEvent) {
         e.preventDefault();
-        if (busy || !password) return;
+        if (busy || !ready) return;
         setBusy(true); setError('');
-        try { await api('auth/withdraw', 'POST', { password }); onDone(); }
+        try { await api('auth/withdraw', 'POST', { confirm: WITHDRAW_CONFIRM }); onDone(); }
         catch (err) { setError(errorText(err)); }
         finally { setBusy(false); }
     }
     return <Modal open={open} onClose={() => { if (!busy) onClose(); }} title="회원 탈퇴" description="작성한 글은 모두 숨겨지고 복구할 수 없습니다."
-        footer={<><button type="button" className="btn btn-line btn-lg" disabled={busy} onClick={onClose}>취소</button><button type="submit" form="withdraw-form" className="btn btn-danger-solid btn-lg" disabled={busy || !password}>탈퇴</button></>}>
+        footer={<><button type="button" className="btn btn-line btn-lg" disabled={busy} onClick={onClose}>취소</button><button type="submit" form="withdraw-form" className="btn btn-danger-solid btn-lg" disabled={busy || !ready}>탈퇴</button></>}>
         <form id="withdraw-form" className="form-stack" onSubmit={submit}>
-            <label className="field"><span className="field-label">비밀번호</span>
-                <input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} maxLength={128} required autoFocus /></label>
+            <label className="field"><span className="field-label">확인 문구</span>
+                <input className="input" autoComplete="off" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder={WITHDRAW_CONFIRM} maxLength={20} required autoFocus /></label>
             {error && <p className="field-error" role="alert">{error}</p>}
         </form>
     </Modal>;

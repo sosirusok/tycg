@@ -175,8 +175,22 @@
 /* Auth dialog */
 .form-stack { display: grid; gap: 16px; }
 .auth-switch { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 20px; margin-top: 18px; color: var(--ink-3); font-size: var(--fs-14); }
-/* 비밀번호 찾기 (WP59): the answer after '요청'. */
-.reset-done { padding: 8px 0 4px; color: var(--ink); font-size: var(--fs-16); font-weight: 600; text-align: center; }
+/* 네이버 로그인: the official green button with the white N, the one exception to the single brand colour. */
+.btn-naver { gap: 10px; background: #03C75A; color: #fff; text-decoration: none; }
+.btn-naver:hover:not(:disabled) { background: #02B350; box-shadow: 0 0 0 3px var(--line); }
+.btn-naver:disabled { opacity: 1; background: var(--line); color: var(--ink-4); }
+.btn-naver:disabled .naver-mark path { fill: var(--ink-4); }
+.auth-note { margin: 0; color: var(--ink-3); font-size: var(--fs-14); text-align: center; }
+/* 가입 마무리 (/naver) and the manager's hidden /manager-login. */
+.naver-page { display: grid; justify-items: center; }
+.naver-card { width: 100%; max-width: 440px; }
+.naver-title { margin: 0 0 20px; font-size: var(--fs-22); font-weight: 700; color: var(--ink); }
+.naver-message { margin: 0 0 20px; color: var(--ink-2); font-size: var(--fs-15); }
+.naver-desc { margin: 0; color: var(--ink-3); font-size: var(--fs-14); }
+.naver-trial { margin: 0; padding: 10px 14px; border-radius: var(--r-8); background: var(--fill); color: var(--brand); font-size: var(--fs-14); font-weight: 700; }
+.naver-rules { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-8); background: var(--fill-2); }
+.naver-rules .rules { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--ink-3); font-size: var(--fs-13); }
+@media (max-width: 640px) { .naver-page { padding-top: 16px; } .naver-card { padding: 20px 16px; } }
 .auth-switch button { color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
 /* 인증/등급 신청 dialog */
