@@ -180,10 +180,12 @@ try {
     const moverConfig = path.join(path.dirname(config), 'wrangler.mover.json');
     await writeFile(moverConfig, JSON.stringify({ ...withR2, kv_namespaces: kvNamespaces }));
     // 네이버 로그인 (verify-naver): the mock's origin for the token and profile calls (TEST_HOOKS=on, local
-    // requests only), test client values, and no LEGACY_AUTH_TEST; then once more without the client values.
+    // requests only), test client values, a test MANAGER_PHONE (the Naver account with it signs in as the manager)
+    // and no LEGACY_AUTH_TEST; then once more without the client values.
     const naverPhases = pick(['tests/verify-naver.mjs']).length;
     if (naverPhases) naverMock = await startNaverMock(0, { clientId: 'test-client', clientSecret: 'test-secret' });
-    const naverVars = naverMock ? ['--var', 'NAVER_CLIENT_ID:test-client', '--var', 'NAVER_CLIENT_SECRET:test-secret', '--var', 'NAVER_AUTH_BASE:' + naverMock.origin, '--var', 'NAVER_API_BASE:' + naverMock.origin] : [];
+    const managerPhone = '01099990001';
+    const naverVars = naverMock ? ['--var', 'NAVER_CLIENT_ID:test-client', '--var', 'NAVER_CLIENT_SECRET:test-secret', '--var', 'NAVER_AUTH_BASE:' + naverMock.origin, '--var', 'NAVER_API_BASE:' + naverMock.origin, '--var', 'MANAGER_PHONE:' + managerPhone] : [];
     const phases = [
         { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: legacyAuth, phase: 'main' },
         { suite: 'tests/verify-kv.mjs', config: kvConfig, vars: ['--var', 'KV_TEST_FAIL:on', ...legacyAuth], phase: 'fail' },
@@ -195,7 +197,7 @@ try {
         const kvServer = child([wrangler, 'dev', '--config', p.config, '--local', '--persist-to', '.wrangler/state', '--ip', '127.0.0.1', '--port', String(PORT + 1), '--inspector-port', '0', '--test-scheduled',
             '--var', 'MANAGER_PASSWORD:' + (process.env.TEST_MANAGER_PASSWORD || 'local-manager-password'), '--var', 'TEST_HOOKS:on', ...p.vars], { stdio: ['ignore', 'pipe', 'pipe'] });
         await waitFor(strictBase, kvServer);
-        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_PHASE: p.phase, NAVER_MOCK_ORIGIN: naverMock?.origin || '', TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
+        await completed(child([p.suite], { stdio: 'inherit', env: { ...env, TEST_BASE_URL: strictBase, TEST_PHASE: p.phase, NAVER_MOCK_ORIGIN: naverMock?.origin || '', TEST_MANAGER_PHONE: managerPhone, TEST_MANAGER_PASSWORD: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' } }), 180000);
         const kvExited = kvServer.exitCode === null ? once(kvServer, 'exit') : null;
         stop(kvServer);
         await kvExited;

@@ -8,6 +8,7 @@ import { manageMembers } from './membership';
 import { clearBlockedCache } from './unfurl';
 import { BLOCKED_DOMAINS_MAX, parseBlockedDomains } from '../shared/links';
 import { deleteReview, deleteTrade } from './reviews';
+import { manageInfo, manageInfoGrant } from './info';
 import { storageMode, counterValue, DB_LIMIT_BYTES, DB_PHOTO_STOP, KV_SITE_BYTES, D1_SITE_BYTES, R2_SITE_BYTES, R2_SITE_DAILY_UPLOADS, R2_WARN_BYTES } from './storage';
 
 // 신고 (WP60): the waiting reports (at most PENDING_MAX, the most pressing first) and the last DECIDED_MAX
@@ -140,6 +141,9 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         return json({ ok: true });
     }
     // 사용량 (WP45): the database size and the photo stores, for the Manage card.
+    // 회원 정보 (worker/info.ts): every member's 네이버 회원 정보, and the 관리자 열람 권한.
+    if (p[1] === 'info' && !p[2] && method === 'GET') return manageInfo(req, url);
+    if (p[1] === 'info-grants' && p[2] && !p[3] && method === 'PUT') return manageInfoGrant(req, p[2]);
     if (p[1] === 'storage' && !p[2] && method === 'GET') return json(await storageReport());
     // The R2 stop the manager can move (settings 'sys:r2_site_bytes'), in whole GB.
     if (p[1] === 'storage' && !p[2] && method === 'PUT') {

@@ -1,20 +1,27 @@
 import { env } from 'cloudflare:workers';
 import {
     db, fail, ApiError, body, limit, digest, random, hex, safeEqual, nicknameField, nicknameKey, assertNicknameFree, currentUser,
-    initManager, trialWindow, trialOpen,
+    initManager, trialWindow, trialOpen, MANAGER_ID,
 } from './http';
 import { countFetch, localRequest } from './meter';
+import { sealPii, type Pii } from './pii';
+import { kstYear } from '../shared/membership';
 
 // 네이버 로그인 (OAuth 2.0). Members sign in with their Naver account only; the site keeps the Naver
-// per-app user id (users.naver_id), never the Naver access token. Only response.id of the profile is read:
-// the member types a separate site 닉네임 on 가입 마무리, and that is all the site ever shows. naver_id is an
-// internal key: no API response carries it (the manager's member panel shows only whether one is linked).
-// 휴대전화번호: when Naver sends response.mobile (제공 정보 '휴대전화번호'), only its keyed hash is kept
-// (users.phone_hash), and a new Naver account whose number an active member already has cannot sign up.
+// per-app user id (users.naver_id), never the Naver access token. The member types a separate site 닉네임 on
+// 가입 마무리, and that is all other members ever see. naver_id is an internal key: no API response carries it
+// (the manager's member panel shows only whether one is linked).
+// 제공 정보 (all 필수): response.name, email, birthyear and mobile are kept encrypted in users.pii (worker/pii.ts),
+// written at sign-up and 기존 계정 연결 and refreshed at every Naver login; only worker/info.ts shows them (the
+// member, the manager, a 관리자 the manager allowed). The mobile number also keeps its keyed hash
+// (users.phone_hash): a new Naver account whose number an active member already has cannot sign up. A new Naver
+// account whose 출생연도 says under 14 (KST year minus birth year) cannot either. MANAGER_PHONE: the Naver
+// account with that number signs in as the manager account.
 //
 //   GET  auth/naver/start?next=/path[&link=1]  302 to nid.naver.com with a fresh state in a short-lived cookie
 //   GET  auth/naver/callback?code&state        state check, token exchange, profile read, then one of:
 //        a linked member: signed in, 302 to next; the manager's link=1: naver_id set, 302 to next;
+//        MANAGER_PHONE's number: signed in as the manager (naver_id moved to it), 302 to next;
 //        a new Naver account: the signed pending cookie, 302 to /naver (가입 마무리)
 //   GET  auth/naver/pending                    whether the 가입 마무리 screen has a pending Naver sign-in
 //   POST auth/naver/finish {nickname, agree, age14}  creates the member (no password), 플러스 체험 as sign-up did
@@ -31,6 +38,8 @@ const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네
 export const PHONE_TAKEN = '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.';
 export const AGE_REQUIRED = '만 14세 이상만 가입할 수 있습니다.';
 export const AGE_LINK_REQUIRED = '만 14세 이상만 이용할 수 있습니다.';
+// Under 14 by the Naver 출생연도 (/naver?error=age).
+const UNDER_14 = 14;
 
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
@@ -121,7 +130,8 @@ function redirect(to: string, cookies: string[] = []) {
 }
 
 type StateCookie = { p: 'state'; e: number; s: string; n: string; m: 'login' | 'link'; u?: string };
-export type PendingCookie = { p: 'pending'; e: number; id: string; n: string; h?: string };
+// h: the phone hash; x: the encrypted 회원 정보 (sealPii), so the cookie never holds a plain value.
+export type PendingCookie = { p: 'pending'; e: number; id: string; n: string; h?: string; x?: string };
 
 async function start(req: Request, url: URL) {
     if (!naverReady()) return redirect('/naver?error=config');
@@ -140,8 +150,15 @@ async function start(req: Request, url: URL) {
     return redirect(`${bases(req).auth}/oauth2.0/authorize?${q}`, [cookie(req, STATE_COOKIE, value, STATE_MS)]);
 }
 
+// The Naver profile fields, checked; anything else is none. None of them is ever logged.
+const plainText = (v: unknown, max: number) => typeof v === 'string' && v.trim() && v.trim().length <= max && !/[\u0000-\u001f\u007f]/.test(v) ? v.trim() : null;
+const emailText = (v: unknown) => typeof v === 'string' && v.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : null;
+const yearText = (v: unknown) => typeof v === 'string' && /^\d{4}$/.test(v) && Number(v) >= 1900 && Number(v) <= kstYear(Date.now()) ? v : null;
+
+type Profile = { id: string; digits: string | null; phone: string | null; birthyear: string | null; pii: string | null };
+
 // The token exchange and the profile read. The access token lives only in this function.
-async function naverProfile(req: Request, code: string, state: string) {
+async function naverProfile(req: Request, code: string, state: string): Promise<Profile> {
     const { auth, api } = bases(req), v = vars();
     countFetch(2);
     const tokenRes = await fetch(`${auth}/oauth2.0/token`, {
@@ -152,14 +169,18 @@ async function naverProfile(req: Request, code: string, state: string) {
     const token = await tokenRes.json().catch(() => null) as { access_token?: unknown } | null;
     if (!tokenRes.ok || typeof token?.access_token !== 'string' || !token.access_token) throw new Error('token');
     const meRes = await fetch(`${api}/v1/nid/me`, { headers: { Authorization: 'Bearer ' + token.access_token }, signal: AbortSignal.timeout(8000) });
-    // Only response.id and response.mobile are read: the Naver name, email, nickname and photo are never
-    // kept or shown, and the mobile number only as its hash.
-    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown; mobile?: unknown } } | null;
-    const id = me?.response?.id;
-    if (!meRes.ok || me?.resultcode !== '00' || typeof id !== 'string' || !id || id.length > 128) throw new Error('profile');
-    const digits = phoneDigits(me.response?.mobile);
-    return { id, phone: digits ? await phoneHash(req, digits) : null };
+    // response.id, name, email, birthyear and mobile are read (the 제공 정보 the site asks for); the Naver nickname,
+    // photo, gender and birthday never are.
+    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown; name?: unknown; email?: unknown; birthyear?: unknown; mobile?: unknown } } | null;
+    const id = me?.response?.id, r = me?.response;
+    if (!meRes.ok || me?.resultcode !== '00' || typeof id !== 'string' || !id || id.length > 128 || !r) throw new Error('profile');
+    const digits = phoneDigits(r.mobile), birthyear = yearText(r.birthyear);
+    const pii: Pii = { name: plainText(r.name, 50), email: emailText(r.email), birthyear, phone: digits };
+    return { id, digits, phone: digits ? await phoneHash(req, digits) : null, birthyear, pii: await sealPii(req, pii) };
 }
+
+// MANAGER_PHONE (a Worker secret), as digits; none when unset or not a mobile number.
+const managerPhone = () => phoneDigits(vars().MANAGER_PHONE);
 
 async function callback(req: Request, url: URL, signIn: (id: string) => Promise<string>) {
     const clear = cookie(req, STATE_COOKIE, '', 0);
@@ -175,7 +196,7 @@ async function callback(req: Request, url: URL, signIn: (id: string) => Promise<
     if (url.searchParams.get('error') || !code) return back('denied');
     try { await limit('naver-ip:' + await digest(req.headers.get('cf-connecting-ip') || 'local'), 40, 600000); }
     catch (e) { if (e instanceof ApiError && e.status === 429) return back('busy'); throw e; }
-    let profile: { id: string; phone: string | null };
+    let profile: Profile;
     try { profile = await naverProfile(req, code, state); }
     catch (e) {
         console.warn('Naver login failed', e instanceof Error ? e.message : 'unknown');
@@ -185,19 +206,34 @@ async function callback(req: Request, url: URL, signIn: (id: string) => Promise<
     if (st.m === 'link') {
         const me = await currentUser(req, false);
         if (!me || me.id !== st.u || me.role !== 'manager') return back('state');
-        try { await db().prepare('UPDATE users SET naver_id=?,naver_linked_at=? WHERE id=?').bind(profile.id, now, me.id).run(); }
+        try { await db().prepare('UPDATE users SET naver_id=?,naver_linked_at=?,phone_hash=COALESCE(?,phone_hash),pii=COALESCE(?,pii) WHERE id=?').bind(profile.id, now, profile.phone, profile.pii, me.id).run(); }
         catch (e) { if (String(e).includes('UNIQUE')) return back('taken'); throw e; }
         return redirect(st.n, [clear]);
     }
+    // MANAGER_PHONE: the Naver account with the manager's number is the manager. Its Naver id moves to the
+    // manager row (taken off any other row first, in the same batch, so the unique index holds), with the
+    // number's hash and the 회원 정보. /manager-login stays as the backup.
+    const managerNumber = managerPhone();
+    if (profile.digits && managerNumber && profile.digits === managerNumber && await initManager()) {
+        await db().batch([
+            db().prepare('UPDATE users SET naver_id=NULL,naver_linked_at=NULL WHERE naver_id=? AND id!=?').bind(profile.id, MANAGER_ID),
+            db().prepare('UPDATE users SET naver_linked_at=CASE WHEN naver_id IS ? THEN naver_linked_at ELSE ? END,naver_id=?,phone_hash=COALESCE(?,phone_hash),pii=COALESCE(?,pii) WHERE id=?')
+                .bind(profile.id, now, profile.id, profile.phone, profile.pii, MANAGER_ID),
+        ]);
+        return redirect(st.n, [clear, await signIn(MANAGER_ID)]);
+    }
     const found = await db().prepare('SELECT id,phone_hash FROM users WHERE naver_id=? AND deleted_at IS NULL').bind(profile.id).first<{ id: string; phone_hash: string | null }>();
     if (found) {
-        // A member who joined before the number was asked for gets it now, so a second account is refused later.
-        if (profile.phone && found.phone_hash !== profile.phone) await db().prepare('UPDATE users SET phone_hash=? WHERE id=?').bind(profile.phone, found.id).run();
+        // A member who joined before the number was asked for gets it now, so a second account is refused later;
+        // the 회원 정보 is written again from this login.
+        if ((profile.phone && found.phone_hash !== profile.phone) || profile.pii) await db().prepare('UPDATE users SET phone_hash=COALESCE(?,phone_hash),pii=COALESCE(?,pii) WHERE id=?').bind(profile.phone, profile.pii, found.id).run();
         return redirect(st.n, [clear, await signIn(found.id)]);
     }
+    // 만 14세 미만은 가입할 수 없습니다: a new Naver account whose 출생연도 is less than 14 years before this KST year.
+    if (profile.birthyear && kstYear(now) - Number(profile.birthyear) < UNDER_14) return back('age');
     // 같은 휴대전화번호: another Naver account of a number an active member has cannot start a sign-up.
     if (profile.phone && await phoneInUse(profile.phone)) return back('phone');
-    const pending = await seal({ p: 'pending', e: now + PENDING_MS, id: profile.id, n: st.n, ...profile.phone ? { h: profile.phone } : {} });
+    const pending = await seal({ p: 'pending', e: now + PENDING_MS, id: profile.id, n: st.n, ...profile.phone ? { h: profile.phone } : {}, ...profile.pii ? { x: profile.pii } : {} });
     return redirect('/naver', [clear, cookie(req, PENDING_COOKIE, pending, PENDING_MS)]);
 }
 
@@ -235,8 +271,8 @@ async function finish(req: Request, signUpTrial: (id: string, ip: string, at: nu
             // The key, the number and the Naver id are checked again inside the insert, so two sign-ups at once
             // cannot both pass.
             const h = pending.h ?? null;
-            const r = await db().prepare("INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at,naver_id,naver_linked_at,phone_hash) SELECT ?,?,?,?,'','','member','',?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?) AND NOT EXISTS(SELECT 1 FROM users WHERE phone_hash=? AND deleted_at IS NULL)")
-                .bind(id, username, nickname, key, createdAt, pending.id, createdAt, h, key, h).run();
+            const r = await db().prepare("INSERT INTO users (id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at,naver_id,naver_linked_at,phone_hash,pii) SELECT ?,?,?,?,'','','member','',?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE nickname_key=?) AND NOT EXISTS(SELECT 1 FROM users WHERE phone_hash=? AND deleted_at IS NULL)")
+                .bind(id, username, nickname, key, createdAt, pending.id, createdAt, h, pending.x ?? null, key, h).run();
             if (!r.meta.changes) fail(409, h && await phoneInUse(h) ? PHONE_TAKEN : '비슷한 닉네임이 이미 있습니다.');
             break;
         } catch (e) {
@@ -275,8 +311,8 @@ async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Pr
     try {
         // The number is checked again here, as in finish: another sign-in may have taken it since the callback.
         const h = pending.h ?? null;
-        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='',phone_hash=COALESCE(?,phone_hash) WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager' AND NOT EXISTS(SELECT 1 FROM users o WHERE o.phone_hash=? AND o.deleted_at IS NULL AND o.id!=?)")
-            .bind(pending.id, Date.now(), h, found.id, h, found.id).run();
+        const r = await db().prepare("UPDATE users SET naver_id=?,naver_linked_at=?,password_hash='',salt='',phone_hash=COALESCE(?,phone_hash),pii=COALESCE(?,pii) WHERE id=? AND naver_id IS NULL AND deleted_at IS NULL AND role!='manager' AND NOT EXISTS(SELECT 1 FROM users o WHERE o.phone_hash=? AND o.deleted_at IS NULL AND o.id!=?)")
+            .bind(pending.id, Date.now(), h, pending.x ?? null, found.id, h, found.id).run();
         if (!r.meta.changes) fail(409, h && await phoneInUse(h) ? PHONE_TAKEN : '이미 네이버 계정이 연결된 아이디입니다.');
     } catch (e) {
         if (String(e).includes('UNIQUE')) fail(409, '이미 다른 아이디에 연결된 네이버 계정입니다.');

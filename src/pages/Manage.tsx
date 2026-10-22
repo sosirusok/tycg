@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { CLAN_MIN_SEASON, REPORT_REASONS, dateText, relativeTime, type Post, type User } from '../../shared/market';
-import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, REPORT_TEXT, applicationTitle, kstDateTime, type Application, type Earn } from '../../shared/membership';
+import { APPLICATION_STATUS_NAMES, EARN_DEFAULTS, EARN_MAX, EARN_TEXT, INFO_FIELDS, INFO_LABELS, REPORT_TEXT, applicationTitle, kstDateTime, type Application, type Earn, type InfoField } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { useApp } from '../app/state';
@@ -10,8 +10,9 @@ import { EmptyState, Modal, NameLine, SkeletonRows, Tabs } from '../components/u
 import { MemberPanel, TempPassword, oldId } from '../components/MemberPanel';
 import { PostCard } from '../components/PostCard';
 import { RichBody } from '../components/RichBody';
+import { InfoList } from '../components/InfoList';
 
-type TabId = 'applications' | 'members' | 'resets' | 'reports' | 'hidden' | 'notices' | 'settings';
+type TabId = 'applications' | 'members' | 'info' | 'resets' | 'reports' | 'hidden' | 'notices' | 'settings';
 type App = Application & { nickname: string; username: string; grade: string; grade_trial?: boolean; badges: string[] };
 type Report = { id: number; post_id: number | null; title: string | null;
     // A deleted post's photos (JSON upload ids), kept 30 days for the manager (WP45).
@@ -28,7 +29,7 @@ type Notice = { id: number; title: string; body: string; created_at: number };
 
 export default function Manage({ tab: raw }: { tab?: string }) {
     const { me, ready } = useApp();
-    const tab = (['applications', 'members', 'resets', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
+    const tab = (['applications', 'members', 'info', 'resets', 'reports', 'hidden', 'notices', 'settings'].includes(raw || '') ? raw : 'applications') as TabId;
     const [summary, setSummary] = useState<{ reports: Report[]; pendingReports?: number; hidden: Post[]; pendingApplications: number; pendingResets?: number; usage?: { relistsYesterday: number; autoYesterday?: { done: number; delayed: number } | null } } | null>(null);
     const loadSummary = useCallback(() => api<any>('manage').then(setSummary).catch(() => {}), []);
     useEffect(() => { if (me?.role === 'manager') void loadSummary(); }, [me?.role, loadSummary, tab]);
@@ -39,7 +40,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
         <h1 className="page-title">매니저 메뉴</h1>
         <div className="panel panel-tabs"><Tabs label="관리 메뉴" value={tab} onChange={t => void navigate('/manage/' + t, { replace: true })} items={[
             { id: 'applications', label: <>인증/등급 신청{summary?.pendingApplications ? <b>{summary.pendingApplications}</b> : null}</> },
-            { id: 'members', label: '회원' },
+            { id: 'members', label: '회원' }, { id: 'info', label: '회원 정보' },
             { id: 'resets', label: <>비밀번호 재설정{summary?.pendingResets ? <b>{summary.pendingResets}</b> : null}</> },
             { id: 'reports', label: <>신고{pendingReports ? <b>{pendingReports}</b> : null}</> },
             { id: 'hidden', label: '숨긴 글' }, { id: 'notices', label: '공지' }, { id: 'settings', label: '설정' },
@@ -47,6 +48,7 @@ export default function Manage({ tab: raw }: { tab?: string }) {
         <div className="panel panel-body">
             {tab === 'applications' ? <Applications onChange={loadSummary} />
                 : tab === 'members' ? <Members />
+                : tab === 'info' ? <InfoTab />
                 : tab === 'resets' ? <Resets onChange={loadSummary} />
                 : tab === 'reports' ? <Reports reports={summary?.reports} pendingCount={pendingReports} onChange={loadSummary} />
                 : tab === 'hidden' ? (summary ? summary.hidden.length ? <div className="post-list">{summary.hidden.map(p => <PostCard key={p.id} post={p} />)}</div> : <EmptyState title="숨긴 글이 없습니다" /> : <SkeletonRows />)
@@ -138,6 +140,38 @@ function Members() {
             <button type="button" className="btn btn-line btn-xs" onClick={() => setMember(u.id)}>관리</button>
         </li>)}</ul> : <EmptyState icon="search" title="검색 결과가 없습니다" />}</div>
         <Modal open={!!member} onClose={() => setMember(null)} title="회원 관리">{member && <MemberPanel userId={member} onChange={() => void load()} />}</Modal>
+    </>;
+}
+
+// 회원 정보 (worker/info.ts): every member's 네이버 회원 정보, and '관리자 열람 권한': for each 관리자-grade member, the
+// fields their /member-info page shows (none checked: no page).
+type InfoAdmin = { id: string; nickname: string; fields: InfoField[] };
+function InfoTab() {
+    const [admins, setAdmins] = useState<InfoAdmin[] | null>(null), [busy, setBusy] = useState('');
+    async function toggle(a: InfoAdmin, field: InfoField, on: boolean) {
+        if (busy) return;
+        const fields = INFO_FIELDS.filter(f => f === field ? on : a.fields.includes(f));
+        setBusy(a.id);
+        try {
+            const d = await api<{ fields: InfoField[] }>('manage/info-grants/' + a.id, 'PUT', { fields });
+            setAdmins(list => list?.map(x => x.id === a.id ? { ...x, fields: d.fields } : x) ?? null);
+            toast('열람 권한 변경 완료');
+        } catch (e) { toast.error(errorText(e)); }
+        finally { setBusy(''); }
+    }
+    return <>
+        <p className="muted small">네이버에서 받은 정보입니다. 본인, 매니저, 매니저가 지정한 관리자(지정한 항목만)만 볼 수 있습니다.</p>
+        <section className="mt-16">
+            <h2 className="section-title">관리자 열람 권한</h2>
+            {admins === null ? <SkeletonRows count={1} height={48} /> : admins.length ? <ul className="simple-list info-grants">{admins.map(a => <li key={a.id}>
+                <strong>{a.nickname}</strong>
+                <span className="chip-row">{INFO_FIELDS.map(f => <label key={f} className="check"><input type="checkbox" checked={a.fields.includes(f)} disabled={!!busy} onChange={e => void toggle(a, f, e.target.checked)} />{INFO_LABELS[f]}</label>)}</span>
+            </li>)}</ul> : <p className="muted small mt-8">관리자 등급 회원이 없습니다.</p>}
+        </section>
+        <section className="mt-24">
+            <h2 className="section-title">회원 목록</h2>
+            <div className="mt-12"><InfoList endpoint="manage/info" fields={INFO_FIELDS} onPage={d => { if (d.admins) setAdmins(d.admins); }} /></div>
+        </section>
     </>;
 }
 

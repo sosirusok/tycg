@@ -23,6 +23,7 @@ import { followAllowedHandler, followHandler, followsList } from './alerts';
 import { commentsHandler, myComments, postCommentsHandler } from './comments';
 import { pushHandler, withPushes } from './push';
 import { naverHandler, NAVER_MOVED } from './naver';
+import { infoFieldsOf, meInfo, memberInfo } from './info';
 import { env } from 'cloudflare:workers';
 
 async function discardUnreadBody(req: Request) {
@@ -66,10 +67,10 @@ async function changePassword(req: Request, legacy: boolean) {
     if (typeof b.next !== 'string' || b.next.length < 8 || b.next.length > 128 || b.next === b.current) fail(400, '새 비밀번호는 8~128자, 현재와 다르게 입력해 주세요.');
     const salt = random();
     // Every other device is signed out; this one keeps its session. The Naver link goes too, so a leaked
-    // password that was used to link someone else's Naver account stops working (its phone hash goes with it);
-    // the manager links again in 설정.
+    // password that was used to link someone else's Naver account stops working (its phone hash and 회원 정보 go
+    // with it); the manager links again in 설정 (or signs in with the MANAGER_PHONE Naver account).
     await db().batch([
-        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
+        db().prepare('UPDATE users SET password_hash=?,salt=?,naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,pii=NULL WHERE id=?').bind(await storedHash(b.next, salt), salt, u.id),
         db().prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').bind(u.id, await digest(tokenOf(req))),
     ]);
     return json({ ok: true });
@@ -79,8 +80,8 @@ async function changePassword(req: Request, legacy: boolean) {
 // whose post is not 거래완료 yet (a finished deal keeps its accepted offer). Bind the member's id twice.
 const WITHDRAW_ENDS_OFFERS = "(sender_id=? OR post_id IN (SELECT id FROM posts WHERE author_id=?)) AND (status='pending' OR (status='accepted' AND EXISTS(SELECT 1 FROM posts p WHERE p.id=offers.post_id AND p.status!='closed')))";
 // 회원 탈퇴 keeps the row, so chats, offers and reports keep their links, but frees the id, the
-// nickname, the Naver link and the phone hash (that Naver account and number may sign up again), removes the password, bio and
-// saved data, hides every post and ends open offers and applications. Grade and badge rows stay as
+// nickname, the Naver link and the phone hash (that Naver account and number may sign up again), removes the 회원 정보
+// (users.pii) and any 관리자 열람 권한, the password, bio and saved data, hides every post and ends open offers and applications. Grade and badge rows stay as
 // the manager's record of each grant; memberColumns shows none of them for a withdrawn member, and only
 // the manager ever writes them.
 // Each chat with an ended offer gets one line from the post author, as endOffersStatements does;
@@ -102,9 +103,9 @@ async function withdraw(req: Request) {
         db().prepare("UPDATE automation SET templates='[]',first_on=0,first_text='',away_on=0,away_text='' WHERE user_id=?").bind(u.id),
         db().prepare("UPDATE provider_profiles SET intro='',active=0 WHERE user_id=?").bind(u.id),
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
-        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
+        db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,pii=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
         // 웹 푸시 (WP64): no device gets the member's pushes any more.
-        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
+        ...['sessions', 'favorites', 'history', 'saved_searches', 'drafts', 'follows', 'push_subscriptions', 'push_queue', 'pii_grants'].map(table => db().prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(u.id)),
         line('회원 탈퇴로 제시가 마감되었습니다.', WITHDRAW_ENDS_OFFERS, [u.id, u.id]),
         db().prepare(`UPDATE conversations SET updated_at=? WHERE id IN (SELECT conversation_id FROM offers WHERE ${WITHDRAW_ENDS_OFFERS})`).bind(now, u.id, u.id),
         db().prepare("UPDATE posts SET hidden=1,hidden_reason='탈퇴' WHERE author_id=?").bind(u.id),
@@ -271,7 +272,9 @@ async function authHandler(req: Request, p: string[], url: URL) {
     const method = req.method;
     if (p[1] === 'me' && method === 'GET') {
         const user = await currentUser(req);
-        return json({ user, trial: user ? await trialState(user) : null, ...user?.role === 'manager' ? { naver: await naverLinked(user.id) } : {} });
+        // infoFields: a 관리자 the manager allowed to see 회원 정보 (member-info) gets the field keys, never values.
+        const infoFields = await infoFieldsOf(user);
+        return json({ user, trial: user ? await trialState(user) : null, ...user?.role === 'manager' ? { naver: await naverLinked(user.id) } : {}, ...infoFields.length ? { infoFields } : {} });
     }
     // 네이버 로그인 (worker/naver.ts).
     if (p[1] === 'naver') { const r = await naverHandler(req, p, url, naverDeps); if (r) return r; fail(404, '페이지를 찾을 수 없습니다.'); }
@@ -443,6 +446,8 @@ async function route(req: Request): Promise<Response> {
             case 'chats': { const r = await chatHandler(req, p, url); if (r) return r; break; }
             case 'config': case 'applications': { const r = await membershipHandler(req, p); if (r) return r; break; }
             case 'manage': { const r = await manageHandler(req, p, url); if (r) return r; break; }
+            // 회원 정보 for a 관리자 the manager allowed (worker/info.ts); manage/* stays manager-only.
+            case 'member-info': if (method === 'GET' && !p[1]) return await memberInfo(req, url); break;
             case 'me': {
                 if (p[1] === 'usage' && method === 'GET') return await usageHandler(req);
                 // 판매 통계 (WP63): me/stats?post=<id>.
@@ -457,6 +462,8 @@ async function route(req: Request): Promise<Response> {
                 if (p[1] === 'avatar' && !p[2]) return await avatarHandler(req);
                 // 등급 축하 창 (WP66): the member saw (or skipped) the window for the current public grade.
                 if (p[1] === 'celebrated' && !p[2] && method === 'POST') return await celebrated(req);
+                // 네이버 회원 정보: the member's own (worker/info.ts).
+                if (p[1] === 'info' && !p[2] && method === 'GET') return await meInfo(req);
                 const r = await trialMeHandler(req, p);
                 if (r) return r;
                 break;

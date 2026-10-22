@@ -6,8 +6,10 @@
 //                          code 'ok:<naver id>' gives a fresh access token for that id; any other code an error.
 //                          'ok:<naver id>|<mobile>' sets the mobile number ('-': none); otherwise it is made
 //                          from the id (mockMobile), so different ids have different numbers.
-//   GET  /v1/nid/me        Bearer <token>: {resultcode:'00', response:{id, mobile, nickname, name, email, profile_image}}.
-//                          The extra fields are there so tests can check the Worker never keeps or shows them.
+//                          'ok:<naver id>|<mobile>|<birthyear>' sets the 출생연도 too ('-': none; default MOCK_BIRTHYEAR).
+//   GET  /v1/nid/me        Bearer <token>: {resultcode:'00', response:{id, mobile, birthyear, nickname, name, email, profile_image}}.
+//                          name, email, birthyear and mobile are the 제공 정보 the Worker keeps (encrypted); nickname
+//                          and profile_image are there so tests can check it never keeps or shows them.
 //   GET  /oauth2.0/authorize  for screen checks in a browser: straight back to redirect_uri with
 //                          code 'ok:<random id>' and the same state (verify-naver calls the callback itself).
 //   GET  /__log            every call so far (the form fields without the secret, and the tokens handed out).
@@ -18,6 +20,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const MOCK_PROFILE = { nickname: '네이버별명목', name: '홍길동목업', email: 'mock-user@naver.example', profile_image: 'https://phinf.example/mock.png' };
+export const MOCK_BIRTHYEAR = '1990';
 
 // The default mobile number of a mock Naver id: 010-XXXX-XXXX from a hash of the id.
 export function mockMobile(id) {
@@ -59,9 +62,10 @@ export function startNaverMock(port = 0, { clientId = 'test-client', clientSecre
             log.push({ path: url.pathname, token });
             const entry = tokens.get(token);
             if (!entry) return send(401, { resultcode: '024', message: 'Authentication failed' });
-            const [id, phone] = entry.split('|');
+            const [id, phone, year] = entry.split('|');
             const mobile = phone === undefined ? mockMobile(id) : phone === '-' ? undefined : phone;
-            return send(200, { resultcode: '00', message: 'success', response: { id, ...mobile ? { mobile } : {}, ...MOCK_PROFILE } });
+            const birthyear = year === undefined ? MOCK_BIRTHYEAR : year === '-' ? undefined : year;
+            return send(200, { resultcode: '00', message: 'success', response: { id, ...mobile ? { mobile } : {}, ...birthyear ? { birthyear } : {}, ...MOCK_PROFILE } });
         }
         send(404, { error: 'not found' });
     });
