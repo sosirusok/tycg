@@ -519,8 +519,9 @@ function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number;
 const slotsOf = (perks: Perks) => perks.autoBumpPosts;
 
 // A grant or the trial: the member's automation row (on, due now, 새 글 자동 포함 for 엘리트 and above)
-// and their most recently bumped open posts up to the grade's count. Written only when `guard` holds
-// (the grant row was written at this time). force: a manager grant turns 자동 끌올 on again.
+// and their most recently bumped open posts up to the grade's count, never a post of a retired kind (대리,
+// listedKind). Written only when `guard` holds (the grant row was written at this time). force: a manager
+// grant turns 자동 끌올 on again.
 // 자동 매칭 (WP58) is on from a 프리미엄 or higher grant too (match_on), and a manager grant turns it on again.
 export function enrolStatements(userId: string, grade: GradeId, now: number, guard: string, guardArgs: unknown[], force: boolean) {
     const perks = PERKS[grade], slots = slotsOf(perks), elite = gradeInfo(grade).rank >= 3 ? 1 : 0, match = perks.matchPosts ? 1 : 0;
@@ -529,7 +530,7 @@ export function enrolStatements(userId: string, grade: GradeId, now: number, gua
         db().prepare(`INSERT INTO automation(user_id,bump_on,bump_new,bump_next_at,match_on,updated_at) SELECT ?,1,?,?,?,? WHERE ${guard}
             ON CONFLICT(user_id) DO UPDATE SET ${force ? 'bump_on=1,' : ''}${force && match ? 'match_on=1,' : ''}bump_new=MAX(automation.bump_new,excluded.bump_new),bump_next_at=MIN(COALESCE(automation.bump_next_at,excluded.bump_next_at),excluded.bump_next_at),updated_at=excluded.updated_at`)
             .bind(userId, elite, now, match, now, ...guardArgs),
-        db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT p.id,p.author_id,1 FROM posts p WHERE p.author_id=? AND p.status!='closed' AND p.hidden=0 AND ${guard}
+        db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT p.id,p.author_id,1 FROM posts p WHERE p.author_id=? AND p.status!='closed' AND p.hidden=0 AND ${listedKind('p')} AND ${guard}
             AND NOT EXISTS(SELECT 1 FROM post_auto x WHERE x.post_id=p.id AND x.bump=1) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${limit}
             ON CONFLICT(post_id) DO UPDATE SET bump=1`).bind(userId, ...guardArgs, ...Number.isFinite(slots) ? [userId] : []),
     ];

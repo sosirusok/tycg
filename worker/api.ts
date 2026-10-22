@@ -96,6 +96,11 @@ async function withdraw(req: Request) {
     const now = Date.now();
     const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
+        // 비밀번호 찾기 requests for the member's id go (before the id is replaced), and so do the texts only the
+        // member wrote for their own tools: 자주 쓰는 문구, 자동 응답, the 중개/가측 card intro (개인정보 처리방침 3).
+        db().prepare('DELETE FROM reset_requests WHERE username=(SELECT username FROM users WHERE id=?)').bind(u.id),
+        db().prepare("UPDATE automation SET templates='[]',first_on=0,first_text='',away_on=0,away_text='' WHERE user_id=?").bind(u.id),
+        db().prepare("UPDATE provider_profiles SET intro='',active=0 WHERE user_id=?").bind(u.id),
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
         db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
         // 웹 푸시 (WP64): no device gets the member's pushes any more.

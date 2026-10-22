@@ -184,6 +184,12 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     check(asked.status === 200 && asked.data.trade?.id, 'the member completes it naming the other member (a pending trade)');
     equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).status, 200, 'the member holds 본인 인증');
     equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the member holds 플러스');
+    // What only the member wrote for their own tools, and 비밀번호 찾기 requests for the id, go with 회원 탈퇴 (개인정보 처리방침 3).
+    const at = Date.now();
+    sql(`INSERT INTO automation(user_id,templates,first_on,first_text,away_on,away_text,updated_at) VALUES('${w.user.id}','["안녕하세요"]',1,'첫 응답',1,'자리 비움',${at})
+            ON CONFLICT(user_id) DO UPDATE SET templates=excluded.templates,first_on=1,first_text=excluded.first_text,away_on=1,away_text=excluded.away_text;
+        INSERT INTO provider_profiles(user_id,type,intro,active,updated_at) VALUES('${w.user.id}','broker','중개 소개',1,${at});
+        INSERT INTO reset_requests(username,contact,ip_hash,status,created_at) VALUES('${username('withdraw')}','연락처','h','pending',${at}),('${username('wkeep')}','연락처','h','pending',${at});`);
     // Members have no password since 네이버 로그인: the member types '회원 탈퇴' to confirm.
     const wrong = await w('auth/withdraw', 'POST', { password });
     equal([wrong.status, wrong.data.error], [400, '확인 문구가 맞지 않습니다.'], 'withdraw without the confirm text is 400');
@@ -202,6 +208,10 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal([profile.bio, profile.badges], ['', []], 'bio and badges are gone');
     equal([sql(`SELECT COUNT(*) AS n FROM user_badges WHERE user_id='${w.user.id}'`)[0].n, sql(`SELECT COUNT(*) AS n FROM user_grades WHERE user_id='${w.user.id}'`)[0].n], [1, 1], 'grade and badge rows stay as the manager\'s record');
     check(sql(`SELECT nickname_key FROM users WHERE id='${w.user.id}'`)[0].nickname_key.startsWith('#deleted:'), 'the withdrawn row has a #deleted: key, never NULL');
+    equal(sql(`SELECT templates,first_on,first_text,away_on,away_text FROM automation WHERE user_id='${w.user.id}'`)[0], { templates: '[]', first_on: 0, first_text: '', away_on: 0, away_text: '' }, '자주 쓰는 문구 and 자동 응답 are cleared');
+    equal(sql(`SELECT intro,active FROM provider_profiles WHERE user_id='${w.user.id}'`)[0], { intro: '', active: 0 }, 'the 중개 card intro is cleared and the card is off');
+    equal(sql(`SELECT username FROM reset_requests WHERE username IN ('${username('withdraw')}','${username('wkeep')}')`).map(r => r.username), [username('wkeep')], "the id's 비밀번호 찾기 requests are removed (another id's stay)");
+    sql(`DELETE FROM reset_requests WHERE username='${username('wkeep')}'`);
     equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'premium', plan: '6m' })).data.error, '탈퇴한 회원입니다.', 'no grade for a withdrawn member');
     equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).data.error, '탈퇴한 회원입니다.', 'no badge for a withdrawn member');
     const vis = await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: false });

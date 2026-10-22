@@ -15,7 +15,7 @@ import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '.
 import { favoritesNotify, notifyStatement } from './notifications';
 import { bulkAuto, newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
 import { MATCH_SCAN, pairSql, reachable } from './match';
-import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
+import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, slotPost, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -1014,8 +1014,8 @@ async function pinPost(req: Request, u: User, post: any) {
     return json({ pinned: true });
 }
 
-// The member's ad posts now (me/usage '광고 2/3 · 자동'): the slot posts that are open and visible.
-export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND featured_pin>=0 AND status='open' AND hidden=0";
+// The member's ad posts now (me/usage '광고 2/3 · 자동'): the posts that hold a slot (slotPost).
+export const featuredMine = () => `author_id=? AND featured_at IS NOT NULL AND ${slotPost()}`;
 // PUT /posts/:id/feature (WP53): {active:true} '광고 고정' keeps the post in a slot (a pin beyond the
 // grade's slots unpins the member's oldest pin, which goes back to automatic); {active:false} '광고 빼기'
 // keeps it out of the ads and frees its slot for the newest automatic post. 프리미엄 and above only.
@@ -1036,7 +1036,7 @@ async function featurePost(req: Request, u: User, post: any) {
         ...replaced.length ? [db().prepare('UPDATE posts SET featured_pin=0 WHERE id IN (SELECT value FROM json_each(?)) AND featured_pin=1').bind(JSON.stringify(replaced.map(x => x.id)))] : [],
         adTrimStatement(u.id, slots),
         ...active ? [] : [adFillStatement(u.id, slots, now)],
-        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${FEATURED_MINE}`).bind(u.id),
+        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${featuredMine()}`).bind(u.id),
     ]);
     if (active && !r[0].meta.changes) fail(409, AD_TEXT.open);
     return json({

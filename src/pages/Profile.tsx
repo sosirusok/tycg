@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { KIND_NAMES, dateText, isRetiredKind, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
+import { dateText, isRetiredKind, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type ProviderType } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -323,16 +323,16 @@ function ReviewList({ userId }: { userId: string }) {
     </>;
 }
 
-// The member's side of a trade, as the board names it.
+// The member's side of a trade, as the board names it (a trade of a retired kind by its side too; its
+// title line is neutral).
 function sideName(t: TradeRow) {
     if (t.kind === 'exchange') return '교환';
-    // A trade of a retired kind (대리) keeps its record under a neutral name.
-    if (isRetiredKind(t.kind)) return KIND_NAMES[t.kind];
     return t.sold ? '판매' : '구매';
 }
 
 // 거래 기록 (WP51): the member's confirmed trades, newest first, 20 at a time (GET /users/:id/trades). A deleted
-// post keeps the title the trade saved, marked '삭제된 글'; a hidden one is not linked.
+// post keeps the title the trade saved, marked '삭제된 글'; a hidden one is not linked. A trade of a retired
+// kind (대리) comes without its title and reads '종료된 분류의 거래', never linked.
 function TradeList({ userId }: { userId: string }) {
     const [rows, setRows] = useState<TradeRow[] | null>(null), [total, setTotal] = useState(0), [page, setPage] = useState(1), [busy, setBusy] = useState(false);
     const load = (n: number) => api<{ trades: TradeRow[]; total: number }>(`users/${userId}/trades?page=${n}`);
@@ -361,8 +361,9 @@ function TradeList({ userId }: { userId: string }) {
         <ul className="review-list trade-list">{rows.map(t => <li key={t.id}>
             <div className="review-head">
                 <span className="trade-title"><span className="tag">{sideName(t)}</span>
-                    {t.post_gone || t.post_hidden ? <span className="trade-title-text">{t.title || '삭제된 글'}</span> : <Link to={'/posts/' + t.post_id} className="trade-title-text">{t.title}</Link>}
-                    {t.post_gone && t.title && <span className="tag tag-line">삭제된 글</span>}</span>
+                    {isRetiredKind(t.kind) ? <span className="trade-title-text">종료된 분류의 거래</span>
+                        : t.post_gone || t.post_hidden ? <span className="trade-title-text">{t.title || '삭제된 글'}</span> : <Link to={'/posts/' + t.post_id} className="trade-title-text">{t.title}</Link>}
+                    {t.post_gone && t.title && !isRetiredKind(t.kind) && <span className="tag tag-line">삭제된 글</span>}</span>
                 <time className="review-date">{dateText(t.created_at)}</time>
             </div>
             <div className="review-line">

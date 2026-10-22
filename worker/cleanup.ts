@@ -1,4 +1,4 @@
-import { db, MANAGER_ID } from './http';
+import { db, MANAGER_ID, RETIRED_SQL } from './http';
 import { STATS_KEEP_DAYS } from './stats';
 import { unused } from './files';
 import { deleteR2Photos, deleteKvKeys, getKv, putR2, blobBytes, hasBucket, hasKv, counterValue, utcDate } from './storage';
@@ -25,6 +25,8 @@ const MISSING_PRINTS_PER_RUN = 200;
 // a deleted post's photos are held 30 days for the manager (the posts_delete_hold trigger, 0022).
 export const RETAIN_DAYS = 90;
 export const RETENTION_PER_RUN = 100;
+// 비밀번호 찾기 requests are kept this long (the manager answers within days).
+export const RESET_KEEP_DAYS = 90;
 // Inline thumbnails are cleared on posts completed more than 90 days ago and on open posts not bumped for
 // 60 days (an edit makes a new one), which bounds them to about 60 days of posts in D1.
 const THUMB_OPEN_DAYS = 60;
@@ -105,8 +107,8 @@ const removable = (now: number) => {
     return `uploads.created_at<${day} AND COALESCE(uploads.touched_at,0)<${day} AND ${unused} AND COALESCE(uploads.keep_until,0)<${t}`;
 };
 
-// Daily housekeeping (cron in wrangler.jsonc): expired sessions, finished rate-limit windows, post
-// events older than the caps look back, posts the previous Worker wrote without bumped_at or
+// Daily housekeeping (cron in wrangler.jsonc): expired sessions, finished rate-limit windows, 비밀번호 찾기
+// requests over 90 days, visible posts of a retired kind (대리), post events older than the caps look back, posts the previous Worker wrote without bumped_at or
 // title_key, grade-end reminders, photos that no post, chat message or draft has used for a day, photo
 // retention, old thumbnails, the KV delete budget and the R2 mover.
 // The Workers Free plan allows 50 subrequests per invocation (KV, R2 and D1 calls included), so the whole
@@ -141,11 +143,16 @@ export async function cleanup(now = Date.now()) {
     const house = [
         db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now),
         db().prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(now),
+        // 비밀번호 찾기 requests (the id, where to reach the member, the hashed address; 개인정보 처리방침 3).
+        db().prepare('DELETE FROM reset_requests WHERE created_at<?').bind(now - RESET_KEEP_DAYS * DAY),
         // The daily caps look back to KST midnight and the 새 글 placement at most 2 days; 판매 통계 (WP63) keeps
         // 'bump' and 'fresh' rows 14 days ('끌올 효과', the 주간 요약) and post_views 14 days (by post_views_hour).
         db().prepare("DELETE FROM post_events WHERE created_at<? AND (kind NOT IN ('bump','fresh') OR created_at<?)").bind(now - 2 * DAY, now - STATS_KEEP_DAYS * DAY),
         db().prepare('DELETE FROM post_views WHERE hour<?').bind(Math.floor((now - STATS_KEEP_DAYS * DAY) / 3600000)),
         db().prepare('UPDATE posts SET bumped_at=created_at WHERE bumped_at=0'),
+        // 대리 카테고리 종료 (0064): a post of a retired kind the previous Worker wrote during the deploy is
+        // hidden the same way (read through posts_kind_created).
+        db().prepare(`UPDATE posts SET hidden=1,hidden_reason='대리 카테고리 종료' WHERE kind IN ${RETIRED_SQL} AND hidden=0`),
         // 같은 매물 (WP44): prints are kept 7 days after the post was completed or deleted, and never for a
         // member who left.
         db().prepare('DELETE FROM post_prints WHERE gone_at<?').bind(now - PRINT_DAYS * DAY),

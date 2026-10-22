@@ -15,3 +15,15 @@ WHERE (`bump` != 0 OR `bump_remind` != 0) AND `post_id` IN (SELECT `id` FROM `po
 -- manager's record; no screen shows them (BADGES has no 'proxy').
 UPDATE `applications` SET `status` = 'cancelled', `updated_at` = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
 WHERE `kind` = 'badge' AND `target` = 'proxy' AND `status` = 'pending';
+-- Saved searches and 알림 of the retired boards end too: their names read '대리(진행) · …', they can never fire
+-- (no new post has the kind) and they would keep using the member's 알림 and 20 saved-search room. Turning
+-- one on again is refused ('게시판을 선택해 주세요.'), so they are removed.
+DELETE FROM `saved_searches`
+WHERE `alert_kind` IN ('proxy_request', 'proxy_offer')
+    OR ('&' || `query` || '&') LIKE '%&kind=proxy_request&%' OR ('&' || `query` || '&') LIKE '%&kind=proxy_offer&%';
+-- A chat's '문의한 글' card keeps the title it was written with (messages.body); for these posts it reads
+-- neutrally (read through messages_listing).
+UPDATE `messages` SET `body` = '종료된 분류의 글'
+WHERE `type` = 'listing' AND `reference_id` IN (SELECT CAST(`id` AS TEXT) FROM `posts` WHERE `kind` IN ('proxy_request', 'proxy_offer'));
+-- 알림함 rows about them (their text holds the title, or '대리(진행) · …') go; the 알림함 keeps 60 days anyway.
+DELETE FROM `notifications` WHERE `post_id` IN (SELECT `id` FROM `posts` WHERE `kind` IN ('proxy_request', 'proxy_offer'));

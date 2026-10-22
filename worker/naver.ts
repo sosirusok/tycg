@@ -30,6 +30,7 @@ const PENDING_GONE = '네이버 로그인 시간이 지났습니다. 다시 로�
 const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네이버를 연결해 주세요.';
 export const PHONE_TAKEN = '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.';
 export const AGE_REQUIRED = '만 14세 이상만 가입할 수 있습니다.';
+export const AGE_LINK_REQUIRED = '만 14세 이상만 이용할 수 있습니다.';
 
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
@@ -221,8 +222,8 @@ async function finish(req: Request, signUpTrial: (id: string, ip: string, at: nu
     const ip = await ipOf(req);
     await limit('auth-ip:' + ip, 40, 600000);
     if (b.agree !== true) fail(400, '이용 규칙에 동의해 주세요.');
-    // 만 14세 미만은 가입할 수 없습니다 (개인정보 처리방침): the member confirms it on 가입 마무리. 기존 계정 연결 does
-    // not ask again (that account already exists).
+    // 만 14세 미만은 가입할 수 없습니다 (개인정보 처리방침): the member confirms it on 가입 마무리, and on 기존 계정
+    // 연결 (the old ID/password sign-up never asked).
     if (b.age14 !== true) fail(400, AGE_REQUIRED);
     const nickname = nicknameField(b.nickname), key = nicknameKey(nickname);
     await assertNicknameFree(nickname, '');
@@ -260,6 +261,8 @@ async function link(req: Request, passwordMatches: (pw: unknown, row: any) => Pr
     const b = await body(req), username = typeof b.username === 'string' ? b.username.toLowerCase().trim() : '';
     if (!/^[a-z0-9_]{4,24}$/.test(username)) fail(400, '아이디는 영문 소문자, 숫자, _ 4~24자로 입력해 주세요.');
     if (typeof b.password !== 'string' || b.password.length < 8 || b.password.length > 128) fail(400, '비밀번호는 8~128자로 입력해 주세요.');
+    // The old ID/password sign-up never asked the age, so the member confirms 만 14세 이상 here (as in finish).
+    if (b.age14 !== true) fail(400, AGE_LINK_REQUIRED);
     const ip = await ipOf(req);
     await limit('auth-ip:' + ip, 40, 600000);
     await limit('auth-user:' + username + ':' + ip, 15, 600000);

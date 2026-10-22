@@ -58,9 +58,9 @@ export default function Naver() {
     }
     async function link(e: FormEvent) {
         e.preventDefault();
-        if (busy) return;
+        if (busy || !age14) return;
         setBusy(true); setFormError('');
-        try { const d = await api<Done>('auth/naver/link', 'POST', { username, password }); setPassword(''); done(d, '연결 완료'); }
+        try { const d = await api<Done>('auth/naver/link', 'POST', { username, password, age14 }); setPassword(''); done(d, '연결 완료'); }
         catch (err) { setFormError(errorText(err)); }
         finally { setBusy(false); }
     }
@@ -103,8 +103,10 @@ export default function Naver() {
                     <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} minLength={4} maxLength={24} required autoFocus /></label>
                 <label className="field"><span className="field-label">비밀번호</span>
                     <input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} minLength={8} maxLength={128} required /></label>
+                {/* The old sign-up never asked the age; worker/naver.ts link refuses it without age14. */}
+                <label className="check"><input type="checkbox" checked={age14} onChange={e => setAge14(e.target.checked)} required />만 14세 이상입니다</label>
                 {formError && <p className="field-error" role="alert">{formError}</p>}
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username.trim() || !password}>{busy ? <LoaderCircle size={20} className="spin" /> : '연결'}</button>
+                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !age14 || !username.trim() || !password}>{busy ? <LoaderCircle size={20} className="spin" /> : '연결'}</button>
             </form>}
             <p className="auth-switch">{mode === 'join'
                 ? <button type="button" disabled={busy} onClick={() => setMode('link')}>기존 계정 연결</button>

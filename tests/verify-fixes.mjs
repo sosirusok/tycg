@@ -160,8 +160,37 @@ const a = await register('fa'), b = await register('fb'), c = await register('fc
     equal((await c(`posts/${offerId}/bump`, 'POST')).data.error, NO_BUMP, '끌올 is refused');
     equal((await c('posts/bulk', 'POST', { action: 'bump', ids: [requestId] })).data.skipped, [{ id: requestId, reason: NO_BUMP }], '일괄 끌올 skips it');
     equal((await c(`posts/${offerId}/auto`, 'PUT', { bump: true })).data.error, NO_BUMP, '자동 끌올 is refused');
+    // 광고 and 자동 끌올 slots: a 대리 post still visible never takes one. A 프리미엄 grant fills the ad slot with the newest
+    // open post that is not of a retired kind (the 대리 post is bumped last here).
+    sql(`UPDATE posts SET bumped_at=${Date.now() + 60000} WHERE id=${offerId}`);
+    equal((await manager(`manage/users/${c.user.id}/grades`, 'POST', { grade: 'premium', plan: '6m' })).status, 201, 'c gets 프리미엄');
+    equal(sql(`SELECT id FROM posts WHERE author_id='${c.user.id}' AND featured_at IS NOT NULL`).map(r => r.id), [sale.data.id], 'the grant fills the ad slot with the 판매 post, not the newer 대리 post');
+    check(!sql(`SELECT post_id FROM post_auto WHERE user_id='${c.user.id}' AND bump=1`).some(r => olds.includes(r.post_id)), 'and enrols no 대리 post in 자동 끌올');
+    sql(`UPDATE posts SET featured_at=${Date.now()} WHERE id=${offerId}`);
+    equal((await c('me/usage')).data.featured.map(p => p.id), [sale.data.id], "a 대리 post the previous Worker stamped is not counted as the member's ad");
+    const premium = sql(`SELECT id FROM user_grades WHERE user_id='${c.user.id}' AND grade='premium'`)[0].id;
+    equal((await manager(`manage/users/${c.user.id}/grades/${premium}`, 'DELETE')).status, 200, '프리미엄 회수');
+    // What 0064 also clears: saved searches and 알림 of the retired boards, the chat's '문의한 글' title, 알림함 rows, and
+    // the public 거래 기록 never shows the title of a trade of a retired kind.
+    sql(`INSERT INTO saved_searches(id,user_id,name,query,created_at,alert,alert_kind,keyword) VALUES
+        ('qa-ss1-${run}','${c.user.id}','옛 게시판 알림','category=ladder&kind=proxy_offer',${now},1,'proxy_offer',1),
+        ('qa-ss2-${run}','${c.user.id}','옛 검색','kind=proxy_request&q=x',${now},0,'',1),
+        ('qa-ss3-${run}','${c.user.id}','판매 검색','kind=sell&q=proxy_offer',${now},0,'',1)`);
+    const room = (await a('chats', 'POST', { userId: c.user.id })).data.id;
+    sql(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) VALUES
+        ('${room}','${a.user.id}','[QA] 옛 대리 진행 ${run}','listing','${offerId}','[]',${now}),('${room}','${a.user.id}','[QA] 대리 옆 판매 ${run}','listing','${sale.data.id}','[]',${now});
+        INSERT INTO notifications(user_id,type,ref,post_id,actor_id,text,created_at) VALUES
+        ('${a.user.id}','fav_closed','${offerId}',${offerId},'${c.user.id}','[QA] 옛 알림 ${run}',${now}),('${a.user.id}','fav_closed','${sale.data.id}',${sale.data.id},'${c.user.id}','[QA] 판매 알림 ${run}',${now});
+        INSERT INTO trades(id,post_id,seller_id,buyer_id,price,created_at,author_id,confirmed_at,kind,category,title) VALUES
+        ('qa-tp-${run}',${offerId},'${c.user.id}','${a.user.id}',20000,${now},'${c.user.id}',${now},'proxy_offer','ladder','[QA] 옛 대리 진행 ${run}');`);
+    const traded = (await guest(`users/${c.user.id}/trades`)).data.trades.find(t => t.id === `qa-tp-${run}`);
+    equal([traded?.kind, traded?.title], ['proxy_offer', ''], 'the public 거래 기록 sends a trade of a retired kind without its title');
     // 0064_proxy_closed, as the deploy applies it.
     sql(readFileSync(new URL('../migrations/0064_proxy_closed.sql', import.meta.url), 'utf8').replace(/^--.*$/gm, '').trim());
+    equal(sql(`SELECT id FROM saved_searches WHERE id LIKE 'qa-ss%-${run}' ORDER BY id`).map(r => r.id), [`qa-ss3-${run}`], '0064 removes the saved searches and 알림 of the retired boards only');
+    equal(sql(`SELECT body FROM messages WHERE conversation_id='${room}' AND type='listing' ORDER BY id`).map(r => r.body), ['종료된 분류의 글', `[QA] 대리 옆 판매 ${run}`], "0064 makes the '문의한 글' card of a 대리 post neutral");
+    equal(sql(`SELECT text FROM notifications WHERE user_id='${a.user.id}' AND text LIKE '[QA] %${run}'`).map(r => r.text), [`[QA] 판매 알림 ${run}`], '0064 removes the 알림함 rows about 대리 posts');
+    sql(`DELETE FROM saved_searches WHERE id='qa-ss3-${run}'; DELETE FROM trades WHERE id='qa-tp-${run}'; DELETE FROM notifications WHERE user_id='${a.user.id}' AND text LIKE '[QA] %${run}'`);
     equal(sql(`SELECT hidden,hidden_reason FROM posts WHERE id IN (${olds.join(',')}) ORDER BY id`), [{ hidden: 1, hidden_reason: '대리 카테고리 종료' }, { hidden: 1, hidden_reason: '대리 카테고리 종료' }], '0064 hides the old 대리 posts with the reason');
     equal(sql(`SELECT hidden FROM posts WHERE id=${sale.data.id}`)[0].hidden, 0, 'and leaves the 판매 post alone');
     equal(sql(`SELECT status FROM applications WHERE id='qa-proxy-${run}'`)[0].status, 'cancelled', '0064 cancels the waiting 대리 인증 application');

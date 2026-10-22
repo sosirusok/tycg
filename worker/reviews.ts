@@ -1,5 +1,5 @@
 import { REVIEW_DAYS, REVIEW_TAGS, REVIEW_TEXT_MAX, type User } from '../shared/market';
-import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, liveReview, countedTrade, isSuspended, WITHDRAWN, WITHDRAWN_NAME } from './http';
+import { db, fail, requireUser, requireActive, json, body, limit, memberColumns, withMember, liveReview, countedTrade, isSuspended, RETIRED_SQL, WITHDRAWN, WITHDRAWN_NAME } from './http';
 import { parse, visiblePost } from './posts';
 import { blocked, guardedMessageStatements } from './chat';
 
@@ -255,13 +255,15 @@ async function listReviews(userId: string, url: URL) {
 // GET /users/:id/trades?page=N (거래 기록 tab, WP51): the member's counted trades (confirmed, not removed by
 // the manager), newest first, 20 per page. Each row has the member's side, the title kept with the trade
 // (post_gone when the post was deleted, post_hidden when nobody else may open it), 거래가 and the other
-// member's name line (탈퇴회원 once they left). A member who left shows none.
+// member's name line (탈퇴회원 once they left). A member who left shows none. The tab is public, so a trade of
+// a retired kind (대리) never sends its title: the screen names it '종료된 분류의 거래'.
 async function listTrades(userId: string, url: URL) {
     const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('page'))) || 1, 1), 500);
     const mine = `(t.seller_id=? OR t.buyer_id=?) AND ${countedTrade('t')} AND EXISTS(SELECT 1 FROM users me WHERE me.id=? AND me.deleted_at IS NULL)`;
+    const kind = "COALESCE(NULLIF(t.kind,''),p.kind,'')";
     const [rows, count] = await db().batch([
-        db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,COALESCE(NULLIF(t.kind,''),p.kind,'') AS kind,
-                (t.seller_id=?) AS sold,COALESCE(NULLIF(t.title,''),p.title,'') AS title,(p.id IS NULL) AS post_gone,COALESCE(p.hidden,0) AS post_hidden,
+        db().prepare(`SELECT t.id,t.post_id,t.created_at,t.price,${kind} AS kind,
+                (t.seller_id=?) AS sold,CASE WHEN ${kind} IN ${RETIRED_SQL} THEN '' ELSE COALESCE(NULLIF(t.title,''),p.title,'') END AS title,(p.id IS NULL) AS post_gone,COALESCE(p.hidden,0) AS post_hidden,
                 o.id AS partner_id,o.nickname,o.role,o.deleted_at,${memberColumns('o')}
             FROM trades t LEFT JOIN posts p ON p.id=t.post_id LEFT JOIN users o ON o.id=CASE WHEN t.seller_id=? THEN t.buyer_id ELSE t.seller_id END
             WHERE ${mine} ORDER BY t.created_at DESC,t.id DESC LIMIT ? OFFSET ?`).bind(userId, userId, userId, userId, userId, PAGE_SIZE, (page - 1) * PAGE_SIZE),
