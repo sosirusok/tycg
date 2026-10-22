@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from '../../shared/market';
 import { CLAN_MIN_SEASON, LATEST_SEASON } from '../../shared/market';
-import type { ApplicationKind, Earn, PlanId, TrialState } from '../../shared/membership';
+import type { ApplicationKind, Earn, InfoField, PlanId, TrialState } from '../../shared/membership';
 import { toast } from 'sonner';
 import { LOGIN_REQUIRED, UNAUTHORIZED_EVENT, api, errorText, setPhotoStorage, type PhotoStorage } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -18,6 +18,8 @@ type AppState = {
     ready: boolean;
     // The member's own 플러스 무료 체험 state (auth/me and the sign-up response); null for guests.
     trial: TrialState | null;
+    // The 회원 정보 fields the manager let this 관리자 see (auth/me infoFields: keys only); [] for everyone else.
+    infoFields: InfoField[];
     setTrial: (t: TrialState | null) => void;
     config: SiteConfig;
     unread: number;
@@ -114,6 +116,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [me, setMe] = useState<User | null>(null);
     const [ready, setReady] = useState(false);
     const [trial, setTrial] = useState<TrialState | null>(null);
+    const [infoFields, setInfoFields] = useState<InfoField[]>([]);
     const [config, setSiteConfig] = useState<SiteConfig>(defaultConfig);
     // The photo store decides how far photos are shrunk before upload (lib/api compress).
     const setConfig = useCallback((c: SiteConfig) => { setPhotoStorage(c.storage); setSiteConfig(c); }, []);
@@ -129,9 +132,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMe(prev => prev && next && memberKey(prev) === memberKey(next) ? prev : next);
     }, []);
     const refreshMe = useCallback(async () => {
-        const d = await api<{ user: User | null; trial?: TrialState | null }>('auth/me');
+        const d = await api<{ user: User | null; trial?: TrialState | null; infoFields?: InfoField[] }>('auth/me');
         updateMe(d.user);
         setTrial(d.trial ?? null);
+        setInfoFields(d.infoFields ?? []);
     }, [updateMe]);
     const refreshConfig = useCallback(() => { api<SiteConfig>('config').then(setConfig).catch(() => {}); }, [setConfig]);
 
@@ -194,7 +198,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const logout = useCallback(async () => {
-        try { await unbindPush(); await api('auth/logout', 'POST', {}); setMe(null); setTrial(null); void navigate('/'); toast('로그아웃 완료'); }
+        try { await unbindPush(); await api('auth/logout', 'POST', {}); setMe(null); setTrial(null); setInfoFields([]); void navigate('/'); toast('로그아웃 완료'); }
         catch (e) { toast.error(errorText(e)); }
     }, []);
 
@@ -232,11 +236,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const closePushBar = useCallback(() => { closePush(); setPushBar(false); }, []);
 
     const value = useMemo<AppState>(() => ({
-        me, ready, trial, setTrial, config, unread, alerts, setAlerts, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
+        me, ready, trial, setTrial, infoFields, config, unread, alerts, setAlerts, setMe, refreshMe, refreshUnread, refreshConfig, requireLogin,
         authMode, openAuth: () => setAuthMode('login'), closeAuth: () => { pending.current = null; setAuthMode(''); }, finishAuth,
         apply, openApply: preset => setApply(preset || 'open'), closeApply: () => setApply(null), logout,
         pushBar, enablePush, closePushBar,
-    }), [me, ready, trial, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout, pushBar, enablePush, closePushBar]);
+    }), [me, ready, trial, infoFields, config, unread, alerts, refreshMe, refreshUnread, refreshConfig, requireLogin, authMode, finishAuth, apply, logout, pushBar, enablePush, closePushBar]);
 
     return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { dateText, isRetiredKind, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
-import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type ProviderType } from '../../shared/membership';
+import { ALERT_TEXT, BADGES, GRADES, INFO_FIELDS, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type MemberInfo, type ProviderType } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
 import { lastSeenText } from '../lib/lastSeen';
@@ -13,6 +13,7 @@ import { PostCard } from '../components/PostCard';
 import { MemberReportModal } from '../components/MemberReport';
 import { WalletGauge, autoItem, useMinuteClock, type Usage } from '../components/Wallet';
 import { ProviderEditor, type OwnCard } from '../components/ProviderCard';
+import { infoValue } from '../components/InfoList';
 
 // "10월 31일" on the Korean calendar.
 const monthDay = (t: number) => new Date(t).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -264,6 +265,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                     {user.role !== 'manager' && <span id="profile-nickname-hint" className="field-hint">{nicknameLocked ? `${monthDay(user.nickname_next_at!)}부터 변경 가능` : '30일에 한 번 변경 가능'}</span>}</div>
                 <label className="field"><span className="field-label">소개</span><textarea className="textarea" style={{ minHeight: 110 }} maxLength={300} value={bio} onChange={e => setBio(e.target.value)} placeholder="예: 래더계 위주 거래, 밤에 답장 빠름" /></label>
                 {editError && <p className="field-error" role="alert">{editError}</p>}
+                {editing && <NaverInfoCard />}
                 <div className="follow-setting">
                     <label className="switch"><input type="checkbox" role="switch" checked={user.follow_allowed !== false} disabled={followBusy} onChange={e => void setFollowAllowed(e.target.checked)} />{ALERT_TEXT.allow}</label>
                     {user.follower_count !== undefined && <span className="muted small">구독자 {user.follower_count}명</span>}
@@ -280,6 +282,24 @@ export default function ProfilePage({ id }: { id?: string }) {
         <PasswordModal open={account === 'password'} onClose={() => setAccount('')} />
         <WithdrawModal open={account === 'withdraw'} onClose={() => setAccount('')} onDone={() => { setAccount(''); setMe(null); void navigate('/'); toast('탈퇴 완료'); }} />
     </div>;
+}
+
+// 네이버 회원 정보 (GET me/info): the member's own 이름, 연락처 이메일, 출생연도 and 휴대전화번호 as Naver sent them at the
+// latest login. Read when 프로필 수정 opens; no other screen shows them.
+const OWN_INFO_LABELS = { name: '이름', email: '연락처 이메일', birthyear: '출생연도', phone: '휴대전화번호' } as const;
+function NaverInfoCard() {
+    const [info, setInfo] = useState<MemberInfo | null | undefined>(undefined);
+    useEffect(() => {
+        let alive = true;
+        api<{ info: MemberInfo | null }>('me/info').then(d => { if (alive) setInfo(d.info); }).catch(() => { if (alive) setInfo(null); });
+        return () => { alive = false; };
+    }, []);
+    return <section className="naver-info" aria-label="네이버 회원 정보">
+        <span className="field-label">네이버 회원 정보</span>
+        {info === undefined ? <SkeletonRows count={1} height={40} /> : info ? <dl>{INFO_FIELDS.map(f => <div key={f} style={{ display: 'contents' }}><dt>{OWN_INFO_LABELS[f]}</dt><dd>{infoValue(f, info[f])}</dd></div>)}</dl>
+            : <p className="muted small">저장된 정보가 없습니다. 네이버로 다시 로그인하면 저장됩니다.</p>}
+        <p className="muted small">본인과 매니저(및 매니저가 권한을 준 관리자)만 볼 수 있습니다.</p>
+    </section>;
 }
 
 // The 후기 a member received, newest first, 20 at a time with '더 보기' (GET /users/:id/reviews).

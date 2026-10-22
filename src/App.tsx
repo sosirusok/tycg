@@ -27,6 +27,7 @@ const Providers = lazy(() => import('./pages/Providers'));
 const Naver = lazy(() => import('./pages/Naver'));
 const ManagerLogin = lazy(() => import('./pages/ManagerLogin'));
 const Privacy = lazy(() => import('./pages/Privacy'));
+const MemberInfo = lazy(() => import('./pages/MemberInfo'));
 
 export default function App() {
     return <AppProvider><Shell /></AppProvider>;
@@ -79,7 +80,7 @@ function CappedNotice({ home }: { home: boolean }) {
 }
 
 function Shell() {
-    const { me, unread, alerts, requireLogin, openAuth, openApply, logout } = useApp();
+    const { me, unread, alerts, infoFields, requireLogin, openAuth, openApply, logout } = useApp();
     const { path, params, parts, search } = useLocation();
     // The share address /p/:id (WP59: the Worker gave it the post's og: tags) shows the post and is
     // replaced with /posts/:id below.
@@ -106,7 +107,7 @@ function Shell() {
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
             : page === 'me' ? (parts[1] === 'alerts' ? '알림' : '내 거래')
             : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : page === 'naver' ? '네이버 로그인' : page === 'manager-login' ? '매니저 로그인'
-            : page === 'privacy' ? '개인정보 처리방침' : '');
+            : page === 'privacy' ? '개인정보 처리방침' : page === 'member-info' ? '회원 정보' : '');
     }, [page, params, parts]);
     // Back/Forward returns to the stored scroll position; the board and a post do it themselves
     // once their data is on screen.
@@ -167,6 +168,8 @@ function Shell() {
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/favorites')}>찜한 글</DropdownMenu.Item>
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/me/applications')}>신청 내역</DropdownMenu.Item>
                                 {me.role === 'manager' && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/manage')}>매니저 메뉴</DropdownMenu.Item>}
+                                {/* 회원 정보: only a 관리자 the manager allowed (auth/me infoFields). */}
+                                {me.role !== 'manager' && me.grade === 'admin' && infoFields.length > 0 && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate('/member-info')}>회원 정보</DropdownMenu.Item>}
                                 <DropdownMenu.Separator className="menu-sep" />
                                 <DropdownMenu.Item className="menu-item" onSelect={() => void logout()}>로그아웃</DropdownMenu.Item>
                             </DropdownMenu.Content>
@@ -197,6 +200,8 @@ function Shell() {
                     : page === 'manager-login' ? <ManagerLogin />
                     // 개인정보 처리방침, linked from the footer and 가입 마무리.
                     : page === 'privacy' ? <Privacy />
+                    // 회원 정보 for a 관리자 the manager allowed (the Worker answers 403 for anyone else).
+                    : page === 'member-info' ? <MemberInfo />
                     : <NotFound />}
             </Suspense>
         </main>

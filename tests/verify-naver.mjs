@@ -5,12 +5,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
-import { mockMobile } from './fixtures/naver-mock.mjs';
+import { MOCK_BIRTHYEAR, MOCK_PROFILE, mockMobile } from './fixtures/naver-mock.mjs';
 
 // 네이버 로그인: start and callback (state cookie, safe next), 가입 마무리 (nickname rules, 플러스 체험), a linked
 // Naver account signing in, 기존 계정 연결 with the old ID/password (once), the 410 for the old member
-// endpoints, the manager's hidden /manager-login and 네이버 계정 연결, and that neither the Naver token nor
-// naver_id nor any Naver profile field is ever stored or sent. scripts/test-local.mjs runs it on a short-lived
+// endpoints, the manager's hidden /manager-login and 네이버 계정 연결, MANAGER_PHONE, 만 14세 by 출생연도, and that
+// neither the Naver token nor naver_id is ever stored or sent; 회원 정보 (name, email, birthyear, mobile) is stored
+// only encrypted and sent only by me/info, manage/info and member-info (관리자 열람 권한); 계정 정리 (0066).
+// scripts/test-local.mjs runs it on a short-lived
 // server with TEST_HOOKS=on and the mock (tests/fixtures/naver-mock.mjs) as NAVER_AUTH_BASE/NAVER_API_BASE and
 // without LEGACY_AUTH_TEST (TEST_PHASE=main), then on one without the Naver client values (TEST_PHASE=unset).
 // Nothing here calls Naver.
@@ -19,6 +21,8 @@ assert.ok(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(base), 'Local Worker or
 const phase = process.env.TEST_PHASE || 'main';
 const mock = process.env.NAVER_MOCK_ORIGIN || '';
 const managerPassword = process.env.TEST_MANAGER_PASSWORD || 'local-manager-password';
+// MANAGER_PHONE of the server (scripts/test-local.mjs), digits.
+const managerPhone = process.env.TEST_MANAGER_PHONE || '';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const persist = process.env.TEST_PERSIST || '.wrangler/state';
 const run = randomBytes(4).toString('hex');
@@ -35,6 +39,10 @@ function sql(command) {
 
 // Every response body this suite saw, to check afterwards that no naver_id or Naver profile field was sent.
 const seen = [];
+// The only routes that send 회원 정보 values (worker/info.ts); every other response must carry none.
+const INFO_ROUTES = /^\/api\/(me\/info|manage\/info|member-info)(\?|$)/;
+const outside = () => seen.filter(s => !INFO_ROUTES.test(s.p));
+const kstYear = new Date(Date.now() + 9 * 3600000).getUTCFullYear();
 // A browser: a cookie jar (name → value, by path prefix), redirects not followed.
 function browser() {
     const jar = new Map();
@@ -89,7 +97,7 @@ if (phase === 'unset') {
 assert.ok(mock, 'NAVER_MOCK_ORIGIN required.');
 sql("DELETE FROM rate_limits WHERE key LIKE 'auth-ip:%' OR key LIKE 'auth-user:%' OR key LIKE 'naver-ip:%' OR key LIKE 'trial-ip:%'");
 // An earlier run's 네이버 계정 연결 of the manager is undone, so this run links it again.
-sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL WHERE id='manager'");
+sql("UPDATE users SET naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,pii=NULL WHERE id='manager'");
 // The 플러스 무료 체험 window is open for this suite and closed again at the end.
 sql(`INSERT INTO settings(key,value,updated_at) VALUES('sys:trial_start','${Date.now() - 60000}',0),('sys:trial_end','${Date.now() + 86400000}',0) ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
 
@@ -297,15 +305,15 @@ const manager = browser();
     equal(post.status, 201, 'the Naver member writes a post');
     const chat = await manager('chats', 'POST', { userId: member.id });
     await manager(`chats/${chat.data.id}/messages`, 'POST', { body: '안녕하세요' });
-    for (const p of ['auth/me', 'config', 'home', 'stats', `users/${member.id}`, `users/${olds[0].id}`, `posts/${post.data.id}`, 'posts?kind=sell', `posts?author=${member.id}`, 'chats', `chats/${chat.data.id}`, `chats/${chat.data.id}/messages`]) {
+    for (const p of ['auth/me', 'config', 'home', 'stats', `users/${member.id}`, `users/${olds[0].id}`, `posts/${post.data.id}`, 'posts?kind=sell', `posts?author=${member.id}`, `posts?q=${encodeURIComponent('네이버 ' + run)}`, 'chats', `chats/${chat.data.id}`, `chats/${chat.data.id}/messages`, 'chats/unread', `users/${member.id}/reviews`, `users/${member.id}/trades`]) {
         await fresh(p); await guest(p); await manager(p);
     }
     for (const p of [`manage/users?q=${encodeURIComponent('바꾼' + run)}`, 'manage/users', `manage/users/${member.id}`, `manage/users/${olds[0].id}`, 'manage', 'manage/reset-requests']) await manager(p);
     const naverIds = ['n', 'l', 'm', 'r', 't'].map(NAVER);
-    const leaks = seen.filter(s => naverIds.some(id => s.text.includes(id)) || /naver_id|naver_linked_at/.test(s.text));
-    equal(leaks.map(s => s.p), [], `no response carries a naver_id (${seen.length} responses)`);
-    const profile = ['네이버별명목', '홍길동목업', 'mock-user@naver.example', 'phinf.example'];
-    equal(seen.filter(s => profile.some(v => s.text.includes(v))).map(s => s.p), [], 'no response carries a Naver nickname, name, email or photo');
+    const leaks = seen.filter(s => naverIds.some(id => s.text.includes(id)) || /naver_id|naver_linked_at|"pii"/.test(s.text));
+    equal(leaks.map(s => s.p), [], `no response carries a naver_id or the stored 회원 정보 (${seen.length} responses)`);
+    const profile = ['네이버별명목', '홍길동목업', 'mock-user@naver.example', 'phinf.example', '"birthyear"', `"${MOCK_BIRTHYEAR}"`];
+    equal(outside().filter(s => profile.some(v => s.text.includes(v))).map(s => s.p), [], 'no response carries a Naver nickname, name, email, birth year or photo');
 }
 
 // 같은 휴대전화번호: a second Naver account with an active member's number cannot sign up.
@@ -340,11 +348,97 @@ const manager = browser();
     sql(`UPDATE users SET phone_hash=NULL WHERE id='${member.id}'`);
     await naverLogin(browser(), NAVER('n'));
     equal(sql(`SELECT phone_hash FROM users WHERE id='${member.id}'`)[0].phone_hash, stored, 'the hash is stored at the next login');
-    equal(seen.filter(s => /phone_hash/.test(s.text) || s.text.includes(phone) || s.text.includes(phone.replace(/-/g, ''))).map(s => s.p), [], 'no response carries the number or its hash');
+    equal(outside().filter(s => /phone_hash/.test(s.text) || s.text.includes(phone) || s.text.includes(phone.replace(/-/g, ''))).map(s => s.p), [], 'no response carries the number or its hash');
 }
 
-// Nothing from Naver is stored but response.id: no access or refresh token, no profile field (raw database files).
+// 회원 정보: stored encrypted; the member reads their own (me/info), the manager every member's (manage/info), a 관리자
+// only the fields the manager granted (member-info), and nobody else gets anything.
+const digits = mockMobile(NAVER('n')).replace(/-/g, '');
 {
+    const stored = sql(`SELECT pii FROM users WHERE id='${member.id}'`)[0].pii;
+    const raw = Buffer.from(stored || '', 'base64');
+    check(/^[A-Za-z0-9+/]{40,}={0,2}$/.test(stored) && ![MOCK_PROFILE.name, MOCK_PROFILE.email, digits, '"birthyear"'].some(v => stored.includes(v) || raw.includes(Buffer.from(v))), 'users.pii is one encrypted value, no plain field');
+    const own = await fresh('me/info');
+    equal([own.status, own.data.info], [200, { name: MOCK_PROFILE.name, email: MOCK_PROFILE.email, birthyear: MOCK_BIRTHYEAR, phone: digits }], 'me/info: the member sees their own name, email, birth year and number');
+    equal((await guest('me/info')).status, 401, 'me/info needs a session');
+    const tab = await manager('manage/info?q=' + encodeURIComponent('바꾼' + run));
+    const row = tab.data.members?.find(m => m.id === member.id);
+    equal([tab.status, row?.nickname, row?.name, row?.email, row?.birthyear, row?.phone], [200, '바꾼' + run, MOCK_PROFILE.name, MOCK_PROFILE.email, MOCK_BIRTHYEAR, digits], 'manage/info: the manager sees all four fields, found by nickname');
+    check(tab.data.members.every(m => m.nickname.includes('바꾼' + run)) && Array.isArray(tab.data.admins), 'the nickname search narrows the list; the 관리자 list rides on page 1');
+    equal((await fresh('manage/info')).status, 403, 'a member cannot open manage/info');
+
+    // 관리자 열람 권한.
+    const adm = browser();
+    await naverLogin(adm, NAVER('ad'));
+    const admin = (await adm('auth/naver/finish', 'POST', { nickname: '열람' + run, agree: true, age14: true })).data.user;
+    equal((await adm('member-info')).status, 403, 'member-info: a member without the 관리자 grade gets 403');
+    const notAdmin = await manager(`manage/info-grants/${admin.id}`, 'PUT', { fields: ['name'] });
+    equal([notAdmin.status, notAdmin.data.error], [409, '관리자 등급 회원에게만 열람 권한을 줄 수 있습니다.'], 'a grant is only for a 관리자-grade member');
+    equal((await manager(`manage/users/${admin.id}/grades`, 'POST', { grade: 'admin', plan: 'permanent' })).status, 201, 'the manager appoints 관리자');
+    equal((await adm('member-info')).status, 403, 'a 관리자 without a grant gets 403');
+    equal((await adm('auth/me')).data.infoFields, undefined, 'auth/me: no infoFields without a grant');
+    check((await manager('manage/info')).data.admins.some(a => a.id === admin.id && a.fields.length === 0), 'the 관리자 is listed in 관리자 열람 권한 with nothing checked');
+    equal((await adm(`manage/info-grants/${admin.id}`, 'PUT', { fields: ['name'] })).status, 403, 'a 관리자 cannot grant itself');
+    equal((await manager(`manage/info-grants/${admin.id}`, 'PUT', { fields: ['name', 'pii'] })).status, 400, 'an unknown field is refused');
+    equal((await manager(`manage/info-grants/${member.id}`, 'PUT', { fields: ['name'] })).status, 409, 'a plain member cannot be granted');
+    equal((await manager(`manage/info-grants/${admin.id}`, 'PUT', { fields: ['phone', 'name'] })).data.fields, ['name', 'phone'], 'the manager grants 회원이름 and 휴대전화번호');
+    equal((await adm('auth/me')).data.infoFields, ['name', 'phone'], 'auth/me names the granted field keys');
+    const view = await adm('member-info?q=' + encodeURIComponent('바꾼' + run));
+    equal([view.status, view.data.fields], [200, ['name', 'phone']], 'member-info answers with the granted fields');
+    equal(view.data.members.find(m => m.id === member.id), { id: member.id, nickname: '바꾼' + run, role: 'member', name: MOCK_PROFILE.name, phone: digits }, 'member-info: only the granted columns');
+    check(!JSON.stringify(view.data).includes(MOCK_PROFILE.email) && !JSON.stringify(view.data).includes('"birthyear"'), 'no email or birth year reaches the 관리자');
+    check(!(await adm('member-info')).data.members.some(m => m.id === 'manager'), 'the manager row is not in member-info');
+    equal((await fresh('member-info')).status, 403, 'member-info: a plain member gets 403');
+    equal((await guest('member-info')).status, 403, 'member-info: a guest gets 403');
+    equal((await manager('member-info')).status, 403, 'member-info: the manager uses manage/info');
+    await manager(`manage/info-grants/${admin.id}`, 'PUT', { fields: [] });
+    equal((await adm('member-info')).status, 403, 'the grant removed: 403 at once');
+    await manager(`manage/info-grants/${admin.id}`, 'PUT', { fields: ['email'] });
+    equal(Object.keys((await adm('member-info')).data.members[0]).sort(), ['email', 'id', 'nickname', 'role'], 'a new grant: the email column only');
+    const gradeId = sql(`SELECT id FROM user_grades WHERE user_id='${admin.id}' AND grade='admin'`)[0].id;
+    equal((await manager(`manage/users/${admin.id}/grades/${gradeId}`, 'DELETE')).status, 200, 'the manager ends the 관리자 grade');
+    equal((await adm('member-info')).status, 403, 'the 관리자 grade ended: 403 with the grant still stored');
+    equal((await adm('auth/me')).data.infoFields, undefined, 'and auth/me names no fields');
+}
+
+// 만 14세: a new Naver account whose 출생연도 is less than 14 years before this KST year cannot sign up.
+{
+    const young = await naverLogin(browser(), `${NAVER('y')}|-|${kstYear - 13}`);
+    equal(young.location, '/naver?error=age', 'a new Naver account under 14 by 출생연도 is refused');
+    check(!young.cookies.some(c => c.startsWith('zg_naver_pending=') && !c.startsWith('zg_naver_pending=;')), 'no pending sign-up for it');
+    equal((await naverLogin(browser(), `${NAVER('y2')}|-|${kstYear - 14}`)).location, '/naver', '14 this year goes on to 가입 마무리');
+    equal((await naverLogin(browser(), `${NAVER('y3')}|-|-`)).location, '/naver', 'without a 출생연도 the sign-up goes on');
+    equal((await naverLogin(browser(), `${NAVER('y4')}|-|20x1`)).location, '/naver', 'a malformed 출생연도 counts as none');
+}
+
+// MANAGER_PHONE: the Naver account with the manager's number signs in as the manager; its Naver id moves to the
+// manager row, taken off a member who had it.
+if (managerPhone) {
+    const mq = browser();
+    await naverLogin(mq, NAVER('mq'));
+    const had = (await mq('auth/naver/finish', 'POST', { nickname: '번호매' + run, agree: true, age14: true })).data.user;
+    const dashed = managerPhone.replace(/^(\d{3})(\d{3,4})(\d{4})$/, '$1-$2-$3');
+    const b = browser();
+    const cb = await naverLogin(b, `${NAVER('mq')}|${dashed}`, '/manage/info');
+    equal([cb.status, cb.location], [302, '/manage/info'], 'the MANAGER_PHONE Naver account goes straight to next');
+    check(cb.cookies.some(c => c.startsWith('zg_session=')), 'with a session');
+    equal((await b('auth/me')).data.user?.id, 'manager', 'signed in as the manager account');
+    const rows = Object.fromEntries(sql(`SELECT id,naver_id,phone_hash,pii FROM users WHERE id IN ('manager','${had.id}')`).map(r => [r.id, r]));
+    check(rows.manager.naver_id === NAVER('mq') && /^[0-9a-f]{64}$/.test(rows.manager.phone_hash) && !!rows.manager.pii, 'the manager row has the Naver id, the number hash and the 회원 정보');
+    equal(rows[had.id].naver_id, null, 'the member who had that Naver id lost it (the unique index holds)');
+    equal((await b('me/info')).data.info.phone, managerPhone, "the manager's own 회원 정보");
+    const other = await naverLogin(browser(), `${NAVER('mp')}|${managerPhone}`);
+    equal(other.location, '/', 'another Naver account with the number signs in as the manager too');
+    equal(sql("SELECT naver_id FROM users WHERE id='manager'")[0].naver_id, NAVER('mp'), 'and the manager row now has that Naver id');
+    equal((await naverLogin(browser(), `${NAVER('mz')}|01000000000`)).location, '/naver', 'another number takes the normal sign-up');
+}
+
+// Nothing from Naver is stored in plain text: no access or refresh token, no profile field (raw database files).
+// And no response outside the three 회원 정보 routes carried a value, after all of the above.
+{
+    const values = [MOCK_PROFILE.name, MOCK_PROFILE.email, '"birthyear"', digits, mockMobile(NAVER('n')), ...managerPhone ? [managerPhone] : []];
+    equal(outside().filter(s => values.some(v => s.text.includes(v))).map(s => s.p), [], `no other response carries a 회원 정보 value (${outside().length} responses)`);
+    check(seen.some(s => s.p.startsWith('/api/me/info')) && seen.some(s => s.p.startsWith('/api/member-info')) && seen.some(s => s.p.startsWith('/api/manage/info')), 'the three 회원 정보 routes were read');
     const { log } = await (await fetch(mock + '/__log')).json();
     const tokens = log.filter(e => e.access).flatMap(e => [e.access, e.refresh]);
     check(tokens.length >= 8, `the mock handed out tokens (${tokens.length})`);
@@ -354,9 +448,10 @@ const manager = browser();
     walk(path.join(root, persist, 'v3', 'd1'));
     const bytes = files.map(f => readFileSync(f));
     check(bytes.some(b => b.includes(Buffer.from(NAVER('n')))), 'the search reaches the stored rows (a naver_id is found)');
-    const numbers = [NAVER('n'), NAVER('race')].map(mockMobile).flatMap(m => [m, m.replace(/-/g, '')]);
-    const found = [...tokens, ...numbers, '홍길동목업', 'mock-user@naver.example', '네이버별명목'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
-    equal(found, [], `no token, phone number or Naver profile field in the D1 files (${files.length} files)`);
+    const numbers = [NAVER('n'), NAVER('race'), NAVER('ad')].map(mockMobile).flatMap(m => [m, m.replace(/-/g, '')]);
+    if (managerPhone) numbers.push(managerPhone);
+    const found = [...tokens, ...numbers, MOCK_PROFILE.name, MOCK_PROFILE.email, MOCK_PROFILE.nickname, '"birthyear"'].filter(t => bytes.some(b => b.includes(Buffer.from(t))));
+    equal(found, [], `no token, phone number or Naver profile field in plain text in the D1 files (${files.length} files)`);
 }
 
 // 회원 탈퇴 frees the Naver account, which may then sign up again.
@@ -364,11 +459,14 @@ const manager = browser();
     const w = browser();
     await naverLogin(w, NAVER('x'));
     const joined = await w('auth/naver/finish', 'POST', { nickname: '탈퇴할' + run, agree: true, age14: true });
+    await manager(`manage/users/${joined.data.user.id}/grades`, 'POST', { grade: 'admin', plan: 'permanent' });
+    equal((await manager(`manage/info-grants/${joined.data.user.id}`, 'PUT', { fields: ['name'] })).status, 200, 'a 관리자 with a grant about to withdraw');
+    check(!!sql(`SELECT pii FROM users WHERE id='${joined.data.user.id}'`)[0].pii, 'the 회원 정보 is stored at 가입 마무리');
     equal((await w('auth/withdraw', 'POST', { confirm: '회원' })).status, 400, 'withdraw needs the confirm text');
     equal((await w('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'the member withdraws');
     equal(sql(`SELECT naver_id FROM users WHERE id='${joined.data.user.id}'`)[0].naver_id, null, 'the Naver link is removed');
     equal((await naverLogin(browser(), NAVER('x'))).location, '/naver', 'the same Naver account goes to 가입 마무리 again');
-    equal(sql(`SELECT phone_hash FROM users WHERE id='${joined.data.user.id}'`)[0].phone_hash, null, 'the phone hash is removed');
+    equal(sql(`SELECT phone_hash,pii,(SELECT COUNT(*) FROM pii_grants WHERE user_id=users.id) AS grants FROM users WHERE id='${joined.data.user.id}'`)[0], { phone_hash: null, pii: null, grants: 0 }, 'the phone hash, the 회원 정보 and the 열람 권한 are removed');
     equal((await naverLogin(browser(), NAVER('x2') + '|' + mockMobile(NAVER('x')))).location, '/naver', 'another Naver account with that number may sign up after the withdrawal');
 }
 
@@ -380,14 +478,44 @@ const manager = browser();
     check(join.includes('만 14세 이상입니다') && join.includes("'auth/naver/finish', 'POST', { nickname, agree, age14 }") && join.includes('!agree || !age14'), '가입 마무리 has the 만 14세 이상 box and sends age14');
     check(join.includes("'auth/naver/link', 'POST', { username, password, age14 }") && join.includes('!age14 || !username.trim()'), '기존 계정 연결 has the box too and sends age14');
     check(join.includes('href="/privacy"') && join.includes('{PROXY_RULE}'), '가입 마무리 links the 개인정보 처리방침 and states the 대리 게임 rule');
+    check(join.includes('{NAVER_INFO_RULE}') && join.includes('회원이름·연락처 이메일·출생연도·휴대전화번호를 받아 암호화해 저장합니다') && join.includes("age: '만 14세 미만은 가입할 수 없습니다.'"), '가입 마무리 says what Naver info is kept and why; /naver?error=age has its line');
     check(app.includes("page === 'privacy' ? <Privacy />") && app.includes('<Link to="/privacy">개인정보 처리방침</Link>'), '/privacy is a route with a footer link');
     const out = await build({ configFile: false, logLevel: 'silent', root, build: { lib: { entry: 'tests/fixtures/privacy-render.ts', formats: ['es'], fileName: 'privacy' }, write: false, minify: false } });
     const { html } = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(out) ? out[0] : out).output[0].code).toString('base64'));
     check(html.startsWith('<div class="container page guide privacy"><h1 class="page-title">개인정보 처리방침</h1>'), '/privacy renders its title');
-    for (const part of ['회원 식별값(id)과 휴대전화번호', '해시값만 저장합니다', '이름, 이메일, 별명, 프로필 사진, 생일, 출생연도, 성별은 사용하지 않고 저장하지 않습니다',
+    for (const part of ['회원 식별값(id)과 회원이름, 연락처 이메일, 출생연도, 휴대전화번호', '암호화해 저장하고', '중복 가입을 막기 위해 비밀 키로 만든 해시값도 저장합니다', '별명, 프로필 사진, 성별, 생일은 받지 않고 저장하지 않습니다',
+        '본인 확인과 거래 분쟁 시 연락', '출생연도: 만 14세 미만 가입 제한', '인증/등급 신청 때 신청한 회원 본인인지 확인', '매니저가 지정한 관리자 등급 회원(매니저가 지정한 항목만',
+        '암호화해 저장한 회원이름·연락처 이메일·출생연도·휴대전화번호', '관리자에게 준 회원 정보 열람 권한',
         '요청 횟수 제한', '회원 탈퇴 때 바로 지우는 정보', '탈퇴 후에도 남는 정보', '다른 회사나 개인에게 제공하지 않습니다', 'Cloudflare, Inc. (미국)',
-        '만 14세 미만은 가입할 수 없습니다', '가입 마무리와 기존 계정 연결에서', '네이버에서 받은 휴대전화번호', '채팅 메시지이므로 적은 그대로 저장됩니다',
+        '만 14세 미만은 가입할 수 없습니다', '가입 마무리와 기존 계정 연결에서', '네이버에서 받은 출생연도', '채팅 메시지이므로 적은 그대로 저장됩니다',
         '비밀번호 찾기 요청', '자주 쓰는 문구와 자동 응답 문구', '이용 정지 기록', '매니저에게 채팅으로', '시행일: 2026년 10월 22일']) check(html.includes(part), `/privacy says: ${part}`);
+}
+
+// 계정 정리 (0066_account_reset.sql), applied again here as the migration runs it: an account without a Naver link
+// goes with its post and chat, the manager keeps only its row, role, username and password, and Naver members,
+// notices and settings stay.
+{
+    const gone = { id: `nv-reset-${run}`, conv: `cv-reset-${run}` }, now = Date.now();
+    const own = await manager('posts', 'POST', { kind: 'sell', category: 'other', title: `[QA] 매니저 정리 ${run}`, body: '자동 검증', price: 10000, accepts_offers: true, status: 'open', tags: [], images: [], details: {} });
+    equal(own.status, 201, 'the manager has a post before the reset');
+    sql(`INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${gone.id}','nvreset_${run}','정리${run}','','','member','소개',${now});
+        INSERT INTO posts(author_id,kind,title,body,price,status,category,created_at,updated_at) VALUES('${gone.id}','sell','[QA] 정리 ${run}','자동 검증',1000,'open','other',${now},${now});
+        INSERT INTO conversations(id,user_a,user_b,created_at,updated_at) VALUES('${gone.conv}','${gone.id}','${member.id}',${now},${now});
+        INSERT INTO messages(conversation_id,sender_id,body,created_at) VALUES('${gone.conv}','${member.id}','정리 전 메시지',${now}),('${gone.conv}','${gone.id}','정리 전 답장',${now});
+        UPDATE users SET bio='정리 전 소개',avatar_thumb='data:image/webp;base64,AAAA' WHERE id='manager'`);
+    const before = sql("SELECT password_hash,(SELECT COUNT(*) FROM notices) AS notices,(SELECT COUNT(*) FROM settings) AS settings FROM users WHERE id='manager'")[0];
+    sql(readFileSync(path.join(root, 'migrations/0066_account_reset.sql'), 'utf8').replace(/^--.*$/gm, '').trim());
+    const after = sql(`SELECT (SELECT COUNT(*) FROM users WHERE id='${gone.id}') AS account,(SELECT COUNT(*) FROM posts WHERE author_id IN ('${gone.id}','manager')) AS posts,
+        (SELECT COUNT(*) FROM conversations WHERE id='${gone.conv}' OR user_a='manager' OR user_b='manager') AS chats,(SELECT COUNT(*) FROM messages WHERE conversation_id='${gone.conv}') AS messages,
+        (SELECT COUNT(*) FROM users WHERE naver_id IS NULL AND role!='manager') AS unlinked,(SELECT COUNT(*) FROM sessions WHERE user_id='manager') AS sessions`)[0];
+    equal(after, { account: 0, posts: 0, chats: 0, messages: 0, unlinked: 0, sessions: 0 }, 'the unlinked account, its post and chat, and the manager\'s posts, chats and sessions are gone');
+    equal(sql("SELECT username,role,password_hash,bio,avatar_thumb,naver_id,phone_hash,pii FROM users WHERE id='manager'")[0],
+        { username: 'sosirusok', role: 'manager', password_hash: before.password_hash, bio: '', avatar_thumb: null, naver_id: null, phone_hash: null, pii: null }, 'the manager row keeps its username, role and password; the rest is cleared');
+    equal(sql(`SELECT COUNT(*) AS n FROM users WHERE id IN ('${member.id}','${olds[0].id}') AND naver_id IS NOT NULL AND pii IS NOT NULL`)[0].n, 2, 'members with a Naver link stay, with their 회원 정보');
+    equal(sql('SELECT (SELECT COUNT(*) FROM notices) AS notices,(SELECT COUNT(*) FROM settings) AS settings')[0], { notices: before.notices, settings: before.settings }, 'notices and settings stay');
+    equal((await fresh('auth/me')).data.user?.id, member.id, 'a Naver member stays signed in');
+    equal((await manager('auth/me')).data.user, null, 'the manager is signed out');
+    equal((await browser()('auth/manager-login', 'POST', { username: 'sosirusok', password: managerPassword })).status, 200, 'the manager password still signs in');
 }
 
 sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");

@@ -26,8 +26,14 @@ interface Env {
     NAVER_CLIENT_SECRET?: string;
     // Optional: the Callback URL registered at 네이버 개발자센터, when it is not <request origin>/api/auth/naver/callback.
     NAVER_REDIRECT_URI?: string;
-    // Keys users.phone_hash (같은 휴대전화번호 중복 가입 방지). Set once; changing it stops older hashes matching.
+    // Keys users.phone_hash (같은 휴대전화번호 중복 가입 방지) and, through HKDF (info 'zg-pii-v1'), the AES-GCM key of
+    // users.pii (네이버 회원 정보, worker/pii.ts). Set once; changing it stops older hashes matching and older 회원
+    // 정보 opening (each member's is written again at the next Naver login).
     PHONE_HASH_KEY?: string;
+    // The manager's mobile number as digits (01012345678): the Naver account with that number signs in as the
+    // manager account (worker/naver.ts callback). Optional; without it the manager links Naver in 설정 or uses
+    // /manager-login.
+    MANAGER_PHONE?: string;
     // Test only: with TEST_HOOKS=on, requests to 127.0.0.1 or localhost send the token call to NAVER_AUTH_BASE
     // and the profile call to NAVER_API_BASE (tests/fixtures/naver-mock.mjs). Set by scripts/test-local.mjs only.
     NAVER_AUTH_BASE?: string;
