@@ -17,7 +17,7 @@ import { countFetch, localRequest } from './meter';
 //        a linked member: signed in, 302 to next; the manager's link=1: naver_id set, 302 to next;
 //        a new Naver account: the signed pending cookie, 302 to /naver (가입 마무리)
 //   GET  auth/naver/pending                    whether the 가입 마무리 screen has a pending Naver sign-in
-//   POST auth/naver/finish {nickname, agree}   creates the member (no password), 플러스 체험 as sign-up did
+//   POST auth/naver/finish {nickname, agree, age14}  creates the member (no password), 플러스 체험 as sign-up did
 //   POST auth/naver/link {username, password}  기존 계정 연결: links an old ID/password account once
 //
 // Errors on the redirect paths go to /naver?error=<code>; the screen shows NAVER_ERRORS[code].
@@ -29,6 +29,7 @@ export const NAVER_MOVED = '네이버 로그인으로 바뀌었습니다.';
 const PENDING_GONE = '네이버 로그인 시간이 지났습니다. 다시 로그인해 주세요.';
 const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네이버를 연결해 주세요.';
 export const PHONE_TAKEN = '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.';
+export const AGE_REQUIRED = '만 14세 이상만 가입할 수 있습니다.';
 
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
@@ -220,6 +221,9 @@ async function finish(req: Request, signUpTrial: (id: string, ip: string, at: nu
     const ip = await ipOf(req);
     await limit('auth-ip:' + ip, 40, 600000);
     if (b.agree !== true) fail(400, '이용 규칙에 동의해 주세요.');
+    // 만 14세 미만은 가입할 수 없습니다 (개인정보 처리방침): the member confirms it on 가입 마무리. 기존 계정 연결 does
+    // not ask again (that account already exists).
+    if (b.age14 !== true) fail(400, AGE_REQUIRED);
     const nickname = nicknameField(b.nickname), key = nicknameKey(nickname);
     await assertNicknameFree(nickname, '');
     await initManager();

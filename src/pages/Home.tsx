@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronRight, Gift, Search, X } from 'lucide-react';
-import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type Post, type TradeKind } from '../../shared/market';
+import { KIND_ICONS, KIND_NAMES, TRADE_KINDS, categoriesForKind, dateText, type BoardKind, type Post } from '../../shared/market';
 import { AD_TEXT, TRIAL_KEEPS, gradeInfo } from '../../shared/membership';
 import { api } from '../lib/api';
 import { Link, navigate, withParams } from '../lib/router';
@@ -14,12 +14,12 @@ import { HomeAdCard, type CardItem } from '../components/HomeAdCard';
 type Notice = { id: number; title: string; created_at: number };
 
 // card: the bottom card's items (WP66: ad posts and 엘리트·관리자 providers); cardAds the posts alone.
-type HomeData = { shelves: Record<'sell' | 'buy' | 'proxy_offer', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; card?: CardItem[]; notices: Notice[] };
+type HomeData = { shelves: Record<'sell' | 'buy' | 'exchange', Post[]>; sellCategory: string; ads: Post[]; cardAds?: Post[]; card?: CardItem[]; notices: Notice[] };
 
 // One shelf of the home page. Its first posts come with GET /api/home; a category chip (판매) asks
 // the board list for that category.
-function Shelf({ title, kind, withCategories = false, empty, initial, initialCategory }: { title: string; kind: TradeKind; withCategories?: boolean; empty: string; initial: Post[] | null; initialCategory?: string }) {
-    const { requireLogin, openApply } = useApp();
+function Shelf({ title, kind, withCategories = false, empty, initial, initialCategory }: { title: string; kind: BoardKind; withCategories?: boolean; empty: string; initial: Post[] | null; initialCategory?: string }) {
+    const { requireLogin } = useApp();
     const [category, setCategory] = useState(withCategories ? initialCategory || categoriesForKind(kind)[0].id : '');
     const [picked, setPicked] = useState<{ category: string; posts: Post[] | null } | null>(null);
     useEffect(() => {
@@ -42,10 +42,7 @@ function Shelf({ title, kind, withCategories = false, empty, initial, initialCat
         {withCategories && <div className="chip-scroll shelf-chips">{categoriesForKind(kind).map(c => <button key={c.id} type="button" className="chip chip-sm" aria-pressed={category === c.id} onClick={() => pick(c.id)}>{c.name}</button>)}</div>}
         {posts === null ? <div className="card-grid">{[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 190 }} />)}</div>
             : posts.length ? <div className="card-grid">{posts.map(p => <MiniCard key={p.id} post={p} />)}</div>
-            : <div className="shelf-empty"><p>{empty}</p><button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(u => {
-                if (kind === 'proxy_offer' && u.role !== 'manager' && !u.badges.includes('proxy')) openApply({ kind: 'badge', target: 'proxy' });
-                else void navigate(withParams('/write', { kind, category }));
-            })}>글쓰기</button></div>}
+            : <div className="shelf-empty"><p>{empty}</p><button type="button" className="btn btn-line btn-sm" onClick={() => requireLogin(() => void navigate(withParams('/write', { kind, category })))}>글쓰기</button></div>}
     </section>;
 }
 
@@ -98,7 +95,7 @@ export function Home() {
         // Only the latest request may fill the page.
         const n = ++requests.current;
         api<HomeData>('home').then(d => { if (n === requests.current) setHome(d); })
-            .catch(() => { if (n === requests.current) setHome({ shelves: { sell: [], buy: [], proxy_offer: [] }, sellCategory: '', ads: [], notices: [] }); });
+            .catch(() => { if (n === requests.current) setHome({ shelves: { sell: [], buy: [], exchange: [] }, sellCategory: '', ads: [], notices: [] }); });
     }, [viewer]);
     const notices = home?.notices || [];
     const search = (e: FormEvent) => { e.preventDefault(); void navigate(withParams('/trade', { q: q.trim() })); };
@@ -124,7 +121,7 @@ export function Home() {
         </section>
 
         <div className="container">
-            {/* The five boards as one segmented bar over the band's lower edge. */}
+            {/* The three boards as one segmented bar over the band's lower edge. */}
             <nav className="quick-row" aria-label="거래 종류">
                 {TRADE_KINDS.map(kind => <Link key={kind} to={withParams('/trade', { kind })} className="quick-item"><Icon name={KIND_ICONS[kind]} size={24} /><span>{KIND_NAMES[kind]}</span></Link>)}
             </nav>
@@ -153,7 +150,7 @@ export function Home() {
             <EliteShelf posts={home?.ads || []} />
             <Shelf key={'sell' + (home ? 1 : 0)} title="판매 최신글" kind="sell" withCategories empty="등록된 글이 없습니다." initial={home?.shelves.sell ?? null} initialCategory={home?.sellCategory} />
             <Shelf title="구매 최신글" kind="buy" empty="등록된 글이 없습니다." initial={home?.shelves.buy ?? null} />
-            <Shelf title="대리(진행) 최신글" kind="proxy_offer" empty="등록된 글이 없습니다." initial={home?.shelves.proxy_offer ?? null} />
+            <Shelf title="교환 최신글" kind="exchange" empty="등록된 글이 없습니다." initial={home?.shelves.exchange ?? null} />
 
             <section className="section">
                 <div className="section-head"><h2 className="section-title">공지사항</h2><Link to="/guide" className="more-link">더보기<ChevronRight size={16} /></Link></div>

@@ -1,5 +1,5 @@
 import { db, fail, requireUser, requireManager, json, body, textField, memberColumns, paidRankSql, withMember, isSuspended, MANAGER_ID, WITHDRAWN_NAME } from './http';
-import { REPORT_REASONS } from '../shared/market';
+import { REPORT_REASONS, isRetiredKind } from '../shared/market';
 import { REPORT_DEMOTE, URGENT_REPORT_REASONS, kstDayStart, reportOrder } from '../shared/membership';
 import { decorate, endOffersStatements, parse, postSelect, OFFERS_HIDDEN_TEXT } from './posts';
 import { ensureChat, messageStatements } from './chat';
@@ -117,8 +117,10 @@ export async function manageHandler(req: Request, p: string[], url: URL): Promis
         const b = await body(req), hidden = b.hidden ? 1 : 0, reason = hidden && typeof b.reason === 'string' ? b.reason : '';
         if (reason && !(REPORT_REASONS as readonly string[]).includes(reason)) fail(400, '숨김 사유를 확인해 주세요.');
         if (typeof b.postId !== 'number' && typeof b.postId !== 'string') fail(404, '게시글을 찾을 수 없습니다.');
-        const post = await db().prepare('SELECT p.id,p.author_id,p.title,p.hidden,p.hidden_reason,u.deleted_at FROM posts p JOIN users u ON u.id=p.author_id WHERE p.id=?').bind(b.postId).first<any>();
+        const post = await db().prepare('SELECT p.id,p.author_id,p.title,p.kind,p.hidden,p.hidden_reason,u.deleted_at FROM posts p JOIN users u ON u.id=p.author_id WHERE p.id=?').bind(b.postId).first<any>();
         if (!post) fail(404, '게시글을 찾을 수 없습니다.');
+        // A post of a retired kind (대리, 0064) stays hidden.
+        if (!hidden && isRetiredKind(post.kind)) fail(409, '대리 글은 다시 공개할 수 없습니다.');
         // A post hidden by 회원 탈퇴 stays hidden, and its '탈퇴' reason is never overwritten.
         if (post.deleted_at || post.hidden_reason === '탈퇴') fail(409, '탈퇴한 회원의 글입니다.');
         const now = Date.now();

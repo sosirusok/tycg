@@ -105,13 +105,13 @@ const seed = `
 -- 50 authors (1-50) and 300 chat partners (51-350).
 ${seq(350)} INSERT INTO users(id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at)
 SELECT 'bud-${run}-'||i,'bud_${run}_'||i,'bud${run}n'||i,'bud${run}n'||i,'','','member','',${now} FROM n;
--- The authors hold 대리 인증, as every 대리(진행) author does.
-INSERT INTO user_badges(user_id,badge,granted_by,granted_at) SELECT id,'proxy','manager',${now} FROM users WHERE id LIKE 'bud-${run}-%' AND CAST(substr(id,${`bud-${run}-`.length + 1}) AS INTEGER)<=50;
 -- 20,000 posts: every 50th is the seller's; bumped 0-89 days ago, so about a third are in the 30-day window.
-${seq(20000)} INSERT INTO posts(author_id,kind,title,body,price,status,created_at,updated_at,category,price_mode,details,images,bumped_at,title_key)
+-- The two 대리 kinds (8,000 posts) are hidden as 0064_proxy_closed leaves them: still in the table, on no list.
+${seq(20000)} INSERT INTO posts(author_id,kind,title,body,price,status,created_at,updated_at,category,price_mode,details,images,bumped_at,title_key,hidden,hidden_reason)
 SELECT CASE WHEN i%50=0 THEN '${sellerId}' ELSE 'bud-${run}-'||(i%50) END,${kinds},'[budget] ${run} '||i,'budget',12345,
     CASE WHEN i%7=0 THEN 'closed' WHEN i%11=0 THEN 'reserved' ELSE 'open' END,
-    ${now}-(i%90)*${DAY}-i*1000,${now}-(i%90)*${DAY}-i*1000,${category},'fixed','{}','[]',${now}-(i%90)*${DAY}-i*1000,'budget ${run} '||i FROM n;
+    ${now}-(i%90)*${DAY}-i*1000,${now}-(i%90)*${DAY}-i*1000,${category},'fixed','{}','[]',${now}-(i%90)*${DAY}-i*1000,'budget ${run} '||i,
+    CASE WHEN i%5 IN (3,4) THEN 1 ELSE 0 END,CASE WHEN i%5 IN (3,4) THEN '대리 카테고리 종료' ELSE '' END FROM n;
 -- Three featured sale posts (none on the other tabs).
 UPDATE posts SET featured_at=${now} WHERE author_id='${sellerId}' AND kind='sell' AND status='open' AND id IN (SELECT id FROM posts WHERE author_id='${sellerId}' AND kind='sell' AND status='open' ORDER BY bumped_at DESC LIMIT 3);
 -- 2,000 favorites from the partners.
@@ -197,7 +197,8 @@ atMost(one.rows, 300, 'GET posts/<id> rows read');
 
 // One home request: shelves, 엘리트 매물 and notices.
 const home = await guest('home');
-equal([home.status, ...['sell', 'buy', 'proxy_offer'].map(k => Array.isArray(home.data.shelves[k]))], [200, true, true, true], 'GET /api/home returns the three shelves');
+equal([home.status, ...['sell', 'buy', 'exchange'].map(k => Array.isArray(home.data.shelves[k]))], [200, true, true, true], 'GET /api/home returns the three shelves (판매, 구매, 교환)');
+check(!('proxy_offer' in home.data.shelves), 'GET /api/home has no 대리(진행) shelf');
 check(home.data.shelves.sell.length === 6 && home.data.shelves.sell.every(p => p.status !== 'closed' && p.bumped_at > Date.now() - 30 * DAY), 'a shelf holds 6 active posts of the last 30 days');
 check(Array.isArray(home.data.ads) && Array.isArray(home.data.notices) && home.data.notices.length <= 4, 'GET /api/home returns 엘리트 매물 and at most 4 notices');
 atMost(home.rows, 400, 'GET /api/home rows read');

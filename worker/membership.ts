@@ -10,7 +10,7 @@ import { adFillStatement } from './ads';
 import { vapidPublicKey } from './push';
 import { naverReady } from './naver';
 import {
-    AUTO_TEXT, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
+    AUTO_TEXT, BADGES, EARN_DEFAULTS, EARN_MAX, GRADES, PERKS, PROVIDER_TEXT, PURCHASABLE_GRADES, addMonths, applicationTitle, badgeInfo, canProvide, gradeInfo, isBadge, isGrade, isProviderType, planInfo,
     type ApplicationKind, type BadgeId, type Earn, type GradeId, type PlanId, type TrialState,
 } from '../shared/membership';
 import { FEATURE_TAG_MAX, SUSPEND_DAYS, SUSPEND_FOREVER, normalizeTag, suspendDaysLabel, type User } from '../shared/market';
@@ -182,6 +182,8 @@ const grantLine = (grade: string, expires: number | null, bumpMax: number) =>
 // The status change carries a new decision id. The grant and the chat message are
 // guarded by that id, so when two decisions overlap only the first one takes effect.
 async function decide(u: User, app: any, action: 'approve' | 'reject', note: string) {
+    // An application for a badge that ended (대리 인증, 2026-10-22) can only be rejected.
+    if (action === 'approve' && app.kind === 'badge' && !isBadge(app.target)) fail(409, '종료된 인증은 지급할 수 없습니다.');
     const now = Date.now(), decision = crypto.randomUUID(), args = [app.id, decision];
     // An approved grade is granted in the same batch, so the application changes only while the
     // grant's precondition holds too; otherwise nothing is written and the manager tries again.
@@ -350,7 +352,7 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
         const filter = url.searchParams.get('filter');
         const where: string[] = [], values: any[] = [];
         if (q) { where.push('(instr(lower(u.nickname),lower(?))>0 OR instr(lower(u.username),lower(?))>0)'); values.push(q, q); }
-        if (filter === 'badged') where.push('EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id)');
+        if (filter === 'badged') where.push(`EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id AND b.badge IN (${BADGES.map(x => `'${x.id}'`).join(',')}))`);
         if (filter === 'graded') where.push("EXISTS(SELECT 1 FROM user_grades g WHERE g.user_id=u.id AND (g.expires_at IS NULL OR g.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)))");
         const r = await db().prepare(`SELECT u.id,u.username,u.nickname,u.role,u.created_at,u.suspended_until,${memberColumns('u')},(SELECT COUNT(*) FROM posts WHERE author_id=u.id) AS postCount FROM users u ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY u.created_at DESC LIMIT 100`).bind(...values).all();
         return json({ users: r.results.map(({ suspended_until, ...row }: any) => ({ ...withMember(row), suspended: isSuspended(suspended_until) })) });
@@ -373,7 +375,8 @@ export async function manageMembers(req: Request, u: User, p: string[], url: URL
             // 네이버 로그인: only whether a Naver account is linked, never its id.
             user.naver = !!user.naver;
             if (!isSuspended(user.suspended_until)) { user.suspended_until = null; user.suspend_reason = ''; }
-            return json({ user, grants: grants.results, badges: badges.results, applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results), tradeCounts: tradeCounts.results[0] });
+            // The rows of a badge that ended (대리 인증) stay in the table as the record, but are not sent.
+            return json({ user, grants: grants.results, badges: (badges.results as { badge: string }[]).filter(x => isBadge(x.badge)), applications: apps.results, sanctions: sanctions.results, trades: memberTrades(trades.results), tradeCounts: tradeCounts.results[0] });
         }
         // 이용 정지 {days: 3|7|30|0 (영구) | null (해제), reason}. The manager is never suspended. The member
         // hears about it in their chat with the manager, best-effort: a member who blocked the manager

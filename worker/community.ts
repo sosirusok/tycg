@@ -1,5 +1,5 @@
 import { db, fail, requireUser, requireActive, json, body, limit, textField, memberColumns, withMember } from './http';
-import { MEMBER_REPORT_REASONS, isTradeKind, priceText, type User } from '../shared/market';
+import { MEMBER_REPORT_REASONS, isKnownKind, priceText, type User } from '../shared/market';
 import { amount, parse, visiblePost } from './posts';
 import { blocked, ensureChat, guardedMessageStatements } from './chat';
 import { searchesHandler } from './alerts';
@@ -31,7 +31,8 @@ export async function communityHandler(req: Request, p: string[]): Promise<Respo
         // replace each other) and one per post being edited (its id). 'new' is the single slot of earlier
         // versions, still read and removed.
         const key = p[1] || '';
-        if (!/^(new|\d{1,12})$/.test(key) && !(key.startsWith('new-') && isTradeKind(key.slice(4)))) fail(400, '임시저장 위치를 확인해 주세요.');
+        // A draft of a retired board ('new-proxy_offer') can still be read and removed.
+        if (!/^(new|\d{1,12})$/.test(key) && !(key.startsWith('new-') && isKnownKind(key.slice(4)))) fail(400, '임시저장 위치를 확인해 주세요.');
         if (method === 'GET') {
             const d = await db().prepare('SELECT content,updated_at FROM drafts WHERE user_id=? AND draft_key=?').bind(u.id, key).first<any>();
             return json({ draft: d ? { ...parse(d.content, {}), savedAt: d.updated_at } : null });

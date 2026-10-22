@@ -132,11 +132,24 @@ for (const q of ['냥예', '냥예슬', '냥슬']) {
 check((await search('냥준호')).includes(junho.data.id), 'q=냥준호 finds 냥냥 김준호');
 check((await search('홍매화')).includes(plum.data.id), 'q=홍매화 finds 홍매화 정예슬');
 
-// Badges read 본인 인증, 대리 인증, 신용인 in that order whatever the grant order.
-for (const badge of ['proxy', 'identity']) {
+// Badges read 본인 인증, 신용인 in that order whatever the grant order. 대리 인증 ended (2026-10-22).
+for (const badge of ['credit', 'identity']) {
     equal((await manager(`manage/users/${me.id}/badges`, 'POST', { badge, active: true })).status, 200, `manager grants ${badge}`);
 }
-equal((await guest('users/' + me.id)).data.user.badges, ['identity', 'proxy'], 'profile lists badges as identity, proxy');
+equal((await guest('users/' + me.id)).data.user.badges, ['identity', 'credit'], 'profile lists badges as identity, credit');
+const proxyGrant = await manager(`manage/users/${me.id}/badges`, 'POST', { badge: 'proxy', active: true });
+equal([proxyGrant.status, proxyGrant.data.error], [400, '인증 종류를 확인해 주세요.'], 'the manager cannot grant 대리 인증 any more');
+
+// 대리 (2026-10-22): the guide says why, without the old 'and 대리' wording, and the editor and boards no longer offer it.
+{
+    const src = async name => readFile(new URL(`../${name}`, import.meta.url), 'utf8');
+    const guide = await src('src/pages/Guide.tsx'), market = await src('shared/market.ts');
+    check(guide.includes('계정 거래는 <a') && !guide.includes('계정 거래와 대리는'), 'the guide line is about 계정 거래 only');
+    check(guide.includes('{PROXY_RULE}') && market.includes("PROXY_RULE = '대리 게임(대신 플레이해 주는 거래)과 그 알선은 게임산업법으로 금지되어 있어 글을 쓸 수 없습니다.'"), 'the guide states the 대리 게임 rule');
+    check(market.includes("TRADE_KINDS: BoardKind[] = ['buy', 'sell', 'exchange'];"), 'the boards are 구매, 판매, 교환 only');
+    check(market.includes("'대리 게임·알선'"), "'대리 게임·알선' is a 신고 사유");
+    check(!(await src('index.html')).includes('대리') && !(await src('public/manifest.webmanifest')).includes('대리'), 'the page description and the app manifest do not name 대리');
+}
 
 for (const id of [post.data.id, moved.data.id, unlinked.data.id, yeseul.data.id, junho.data.id, plum.data.id]) {
     equal((await member('posts/' + id, 'DELETE')).status, 200, `test post ${id} removed`);

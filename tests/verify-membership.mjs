@@ -54,9 +54,11 @@ equal(config.status, 200, 'config is public');
 equal(config.data.manager?.id, 'manager', 'config names the manager for application chats');
 check(Number.isInteger(config.data.latestSeason) && config.data.latestSeason >= 32, 'config has the latest ladder season');
 
+// 대리(구함)·대리(진행) and 대리 인증 ended (2026-10-22).
 const proxyPost = { kind: 'proxy_offer', category: 'ladder', title: `[QA] 대리 ${run}`, body: '자동 검증용 게시글입니다.', price: 30000, status: 'open', tags: [], images: [], details: {} };
-equal((await applicant('posts', 'POST', proxyPost)).status, 403, '대리(진행) writing requires 대리 인증');
-equal((await applicant('posts', 'POST', { ...proxyPost, kind: 'proxy_request' })).status, 201, '대리(구함) stays open to everyone');
+equal((await applicant('posts', 'POST', proxyPost)).data.error, '대리 글은 더 이상 쓸 수 없습니다.', '대리(진행) writing is refused');
+equal((await applicant('posts', 'POST', { ...proxyPost, kind: 'proxy_request' })).status, 400, '대리(구함) too');
+const sale = { kind: 'sell', category: 'other', title: `[QA] 인증 판매 ${run}`, body: '자동 검증용 게시글입니다.', price: 30000, status: 'open', tags: [], images: [], details: {} };
 
 // Identity verification through the manager chat
 const apply = await applicant('applications', 'POST', { kind: 'badge', target: 'identity' });
@@ -106,24 +108,27 @@ messages = await applicant(`chats/${apply.data.chatId}/messages`);
 check(messages.data.messages.some(m => m.type === 'system' && m.body.includes('본인 인증')), 'approval notice in chat');
 equal((await applicant('applications', 'POST', { kind: 'badge', target: 'identity' })).status, 409, 'held badge cannot be re-requested');
 
-// 대리 인증: rejected, then approved
+// 대리 인증 is no longer offered.
 const proxyApp = await applicant('applications', 'POST', { kind: 'badge', target: 'proxy' });
-equal(proxyApp.status, 201, 'proxy application created');
-equal(proxyApp.data.chatId, apply.data.chatId, 'all applications share the manager chat');
-equal((await manager(`applications/${proxyApp.data.id}`, 'PATCH', { action: 'reject', note: '거래 내역 부족' })).status, 200, 'manager rejects');
+equal([proxyApp.status, proxyApp.data.error], [400, '신청할 인증을 선택해 주세요.'], 'a 대리 인증 application is refused');
+// 신용인: rejected, then approved
+const creditApp = await applicant('applications', 'POST', { kind: 'badge', target: 'credit' });
+equal(creditApp.status, 201, '신용인 application created');
+equal(creditApp.data.chatId, apply.data.chatId, 'all applications share the manager chat');
+equal((await manager(`applications/${creditApp.data.id}`, 'PATCH', { action: 'reject', note: '거래 내역 부족' })).status, 200, 'manager rejects');
 messages = await applicant(`chats/${apply.data.chatId}/messages`);
 check(messages.data.messages.some(m => m.type === 'system' && m.body.includes('거래 내역 부족')), 'rejection reason in chat');
-const proxyApp2 = await applicant('applications', 'POST', { kind: 'badge', target: 'proxy' });
-equal(proxyApp2.status, 201, 'new application after rejection');
-check(proxyApp2.data.id !== proxyApp.data.id, 'rejected application is not reused');
-equal((await manager(`applications/${proxyApp2.data.id}`, 'PATCH', { action: 'approve' })).status, 200, 'proxy approved');
-const proxyCreated = await applicant('posts', 'POST', proxyPost);
-equal(proxyCreated.status, 201, '대리(진행) allowed after 대리 인증');
-const listed = await guest('posts?kind=proxy_offer&category=ladder');
-const listedPost = listed.data.posts.find(p => p.id === proxyCreated.data.id);
-equal(listedPost?.author_badges, ['identity', 'proxy'], 'listing shows author badges in display order');
+const creditApp2 = await applicant('applications', 'POST', { kind: 'badge', target: 'credit' });
+equal(creditApp2.status, 201, 'new application after rejection');
+check(creditApp2.data.id !== creditApp.data.id, 'rejected application is not reused');
+equal((await manager(`applications/${creditApp2.data.id}`, 'PATCH', { action: 'approve' })).status, 200, '신용인 approved');
+const saleCreated = await applicant('posts', 'POST', sale);
+equal(saleCreated.status, 201, 'the verified member posts a sale');
+const listed = await guest('posts?kind=sell&category=other&q=' + run);
+const listedPost = listed.data.posts.find(p => p.id === saleCreated.data.id);
+equal(listedPost?.author_badges, ['identity', 'credit'], 'listing shows author badges in display order');
 equal(listedPost?.author_grade, 'normal', 'listing shows author grade');
-check((await guest('posts?kind=proxy_offer&badge=proxy')).data.posts.some(p => p.id === proxyCreated.data.id), 'filter by author badge');
+check((await guest('posts?kind=sell&badge=credit&q=' + run)).data.posts.some(p => p.id === saleCreated.data.id), 'filter by author badge');
 
 // Grades
 equal((await applicant('applications', 'POST', { kind: 'grade', target: 'plus', plan: '6m' })).status, 400, '플러스 is permanent only');

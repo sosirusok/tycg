@@ -47,7 +47,8 @@ const REQUIRED = [
     '등록 완료 · 끌올 1개 사용', '끌올이 없어 최근 끌올 글 아래에 등록했습니다.', '개 사용 · ', '이번 글은 끌올 1개', '남은 끌올 없음',
     '개까지 새 글로 올라가고, 그 뒤로는 끌올 1개씩 씁니다.',
     // Two states (WP43): each kind's labels, and 거래중/거래완료 on screens that mix kinds.
-    "'판매중'", "'판매완료'", "'구매중'", "'구매완료'", "'구하는중'", "'구함완료'", "'교환중'", "'교환완료'", "'받는중'", "'마감'", "'거래중'", "'거래완료'",
+    // 대리(구함)·대리(진행) ended on 2026-10-22, with their '구하는중', '구함완료', '받는중' and '마감' labels.
+    "'판매중'", "'판매완료'", "'구매중'", "'구매완료'", "'교환중'", "'교환완료'", "'거래중'", "'거래완료'",
     '완료하면 되돌릴 수 없습니다.', '상대가 확인하면 두 회원의 거래 기록에 남습니다.', '사이트 밖 거래 · 기록 없음', '거래 기록 요청은 한 글에 3번까지입니다.',
     '확인하면 두 회원의 거래 기록에 남습니다. 받을 것을 모두 받은 뒤 확인해 주세요.', '글이 완료되어 제시가 마감되었습니다.', '회원 탈퇴로 제시가 마감되었습니다.',
     // 자동 끌올 (WP52, copy.md).
@@ -89,7 +90,14 @@ const REQUIRED = [
     '계정 특징 태그', '클랜 특징 태그', '특징 태그: 띄어쓰기 없이 1~12자로 입력해 주세요.', '특징 태그는 10개까지입니다.', '특징 태그는 판매·교환 계정·클랜 글에만 넣을 수 있습니다.',
     '띄어쓰기 없이 12자까지', '클랜 래더: 티어와 시즌을 확인해 주세요.', '현재 클랜 티어를 확인해 주세요.', '태그 검색 조건을 확인해 주세요.',
     '무전적 (초기화 포함)', '레벨 · 스킨 · 재화', '클랜 레벨 · 클랜원', '태그 입력 (예: 불새상류)', '스킨, 제목, 닉네임, 태그 (예: 악주, 불새상류)',
+    // 대리 게임 (게임산업법 제32조 제1항 제11호, 2026-10-22): the rule, the refusal and the 신고 사유; 가입 마무리's 만 14세
+    // 확인 and the 개인정보 처리방침 link.
+    '대리 게임(대신 플레이해 주는 거래)과 그 알선은 게임산업법으로 금지되어 있어 글을 쓸 수 없습니다.', '대리 글은 더 이상 쓸 수 없습니다.', "'대리 게임·알선'",
+    '만 14세 이상입니다', '만 14세 이상만 가입할 수 있습니다.', '개인정보 처리방침',
 ];
+// User-visible 대리 wording is gone (2026-10-22) except the lines above, which say it is not allowed. Any other
+// line that holds '대리' outside a comment fails, so no board, badge, example or hint brings it back.
+const PROXY_ALLOWED = ['대리 게임(대신 플레이해 주는 거래)과 그 알선은', '대리 글은 더 이상 쓸 수 없습니다.', '대리 게임·알선', '대리 글은 끌올할 수 없습니다.', '대리 글은 광고할 수 없습니다.', '대리 글은 다시 공개할 수 없습니다.', '대리 카테고리 종료'];
 
 async function files(dir, recursive, test) {
     const full = path.join(root, dir);
@@ -158,6 +166,7 @@ export function lint(file, src) {
         if (marked.has(n - 1)) return;
         for (const word of [...BANNED, ...RETIRED]) if (content.includes(word)) hits.push({ file, line: n + 1, word, text: content.trim() });
         for (const re of BANNED_PATTERNS) if (re.test(content)) hits.push({ file, line: n + 1, word: String(re), text: content.trim() });
+        if (PROXY_ALLOWED.reduce((rest, ok) => rest.split(ok).join(''), content).includes('대리')) hits.push({ file, line: n + 1, word: '대리', text: content.trim() });
     });
     return hits;
 }
@@ -180,9 +189,11 @@ function selfTest() {
         '<span>인증·등급</span>',
         '<p>가격을 제안할 수도 있어요 (선택)</p>',
         "<p>{register ? '이미 계정이 있나요?' : '아직 회원이 아닌가요?'}</p>",
+        "<p>대리 글은 더 이상 쓸 수 없습니다.</p> // 대리(진행)",
+        "<p>대리(진행) 대리 글은 더 이상 쓸 수 없습니다.</p>",
     ].join('\n');
     const got = lint('self', sample).map(h => `${h.line}:${h.word}`).join(' ');
-    const want = '1:준비 중 1:이에요 3:돼요 5:한눈에 5:— 10:인증·등급 11:있어요 11:제안 11:(선택) 12:나요? 12:가요?';
+    const want = '1:준비 중 1:이에요 3:돼요 5:한눈에 5:— 10:인증·등급 11:있어요 11:제안 11:(선택) 12:나요? 12:가요? 14:대리';
     if (got === want) return true;
     console.error(`copy-lint self-test failed: got "${got}", want "${want}"`);
     return false;

@@ -1,7 +1,9 @@
 // Verification badges and member grades. Both are granted by the manager after a
 // chat-based application; there is no automatic payment or verification.
 
-export type BadgeId = 'proxy' | 'identity' | 'credit' | 'broker' | 'appraiser';
+// 'proxy' (대리 인증) ended with the 대리 boards on 2026-10-22: its user_badges rows stay in the table, but no list,
+// name line or application shows or takes it (sortBadges keeps only BADGES).
+export type BadgeId = 'identity' | 'credit' | 'broker' | 'appraiser';
 export type GradeId = 'normal' | 'plus' | 'premium' | 'elite' | 'admin';
 export type PlanId = 'permanent' | '6m';
 
@@ -16,7 +18,7 @@ export type BadgeInfo = {
     template: string;
 };
 
-// Display order is 본인 인증, 대리 인증, 신용인, 중개 인증, 가측 인증; sortBadges in the Worker follows it.
+// Display order is 본인 인증, 신용인, 중개 인증, 가측 인증; sortBadges in the Worker follows it.
 // 중개 인증 and 가측 인증 (WP66) are for 플러스 and up only (canProvide; never the 무료 체험), and 중개 인증 also
 // needs 본인 인증: members who hold one are listed on the '중개/가측' tab.
 export const BADGES: BadgeInfo[] = [
@@ -28,15 +30,6 @@ export const BADGES: BadgeInfo[] = [
         summary: '전번, 계좌 확인 후 지급',
         requirements: ['전화번호', '본인 명의 계좌'],
         template: '[본인 인증 신청]\n전화번호: \n은행: \n계좌번호: \n예금주: ',
-    },
-    {
-        id: 'proxy',
-        name: '대리 인증',
-        short: '대리',
-        icon: 'shield-check',
-        summary: '대리(진행) 글쓰기',
-        requirements: ['본인 인증', '대리 거래내역', '기타 인증'],
-        template: '[대리 인증 신청]\n본인 인증: 있음 / 같이 신청\n대리 거래내역: 캡처 첨부\n기타 인증: ',
     },
     {
         id: 'credit',
@@ -116,7 +109,8 @@ export type Application = {
 };
 
 export function applicationTitle(a: Pick<Application, 'kind' | 'target' | 'plan'>) {
-    if (a.kind === 'badge') return (badgeInfo(a.target)?.name || a.target) + ' 신청';
+    // An application for a badge that ended (대리 인증) reads '종료된 인증 신청'.
+    if (a.kind === 'badge') return (badgeInfo(a.target)?.name || '종료된 인증') + ' 신청';
     const plan = a.plan ? planInfo(a.target, a.plan) : undefined;
     return `${gradeInfo(a.target).name} 등급 신청${plan ? ` · ${plan.label} ${plan.price.toLocaleString('ko-KR')}원` : ''}`;
 }

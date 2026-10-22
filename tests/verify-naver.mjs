@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
 import { mockMobile } from './fixtures/naver-mock.mjs';
 
 // 네이버 로그인: start and callback (state cookie, safe next), 가입 마무리 (nickname rules, 플러스 체험), a linked
@@ -78,7 +79,7 @@ if (phase === 'unset') {
     equal((await b('config')).data.naverLogin, false, 'config says 네이버 로그인 is not set up');
     const start = await b('auth/naver/start?next=/');
     equal([start.status, start.location], [302, '/naver?error=config'], 'start without the client values goes to the config message');
-    const finish = await b('auth/naver/finish', 'POST', { nickname: '설정없음' + run, agree: true });
+    const finish = await b('auth/naver/finish', 'POST', { nickname: '설정없음' + run, agree: true, age14: true });
     equal([finish.status, finish.data.error], [503, '네이버 로그인 설정이 아직 끝나지 않았습니다.'], 'finish without the client values is 503 with the Korean line');
     equal((await b('auth/register', 'POST', { username: 'nv_' + run, password: 'password-' + run, nickname: '옛가입' + run })).status, 410, 'sign-up stays 410');
     console.log(`verify-naver (unset): ${checks} checks passed`);
@@ -156,13 +157,18 @@ let member;
     check(!cb.cookies.some(c => c.startsWith('zg_session=')), 'no session before 가입 마무리');
     equal((await fresh('auth/naver/pending')).data, { pending: true, trial: true }, 'pending: only whether a sign-in waits and whether the trial is open');
     equal((await guest('auth/naver/pending')).data, { pending: false }, 'another browser has nothing pending');
-    equal((await guest('auth/naver/finish', 'POST', { nickname: '남의' + run, agree: true })).status, 400, 'finish without the pending cookie is refused');
+    equal((await guest('auth/naver/finish', 'POST', { nickname: '남의' + run, agree: true, age14: true })).status, 400, 'finish without the pending cookie is refused');
     const noAgree = await fresh('auth/naver/finish', 'POST', { nickname: '네이버' + run });
     equal([noAgree.status, noAgree.data.error], [400, '이용 규칙에 동의해 주세요.'], 'finish needs the 이용 규칙 agreement');
-    equal((await fresh('auth/naver/finish', 'POST', { nickname: '운영자' + run.slice(0, 3), agree: true })).status, 409, 'a reserved word is refused');
-    const alike = await fresh('auth/naver/finish', 'POST', { nickname: olds[0].nickname.replace('옛', '옛 '), agree: true });
+    // 만 14세 이상 (개인정보 처리방침: no sign-up under 14): the box must be checked, as true itself.
+    const noAge = await fresh('auth/naver/finish', 'POST', { nickname: '네이버' + run, agree: true });
+    equal([noAge.status, noAge.data.error], [400, '만 14세 이상만 가입할 수 있습니다.'], 'finish without age14 is refused');
+    equal((await fresh('auth/naver/finish', 'POST', { nickname: '네이버' + run, agree: true, age14: 'true' })).status, 400, 'age14 must be the boolean true');
+    equal(sql(`SELECT COUNT(*) AS n FROM users WHERE naver_id='${NAVER('n')}'`)[0].n, 0, 'no account without the age check');
+    equal((await fresh('auth/naver/finish', 'POST', { nickname: '운영자' + run.slice(0, 3), agree: true, age14: true })).status, 409, 'a reserved word is refused');
+    const alike = await fresh('auth/naver/finish', 'POST', { nickname: olds[0].nickname.replace('옛', '옛 '), agree: true, age14: true });
     equal([alike.status, alike.data.error], [409, '비슷한 닉네임이 이미 있습니다.'], 'a look-alike nickname is refused');
-    const done = await fresh('auth/naver/finish', 'POST', { nickname: '네이버' + run, agree: true });
+    const done = await fresh('auth/naver/finish', 'POST', { nickname: '네이버' + run, agree: true, age14: true });
     equal(done.status, 200, 'finish creates the member');
     member = done.data.user;
     equal([member.nickname, member.role, done.data.next], ['네이버' + run, 'member', '/'], 'the chosen nickname, a member, and an outside next became /');
@@ -181,9 +187,9 @@ let member;
     const b = browser();
     await naverLogin(b, NAVER('r'));
     const saved = b.jar.get('zg_naver_pending');
-    equal((await b('auth/naver/finish', 'POST', { nickname: '재생' + run, agree: true })).status, 200, 'the first finish');
+    equal((await b('auth/naver/finish', 'POST', { nickname: '재생' + run, agree: true, age14: true })).status, 200, 'the first finish');
     b.jar.set('zg_naver_pending', saved);
-    const replay = await b('auth/naver/finish', 'POST', { nickname: '재생둘' + run, agree: true });
+    const replay = await b('auth/naver/finish', 'POST', { nickname: '재생둘' + run, agree: true, age14: true });
     equal(replay.status, 409, 'a replayed pending cookie is refused (one account per Naver id)');
 }
 
@@ -312,14 +318,14 @@ const manager = browser();
     const shared = mockMobile(NAVER('race')), r1 = browser(), r2 = browser();
     equal((await naverLogin(r1, NAVER('r1') + '|' + shared)).location, '/naver', 'first pending sign-up');
     equal((await naverLogin(r2, NAVER('r2') + '|' + shared)).location, '/naver', 'second pending sign-up before the first finished');
-    equal((await r1('auth/naver/finish', 'POST', { nickname: '번호하나' + run, agree: true })).status, 200, 'the first one joins');
-    const second = await r2('auth/naver/finish', 'POST', { nickname: '번호둘' + run, agree: true });
+    equal((await r1('auth/naver/finish', 'POST', { nickname: '번호하나' + run, agree: true, age14: true })).status, 200, 'the first one joins');
+    const second = await r2('auth/naver/finish', 'POST', { nickname: '번호둘' + run, agree: true, age14: true });
     equal([second.status, second.data.error], [409, '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.'], 'the second is refused at 가입 마무리');
     // 기존 계정 연결 with a pending sign-in from before the number was taken: refused too.
     const linkShared = mockMobile(NAVER('lrace')), l1 = browser(), l2 = browser();
     await naverLogin(l1, NAVER('l3') + '|' + linkShared);
     await naverLogin(l2, NAVER('l4') + '|' + linkShared);
-    equal((await l1('auth/naver/finish', 'POST', { nickname: '연결번호' + run, agree: true })).status, 200, 'one Naver account takes the number');
+    equal((await l1('auth/naver/finish', 'POST', { nickname: '연결번호' + run, agree: true, age14: true })).status, 200, 'one Naver account takes the number');
     const spare = { id: `nv-old-d-${run}`, username: `nvold_d_${run}` }, spareSalt = randomBytes(8).toString('hex');
     sql(`INSERT INTO users(id,username,nickname,password_hash,salt,role,bio,created_at) VALUES('${spare.id}','${spare.username}','옛d${run}','${hash(oldPass, spareSalt)}','${spareSalt}','member','',${Date.now() - 86400000 * 40})`);
     const lateLink = await l2('auth/naver/link', 'POST', { username: spare.username, password: oldPass });
@@ -352,13 +358,29 @@ const manager = browser();
 {
     const w = browser();
     await naverLogin(w, NAVER('x'));
-    const joined = await w('auth/naver/finish', 'POST', { nickname: '탈퇴할' + run, agree: true });
+    const joined = await w('auth/naver/finish', 'POST', { nickname: '탈퇴할' + run, agree: true, age14: true });
     equal((await w('auth/withdraw', 'POST', { confirm: '회원' })).status, 400, 'withdraw needs the confirm text');
     equal((await w('auth/withdraw', 'POST', { confirm: '회원 탈퇴' })).status, 200, 'the member withdraws');
     equal(sql(`SELECT naver_id FROM users WHERE id='${joined.data.user.id}'`)[0].naver_id, null, 'the Naver link is removed');
     equal((await naverLogin(browser(), NAVER('x'))).location, '/naver', 'the same Naver account goes to 가입 마무리 again');
     equal(sql(`SELECT phone_hash FROM users WHERE id='${joined.data.user.id}'`)[0].phone_hash, null, 'the phone hash is removed');
     equal((await naverLogin(browser(), NAVER('x2') + '|' + mockMobile(NAVER('x')))).location, '/naver', 'another Naver account with that number may sign up after the withdrawal');
+}
+
+// The screens the review looks at: 가입 마무리 asks for both boxes and links the 개인정보 처리방침, which renders at
+// /privacy (bundled and rendered here; the SPA serves every path from index.html) and says what the code keeps.
+{
+    const src = name => readFileSync(path.join(root, name), 'utf8');
+    const join = src('src/pages/Naver.tsx'), app = src('src/App.tsx');
+    check(join.includes('만 14세 이상입니다') && join.includes("'auth/naver/finish', 'POST', { nickname, agree, age14 }") && join.includes('!agree || !age14'), '가입 마무리 has the 만 14세 이상 box and sends age14');
+    check(join.includes('href="/privacy"') && join.includes('{PROXY_RULE}'), '가입 마무리 links the 개인정보 처리방침 and states the 대리 게임 rule');
+    check(app.includes("page === 'privacy' ? <Privacy />") && app.includes('<Link to="/privacy">개인정보 처리방침</Link>'), '/privacy is a route with a footer link');
+    const out = await build({ configFile: false, logLevel: 'silent', root, build: { lib: { entry: 'tests/fixtures/privacy-render.ts', formats: ['es'], fileName: 'privacy' }, write: false, minify: false } });
+    const { html } = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(out) ? out[0] : out).output[0].code).toString('base64'));
+    check(html.startsWith('<div class="container page guide privacy"><h1 class="page-title">개인정보 처리방침</h1>'), '/privacy renders its title');
+    for (const part of ['회원 식별값(id)과 휴대전화번호', '해시값만 저장합니다', '이름, 이메일, 별명, 프로필 사진, 생일, 출생연도, 성별은 사용하지 않고 저장하지 않습니다',
+        '요청 횟수 제한', '회원 탈퇴 때 바로 지우는 정보', '탈퇴 후에도 남는 정보', '다른 회사나 개인에게 제공하지 않습니다', 'Cloudflare, Inc. (미국)',
+        '만 14세 미만은 가입할 수 없습니다', '매니저에게 채팅으로', '시행일: 2026년 10월 22일']) check(html.includes(part), `/privacy says: ${part}`);
 }
 
 sql("UPDATE settings SET value='-1' WHERE key='sys:trial_end'");

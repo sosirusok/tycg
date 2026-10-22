@@ -1,4 +1,4 @@
-import { db } from './http';
+import { db, listedKind } from './http';
 import { PERKS, adSlotsOfRank } from '../shared/membership';
 import { SUSPENDED_AUTHORS, baseFilters, postSelect } from './posts';
 import type { User } from '../shared/market';
@@ -11,8 +11,8 @@ import type { User } from '../shared/market';
 //   post in a slot, '광고 빼기' (featured_pin -1) keeps it out; adTrimStatement cuts the rest.
 // - Shown only while eligible (adWhere): 프리미엄+ from the manager (never the 체험), 본인 인증 (the
 //   manager is exempt), no 이용 정지 and no suspension in 30 days, not '광고 제외', the post open, visible,
-//   without a pending report and touched in 7 days, and the member seen within pauseDays; a 대리(진행)
-//   post also needs 대리 인증 (even for its own author, whom the list filters let see it).
+//   without a pending report and touched in 7 days, and the member seen within pauseDays; never a post of a
+//   retired kind (대리, listedKind; even for its own author, whom the list filters let see it).
 // - Placements: the board top box (page 1, 최신순, the 진행중 view, more than 16 진행중 posts), '비슷한 매물' under a
 //   completed post (2), the home '엘리트 매물' row (6, 엘리트 and above). Each reads at most 60
 //   candidates through the posts_ad index; the rotation runs here, seeded per 10 minutes.
@@ -43,7 +43,7 @@ export function adWhere(now: number, minRank: number) {
             AND ${AD_RANK}>=?
             AND (u.role='manager' OR (COALESCE(u.last_seen_at,u.created_at)>?-CASE WHEN ${AD_RANK}>=3 THEN ? ELSE ? END
                 AND EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='identity')))
-            AND (p.kind!='proxy_offer' OR u.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))
+            AND ${listedKind('p')}
             AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending' AND r.comment_id IS NULL)
             AND NOT EXISTS(SELECT 1 FROM sanctions s WHERE s.user_id=p.author_id AND s.days IS NOT NULL AND s.created_at>?)`,
         args: [now - STALE_MS, now, now, minRank, now, now, PERKS.elite.pauseDays * DAY, PERKS.premium.pauseDays * DAY, now - SANCTION_MS],
@@ -109,7 +109,7 @@ export function pickSimilar<T extends AdRow & { category: string }>(rows: T[], p
 }
 
 // The home '엘리트 매물' row: 엘리트 and above, 판매 posts only (WP70: 판매중 accounts and other 판매 listings;
-// 구매, 교환 and 대리 ads stay in their own boards' box), read through posts_ad (kind, featured_at).
+// 구매 and 교환 ads stay in their own boards' box), read through posts_ad (kind, featured_at).
 export function homeAdsStatement(u: User | null, now: number) {
     const f = baseFilters(u, null, now), base = adFilters(f.where, f.values), w = adWhere(now, 3);
     return db().prepare(`${adSelect()} WHERE p.kind='sell' AND ${w.sql} AND ${base.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...w.args, ...base.values);

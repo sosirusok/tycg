@@ -1,4 +1,4 @@
-import { db } from './http';
+import { db, listedKind } from './http';
 import { notifyStatement } from './notifications';
 import { MANAGER_PERKS, perksOfRank, type Perks } from '../shared/membership';
 
@@ -38,10 +38,10 @@ export const pairSql = (o: string, p: string) => `${p}.kind=CASE ${o}.kind WHEN 
     AND (CASE ${o}.kind WHEN 'sell' THEN ${fits(o, p)} ELSE ${fits(p, o)} END)`;
 
 // A post the subscriber may hear about: visible, not their own, no block either way, its author not
-// under 이용 정지, and the 대리(진행) rule. Aliases: p (post), u (its author); `owner` and `now` are SQL
-// expressions (inlined, nothing bound but what they hold). Shared with 새 글 알림 (WP54).
+// under 이용 정지, and never a retired kind (대리, listedKind). Aliases: p (post), u (its author); `owner` and
+// `now` are SQL expressions (inlined, nothing bound but what they hold). Shared with 새 글 알림 (WP54).
 export const reachable = (owner: string, now: string) => `p.hidden=0 AND p.author_id!=${owner} AND (u.suspended_until IS NULL OR u.suspended_until<=${now})
-    AND (p.kind!='proxy_offer' OR u.role='manager' OR EXISTS(SELECT 1 FROM user_badges bd WHERE bd.user_id=p.author_id AND bd.badge='proxy'))
+    AND ${listedKind('p')}
     AND NOT EXISTS(SELECT 1 FROM blocks bk WHERE (bk.user_id=${owner} AND bk.target_id=p.author_id) OR (bk.user_id=p.author_id AND bk.target_id=${owner}))`;
 
 // The 알림함 count and the list behind it look at this many post ids from the 알림's first match on.

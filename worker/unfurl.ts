@@ -1,5 +1,5 @@
 import { env, waitUntil } from 'cloudflare:workers';
-import { ApiError, db, fail, limit, setting } from './http';
+import { ApiError, db, fail, limit, listedKind, setting } from './http';
 import { KIND_NAMES, categoryName, listingPrice, type TradeKind } from '../shared/market';
 import { linkPreviewAllowed } from '../shared/membership';
 import {
@@ -237,13 +237,11 @@ async function youtubeCard(id: string, c: FetchContext): Promise<LinkCard | null
 
 // The site's own post, from the database (no fetch). A hidden or missing post gives no card.
 // The own posts a card may show: those every member can open (visiblePost without the author's and the
-// manager's own view): not hidden, the author not withdrawn, and a 대리(진행) post only while its author
-// keeps 대리 인증.
+// manager's own view): not hidden, the author not withdrawn, and never a retired kind (대리, listedKind).
 type OwnRow = { id: number; title: string; kind: TradeKind; category: string; price: number | null; price_mode: string };
 async function ownPostRows(ids: number[]): Promise<Map<number, OwnRow>> {
     const r = await db().prepare(`SELECT p.id,p.title,p.kind,p.category,p.price,p.price_mode FROM posts p JOIN users a ON a.id=p.author_id
-        WHERE p.id IN (SELECT value FROM json_each(?)) AND p.hidden=0 AND a.deleted_at IS NULL
-            AND (p.kind!='proxy_offer' OR a.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=a.id AND b.badge='proxy'))`)
+        WHERE p.id IN (SELECT value FROM json_each(?)) AND p.hidden=0 AND a.deleted_at IS NULL AND ${listedKind('p')}`)
         .bind(JSON.stringify([...new Set(ids)])).all<OwnRow>();
     return new Map(r.results.map(p => [Number(p.id), p]));
 }

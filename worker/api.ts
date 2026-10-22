@@ -1,6 +1,6 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, requireActive, json, body, csrf, limit, storedHash, verifyPassword, random, textField,
-    digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
+    digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, listedKind, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME, trialWindow, trialOpen, grantTrial,
 } from './http';
 import { postsHandler, tagsHandler } from './posts';
@@ -301,11 +301,11 @@ async function usersHandler(req: Request, p: string[]) {
     const method = req.method;
     if (method === 'GET') {
         const viewer = await currentUser(req);
-        // Counts skip 대리(진행) posts whose author lost 대리 인증, and every post of a member under 이용 정지,
-        // as the board list does (the author still counts them).
-        const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))"
+        // Counts skip posts of a retired kind (대리, listedKind) and every post of a member under 이용 정지, as
+        // the board list does (the author still counts the second).
+        const listed = `p.author_id=u.id AND p.hidden=0 AND ${listedKind('p')}`
             + ' AND (p.author_id=? OR u.suspended_until IS NULL OR u.suspended_until<=?)';
-        const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
+        const listedArgs = [viewer?.id || '', Date.now()];
         // How many 후기 the 후기 tab holds; the trade counts come from tradeStats.
         const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,u.avatar_id,u.avatar_thumb,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
             (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count,
@@ -380,8 +380,8 @@ async function stats() {
     await initManager();
     const r = await db().batch([
         db().prepare('SELECT COUNT(*) AS count FROM users WHERE deleted_at IS NULL'),
-        db().prepare('SELECT COUNT(*) AS count FROM posts WHERE hidden=0'),
-        db().prepare("SELECT kind,category,COUNT(*) AS count FROM posts WHERE hidden=0 AND status!='closed' GROUP BY kind,category"),
+        db().prepare(`SELECT COUNT(*) AS count FROM posts p WHERE p.hidden=0 AND ${listedKind('p')}`),
+        db().prepare(`SELECT kind,category,COUNT(*) AS count FROM posts p WHERE p.hidden=0 AND p.status!='closed' AND ${listedKind('p')} GROUP BY kind,category`),
     ]);
     const categories = r[2].results as any[];
     const byCategory = new Map<string, number>();

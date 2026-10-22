@@ -148,7 +148,7 @@ equal((await manager('manage')).data.reports.find(r => r.id === report.id)?.stat
 
 // B cannot grant itself anything, and stays a member.
 equal((await b(`manage/users/${B}/grades`, 'POST', { grade: 'elite' })).status, 403, 'B cannot grant itself 엘리트');
-equal((await b(`manage/users/${B}/badges`, 'POST', { badge: 'proxy', active: true })).status, 403, 'B cannot grant itself 대리 인증');
+equal((await b(`manage/users/${B}/badges`, 'POST', { badge: 'credit', active: true })).status, 403, 'B cannot grant itself 신용인');
 const meB = (await b('auth/me')).data.user;
 equal([meB.role, meB.grade, meB.badges], ['member', 'admin', []], 'B is role member with the 관리자 grade');
 
@@ -210,9 +210,10 @@ equal((await manager(`manage/users/${A}/grades/${aPremium.id}`, 'DELETE')).statu
     ok(await manager(`manage/users/${C}/grades/${plusRow.id}`, 'DELETE'), 200, 'DELETE grades/:gid');
     ok(await manager('manage/applications'), 200, 'GET manage/applications');
     ok(await manager(`applications/${appC.data.id}`, 'PATCH', { action: 'approve' }), 200, 'PATCH approve');
-    const proxyApp = await c('applications', 'POST', { kind: 'badge', target: 'proxy' });
-    equal(proxyApp.status, 201, 'C applies for 대리 인증');
-    ok(await manager(`applications/${proxyApp.data.id}`, 'PATCH', { action: 'reject', note: '자료 부족' }), 200, 'PATCH reject');
+    equal((await c('applications', 'POST', { kind: 'badge', target: 'proxy' })).status, 400, 'C cannot apply for 대리 인증 (ended 2026-10-22)');
+    const plusApp = await c('applications', 'POST', { kind: 'grade', target: 'plus', plan: 'permanent' });
+    equal(plusApp.status, 201, 'C applies for 플러스');
+    ok(await manager(`applications/${plusApp.data.id}`, 'PATCH', { action: 'reject', note: '자료 부족' }), 200, 'PATCH reject');
     const cNow = (await guest('users/' + C)).data.user;
     equal([cNow.grade, cNow.badges], ['normal', ['identity', 'credit']], 'C now holds 본인 인증 and 신용인');
     ok(await manager('manage/settings', 'PUT', {}), 200, 'PUT manage/settings');
@@ -252,7 +253,7 @@ equal((await b('auth/me')).data.user.grade, 'normal', 'B is 일반 again');
 if (sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name='user_grades_manager_only'").length) {
     check(sqlFails("INSERT INTO user_grades(user_id,grade,rank,granted_by,granted_at) VALUES('x','plus',1,'someone',1)").includes('manager only'), 'trigger: a member-attributed grade insert aborts');
     check(sqlFails(`INSERT INTO user_grades(user_id,grade,rank,granted_at) VALUES('${B}','plus',1,1)`).includes('manager only'), 'trigger: a grade insert without granted_by aborts');
-    check(sqlFails(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES('${B}','proxy','${B}',1)`).includes('manager only'), 'trigger: INSERT OR IGNORE into user_badges aborts');
+    check(sqlFails(`INSERT OR IGNORE INTO user_badges(user_id,badge,granted_by,granted_at) VALUES('${B}','credit','${B}',1)`).includes('manager only'), 'trigger: INSERT OR IGNORE into user_badges aborts');
     equal((await manager(`manage/users/${A}/grades`, 'POST', { grade: 'plus', plan: 'permanent' })).status, 201, 'the manager still grants through the API');
     check(sqlFails(`UPDATE user_grades SET granted_by='${B}' WHERE user_id='${A}'`).includes('manager only'), 'trigger: re-attributing a grant aborts');
     check(sqlFails(`UPDATE user_grades SET expires_at=1,granted_by=NULL WHERE user_id='${A}'`).includes('manager only'), 'trigger: changing the expiry without the manager aborts');

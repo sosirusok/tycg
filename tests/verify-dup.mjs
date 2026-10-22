@@ -59,7 +59,8 @@ const ladder = [{ tier: 'challenger', season: 28 }, { tier: 'diamond', season: 3
     const coupon = n => pr({ category: 'goods_coupon', photos: [banner], fields: L.listingFields('sell', 'goods_coupon', { couponName: n }) });
     equal(L.sameListing(coupon('유루미 스쿺'), coupon('코믹스 1권')), null, 'unit: two coupons with the banner and different names');
     equal(L.sameListing(pr({ category: 'other', fields: L.listingFields('sell', 'other', {}) }), pr({ category: 'other', fields: L.listingFields('sell', 'other', {}) })), null, 'unit: 기타 has no fields to match');
-    equal(L.sameText(L.sameListing(pr({ kind: 'proxy_offer', category: 'ladder', fields: L.listingFields('proxy_offer', 'ladder', { mode: '래더 솔큐' }) }), pr({ kind: 'proxy_offer', category: 'ladder', fields: L.listingFields('proxy_offer', 'ladder', { mode: '래더솔큐' }) }))), '종목', 'unit: 대리(진행) by 종목');
+    // 대리 (retired 2026-10-22): an old row's fields never match anything.
+    equal(L.listingFields('proxy_offer', 'ladder', { mode: '래더 솔큐' }).m, 'none', 'unit: a retired kind has no fields to match');
     equal(L.fieldsHashInput(acct({ phantom: '1', level: '2', gas: '3' })), null, 'unit: no fields hash under 4 distinctive fields');
     check(L.fieldsHashInput(acct({ phantom: '1', level: '2', gas: '3', closet: '4' })), 'unit: a fields hash from 4 distinctive fields');
     equal(L.photoKeys(['u1', 'u2'], new Map([['u1', { hash: 'a'.repeat(64), src_hash: 'b'.repeat(64) }]])), [['a'.repeat(16), 'b'.repeat(16)], ['u:u2']], 'unit: photo keys are 16 hex characters, or the upload id without a hash');

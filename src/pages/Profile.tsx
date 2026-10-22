@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
+import { KIND_NAMES, dateText, isRetiredKind, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type ProviderType } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -211,7 +211,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="profile-cards">
             <div className="card card-pad">
                 <h2 className="card-title">인증</h2>
-                {/* 본인 인증, 대리 인증, 신용인 (the BADGES order). The owner applies from the row. */}
+                {/* 본인 인증, 신용인, 중개 인증, 가측 인증 (the BADGES order). The owner applies from the row. */}
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
                     return <li key={b.id} className={on ? 'on' : ''}><Icon name={b.icon} size={20} className="verify-icon" /><span className="grow">{b.name}</span>{on ? <>
@@ -326,7 +326,8 @@ function ReviewList({ userId }: { userId: string }) {
 // The member's side of a trade, as the board names it.
 function sideName(t: TradeRow) {
     if (t.kind === 'exchange') return '교환';
-    if (t.kind === 'proxy_request' || t.kind === 'proxy_offer') return t.sold ? '대리(진행)' : '대리(구함)';
+    // A trade of a retired kind (대리) keeps its record under a neutral name.
+    if (isRetiredKind(t.kind)) return KIND_NAMES[t.kind];
     return t.sold ? '판매' : '구매';
 }
 

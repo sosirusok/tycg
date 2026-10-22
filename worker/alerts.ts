@@ -185,7 +185,7 @@ export async function followsList(req: Request) {
 // ---- Matching SQL shared by the cron and the 알림함 counts -------------------------------------------
 
 // reachable (worker/match.ts): a post the subscriber may hear about (visible, not their own, no block
-// either way, its author not under 이용 정지, the 대리(진행) rule); aliases p and u.
+// either way, its author not under 이용 정지, never a retired kind); aliases p and u.
 // A 키워드 or 게시판 알림 s (alias s) matches post p: its tab (or any tab), its category (or any) and the
 // board's search SQL with the stored word, skins and ladder (a bare tier word also finds 시즌 비공개
 // emblems of that tier, WP68, as the board's ladderSql does).

@@ -10,7 +10,7 @@
 .hero-search .search-input { height: 52px; border-color: var(--white); border-radius: var(--r-12); background: var(--white); }
 .hero-search .search-input:focus-within { box-shadow: 0 0 0 3px var(--ink); border-color: var(--white); }
 /* The five boards: one segmented bar, a white card over the band's lower edge. */
-.quick-row { position: relative; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: -40px; padding: 8px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); }
+.quick-row { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: -40px; padding: 8px; background: var(--white); border: 1px solid var(--line); border-radius: var(--r-12); }
 .quick-item { position: relative; display: grid; justify-items: center; align-content: center; gap: 8px; min-height: 80px; padding: 12px 4px; border-radius: var(--r-8); color: var(--ink-2); font-size: var(--fs-14); font-weight: 600; text-align: center; }
 .quick-item .ico { color: var(--ink-2); }
 .quick-item + .quick-item::before { content: ''; position: absolute; left: 0; top: 24px; bottom: 24px; width: 1px; background: var(--line); }
@@ -131,9 +131,6 @@
 .saved-chip.on > button:first-child { cursor: default; }
 .saved-chip.on > button:last-child { color: var(--brand); }
 .filter-open { display: none; }
-.board-notice { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 16px; border-radius: var(--r-12); background: var(--fill); color: var(--ink-2); font-size: var(--fs-14); }
-.board-notice .ico { color: var(--ink-2); }
-.board-notice .btn { margin-left: auto; }
 @media (max-width: 960px) {
   .board-write { display: none; }
   .board-layout { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 8px; }
@@ -148,8 +145,6 @@
   .board-top { padding-top: 16px; padding-bottom: 12px; border-top: 0; }
   .list-panel { padding-top: 12px; }
   .list-tools { gap: 8px; }
-  .board-notice { flex-wrap: wrap; }
-  .board-notice .btn { margin-left: 0; }
 }
 
 /* detail */
@@ -344,7 +339,7 @@
 .ed-fold > summary::after { content: ''; margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; }
 .ed-fold[open] > summary::after { transform: rotate(225deg); }
 
-.kind-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.kind-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .kind-card { position: relative; display: grid; justify-items: center; align-content: center; gap: 8px; min-height: 96px; padding: 12px 6px; border: 1px solid var(--line); border-radius: var(--r-12); cursor: pointer; text-align: center; font-size: var(--fs-14); font-weight: 600; color: var(--ink-2); }
 .kind-card .ico { color: var(--ink-2); }
 .kind-card:has(input:checked) .ico { color: var(--brand); }
@@ -352,8 +347,6 @@
 .kind-card:hover { border-color: var(--line-2); }
 .kind-card:has(input:checked) { color: var(--ink); }
 .kind-card:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
-.kind-card small { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-3); font-size: var(--fs-12); font-weight: 500; }
-.kind-card.is-locked .ico { color: var(--ink-4); }
 .nick-range { max-width: 360px; }
 /* 이용 정지: said at the top, before the member fills the form. */
 .editor > .alert { margin-top: 16px; }
@@ -395,11 +388,9 @@
 @media (max-width: 640px) {
   .ed-grid { grid-template-columns: 1fr; }
   .ed-grid-3 { grid-template-columns: repeat(3, 1fr); }
-  .kind-cards { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .kind-cards { grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .kind-card { min-height: 76px; padding: 8px 2px; font-size: var(--fs-12); }
   /* Five cards share one row: the lock note becomes a corner lock, its words stay for screen readers. */
-  .kind-card small { position: absolute; top: 6px; right: 6px; }
-  .kind-card small span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .ed-grid-3 { gap: 8px; }
   .ed-grid-3 .input { padding-left: 10px; padding-right: 10px; }
   .ed-grid-3 .input-unit .input { padding-right: 28px; }

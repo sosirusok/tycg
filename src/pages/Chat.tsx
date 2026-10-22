@@ -73,7 +73,6 @@ function newCid() {
 // at the top of a chat about a post. The 더치트 step is in every set.
 const CHEAT_CHECK = '입금 전 더치트로 전번·계좌 조회';
 function pretradeItems(l: Pick<Listing, 'kind' | 'category'>): string[] {
-    if (l.kind === 'proxy_request' || l.kind === 'proxy_offer') return ['선입금·후입금 먼저 합의', '동접 시 중단', CHEAT_CHECK];
     if (l.category === 'account') return ['이중창 인증', CHEAT_CHECK, '받은 뒤 바로 비번·전번·보멜 변경'];
     if (l.category === 'goods_coupon') return ['쿠폰 코드는 입금 확인 후 전달', CHEAT_CHECK];
     return [CHEAT_CHECK];

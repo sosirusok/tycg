@@ -1,11 +1,11 @@
-import { db, countedTrade } from './http';
+import { db, countedTrade, listedKind } from './http';
 import { KIND_NAMES, categoryName, closedLabel, exchangeLabel, normalizeTrade, priceText } from '../shared/market';
 
 // 공유 (WP59): /p/:id is the address a member shares (Detail '공유'). Workers Static Assets sends /p/*
 // here first (run_worker_first in wrangler.jsonc). The answer is the app's own index.html with the post
 // in <title> and the og: tags, so KakaoTalk and other link previews (their crawlers read only the HTML)
 // show '[판매] 제목', the price line and the 대표 photo; the app then replaces the address with /posts/:id.
-// A hidden, deleted or unknown post, and a 대리(진행) post whose author lost 대리 인증, keep the site's
+// A hidden, deleted or unknown post, and a post of a retired kind (대리, listedKind), keep the site's
 // default tags from index.html. One D1 read per request, nothing written.
 const DESCRIPTION_MAX = 80;
 
@@ -15,17 +15,16 @@ type ShareRow = { id: number; kind: string; category: string; title: string; pri
 const shareRow = (id: number) => db().prepare(`SELECT p.id,p.kind,p.category,p.title,p.price,p.status,p.details,p.images,
         (SELECT t.price FROM trades t WHERE t.post_id=p.id AND ${countedTrade('t')}) AS deal_price
     FROM posts p JOIN users u ON u.id=p.author_id
-    WHERE p.id=? AND p.hidden=0 AND u.deleted_at IS NULL
-        AND (p.kind!='proxy_offer' OR u.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))`).bind(id).first<ShareRow>();
+    WHERE p.id=? AND p.hidden=0 AND u.deleted_at IS NULL AND ${listedKind('p')}`).bind(id).first<ShareRow>();
 
 const parse = (s: string, fallback: any) => { try { return JSON.parse(s); } catch { return fallback; } };
 
-// The main price item of a post: '즉거가 35만원', 'MAX 30만원', '희망 가격 3만원', or the exchange line.
+// The main price item of a post: '즉거가 35만원', 'MAX 30만원', '가격 3만원', or the exchange line.
 function priceItem(kind: string, category: string, price: number | null, d: Record<string, string>) {
     if (kind === 'exchange') return exchangeLabel(category, d.wantedCategory);
     if (kind === 'buy') return 'MAX ' + (price === null ? '미정' : priceText(price));
     if (kind === 'sell') return price === null ? '가격 제시' : '즉거가 ' + priceText(price);
-    return price === null ? '가격 협의' : (kind === 'proxy_request' ? '희망 가격 ' : '가격 ') + priceText(price);
+    return price === null ? '가격 협의' : '가격 ' + priceText(price);
 }
 
 // og:description, at most 80 characters: an open post reads '계정 · 즉거가 35만원 · 현젯 25만원' (or 'MAX 30만원',

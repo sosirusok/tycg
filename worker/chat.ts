@@ -2,7 +2,7 @@ import { fillTemplate, suspendUntilText, type User } from '../shared/market';
 import { CHAT_AUTO_TEXT, MATCH_TEXT, awayWindow, managerChatOrder, perksOf } from '../shared/membership';
 import {
     db, fail, requireUser, requireActive, json, body, limit, memberColumns, paidRankSql, withMember, isManager, isSuspended, ApiError, MANAGER_ID, WITHDRAWN, WITHDRAWN_NAME,
-    currentUserWith, digest, random, tokenOf,
+    currentUserWith, digest, listedKind, random, tokenOf,
 } from './http';
 import { parse, postStatement, visiblePost, visibleTo } from './posts';
 import { ASK_LIMIT, askCount } from './reviews';
@@ -397,7 +397,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
         if (filter && !isManager(u)) fail(403, '매니저만 사용할 수 있습니다.');
         // A chat with no messages yet (채팅하기 without sending) stays out of both lists until the first message.
         // The row also names the post the chat is about (title and first photo) while the viewer can see it,
-        // by the same rule as visiblePost: not hidden, and a 대리(진행) post only while its author holds 대리 인증.
+        // by the same rule as visiblePost: not hidden, and never a retired kind (대리, listedKind).
         // ?since=<ms> (the list's own polls) returns only the chats updated after that time, which the
         // page merges into the list it has. The 100 newest chats are picked first from the
         // (user_a|user_b, updated_at) indexes, so the details below are read for those rows only, and
@@ -425,8 +425,7 @@ export async function chatHandler(req: Request, p: string[], url: URL): Promise<
                 ${filter ? "AND EXISTS(SELECT 1 FROM applications a WHERE a.conversation_id=mine.id AND a.status='pending')" : ''} ORDER BY updated_at DESC LIMIT 100) ${waiting}) picked
             CROSS JOIN conversations c ON c.id=picked.id
             JOIN users u ON u.id=CASE WHEN c.user_a=? THEN c.user_b ELSE c.user_a END
-            LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.author_id=? OR ?='manager' OR (lp.hidden=0 AND (lp.kind!='proxy_offer'
-                OR EXISTS(SELECT 1 FROM users au WHERE au.id=lp.author_id AND au.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=lp.author_id AND b.badge='proxy'))))
+            LEFT JOIN posts lp ON lp.id=${aboutPost('c.id')} AND (lp.author_id=? OR ?='manager' OR (lp.hidden=0 AND ${listedKind('lp')}))
             ORDER BY c.updated_at DESC`)
             .bind(u.id, u.id, since, u.id, since, ...ordered ? [u.id, since, u.id, since, u.id] : [], u.id, u.id, u.role).all();
         const chats = r.results.map(partner);

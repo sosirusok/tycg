@@ -203,7 +203,7 @@ equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: ma
     equal([sql(`SELECT COUNT(*) AS n FROM user_badges WHERE user_id='${w.user.id}'`)[0].n, sql(`SELECT COUNT(*) AS n FROM user_grades WHERE user_id='${w.user.id}'`)[0].n], [1, 1], 'grade and badge rows stay as the manager\'s record');
     check(sql(`SELECT nickname_key FROM users WHERE id='${w.user.id}'`)[0].nickname_key.startsWith('#deleted:'), 'the withdrawn row has a #deleted: key, never NULL');
     equal((await manager(`manage/users/${w.user.id}/grades`, 'POST', { grade: 'premium', plan: '6m' })).data.error, '탈퇴한 회원입니다.', 'no grade for a withdrawn member');
-    equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).data.error, '탈퇴한 회원입니다.', 'no badge for a withdrawn member');
+    equal((await manager(`manage/users/${w.user.id}/badges`, 'POST', { badge: 'identity', active: true })).data.error, '탈퇴한 회원입니다.', 'no badge for a withdrawn member');
     const vis = await manager('manage/visibility', 'POST', { postId: post.data.id, hidden: false });
     equal([vis.status, vis.data.error], [409, '탈퇴한 회원의 글입니다.'], 'the manager cannot publish a withdrawn member\'s post');
     const seen = (await manager('posts/' + post.data.id)).data.post;

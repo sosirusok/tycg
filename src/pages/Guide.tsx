@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { dateText, wonText } from '../../shared/market';
+import { PROXY_RULE, dateText, wonText } from '../../shared/market';
 import { AD_TEXT, AUTO_TEXT, BADGES, BULK_MAX, DROP_TEXT, PERKS, PROVIDER_TEXT, REPORT_TEXT, SITE_RULES, gapText, gradeInfo } from '../../shared/membership';
 import { BENEFIT_ROWS, PAID_GRADES, TABLE_GRADES, gradeExtras, gradeHook, monthly, vsNormal, type PaidGrade } from '../../shared/benefits';
 import { api } from '../lib/api';
@@ -162,7 +162,8 @@ export default function Guide() {
             <h2 className="section-title">주의사항</h2>
             <ul className="rules">
                 <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
-                <li>계정 거래와 대리는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
+                <li>계정 거래는 <a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a>상 정지될 수 있습니다.</li>
+                <li>{PROXY_RULE}</li>
                 <li>비번과 인증번호는 누구에게도 알려 주지 않습니다.</li>
                 <li>쿠폰 코드는 입금 확인 후 전달하세요.</li>
                 <li>사기 의심 글은 신고해 주세요. 확인 후 숨김 또는 삭제합니다.</li>
