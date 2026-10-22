@@ -19,11 +19,19 @@ let checks = 0;
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
 function equal(actual, expected, name) { assert.deepEqual(actual, expected, name); checks++; console.log('PASS ' + name); }
 
-// Reads or changes the local D1 database the Worker is using.
+// Reads or changes the local D1 database the Worker is using. A SQLITE_BUSY statement (the Worker was
+// writing at that moment) never ran, so it is tried again, as in verify-stats.
 function sql(command) {
-    const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
-        '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
-    return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
+                '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+            return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+        } catch (error) {
+            if (attempt >= 4 || !String(error.stderr || error.message).includes('SQLITE_BUSY')) throw error;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * attempt);
+        }
+    }
 }
 
 function client() {
