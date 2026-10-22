@@ -3,7 +3,7 @@ import { DropdownMenu } from 'radix-ui';
 import { Toaster } from 'sonner';
 import { Bell, House, LayoutList, MessageCircle, PenLine, ShieldCheck, UserRound, X } from 'lucide-react';
 import { Link, navigate, takeScrollRestore, useLocation } from './lib/router';
-import { KIND_NAMES, TRADE_KINDS, isTradeKind, type User } from '../shared/market';
+import { KIND_NAMES, TRADE_KINDS, isTradeKind } from '../shared/market';
 import { AppProvider, setPageTitle, useApp } from './app/state';
 import { Avatar, EmptyState, LogoMark, NameLine, SkeletonRows } from './components/ui';
 import { AuthModal } from './app/AuthModal';
@@ -26,6 +26,7 @@ const Alerts = lazy(() => import('./pages/Alerts'));
 const Providers = lazy(() => import('./pages/Providers'));
 const Naver = lazy(() => import('./pages/Naver'));
 const ManagerLogin = lazy(() => import('./pages/ManagerLogin'));
+const Privacy = lazy(() => import('./pages/Privacy'));
 
 export default function App() {
     return <AppProvider><Shell /></AppProvider>;
@@ -104,7 +105,8 @@ function Shell() {
         setPageTitle(page === 'trade' ? (isTradeKind(kind) ? KIND_NAMES[kind] : params.get('q') ? '검색 결과' : '전체')
             : page === 'chat' ? '채팅' : page === 'write' ? '글쓰기' : page === 'edit' ? '글 수정' : page === 'guide' ? '공지'
             : page === 'me' ? (parts[1] === 'alerts' ? '알림' : '내 거래')
-            : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : page === 'naver' ? '네이버 로그인' : page === 'manager-login' ? '매니저 로그인' : '');
+            : page === 'manage' ? '매니저 메뉴' : page === 'providers' ? PROVIDER_TEXT.tab : page === 'naver' ? '네이버 로그인' : page === 'manager-login' ? '매니저 로그인'
+            : page === 'privacy' ? '개인정보 처리방침' : '');
     }, [page, params, parts]);
     // Back/Forward returns to the stored scroll position; the board and a post do it themselves
     // once their data is on screen.
@@ -122,12 +124,7 @@ function Shell() {
     }, [path, params, page, parts, shared, search]);
 
     const go = (to: string) => requireLogin(() => void navigate(to));
-    // 대리(진행) needs 대리 인증; without it the button opens the application instead of the form.
-    const compose = () => requireLogin((u: User) => {
-        const proxy = new URLSearchParams(write.split('?')[1] || '').get('kind') === 'proxy_offer';
-        if (proxy && u.role !== 'manager' && !u.badges.includes('proxy')) openApply({ kind: 'badge', target: 'proxy' });
-        else void navigate(write);
-    });
+    const compose = () => requireLogin(() => void navigate(write));
 
     // On phones the apply button shows only on home and profiles, and never for the manager
     // (who does not apply); desktop keeps it on every page (shell.css).
@@ -198,6 +195,8 @@ function Shell() {
                     : page === 'naver' ? <Naver key={search} />
                     // The manager's hidden ID/password sign-in; nothing links here.
                     : page === 'manager-login' ? <ManagerLogin />
+                    // 개인정보 처리방침, linked from the footer and 가입 마무리.
+                    : page === 'privacy' ? <Privacy />
                     : <NotFound />}
             </Suspense>
         </main>
@@ -206,7 +205,7 @@ function Shell() {
         {page !== 'chat' && page !== 'write' && page !== 'edit' && <footer className={'footer' + (page === 'posts' ? ' footer-post' : '')}>
             <div className="container footer-inner">
                 <div><strong>좀비고 거래소</strong>게임사와 무관한 유저 거래 커뮤니티입니다. 거래 책임은 거래 당사자에게 있습니다.</div>
-                <div className="footer-links"><Link to="/guide">공지</Link><button type="button" onClick={() => openApply()}>인증/등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a></div>
+                <div className="footer-links"><Link to="/guide">공지</Link><button type="button" onClick={() => openApply()}>인증/등급</button><a href="https://awesomepiece.com/management.html" target="_blank" rel="noreferrer">게임 운영정책</a><Link to="/privacy">개인정보 처리방침</Link></div>
             </div>
         </footer>}
         {!hideBottomNav && <nav className="bottom-nav" aria-label="하단 메뉴">

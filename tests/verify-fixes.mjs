@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomBytes, pbkdf2Sync } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Race conditions, nickname rules, 대리(진행) after a badge is removed, exchange
+// Race conditions, nickname rules, the retired 대리 boards and 대리 인증 (0064), exchange
 // wanted ladders, skin aliases and photo access. Runs only against a local Worker
 // (see scripts/test-local.mjs); the daily cleanup is checked in verify-cleanup.mjs.
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790');
@@ -18,11 +19,19 @@ let checks = 0;
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
 function equal(actual, expected, name) { assert.deepEqual(actual, expected, name); checks++; console.log('PASS ' + name); }
 
-// Reads or changes the local D1 database the Worker is using.
+// Reads or changes the local D1 database the Worker is using. A SQLITE_BUSY statement (the Worker was
+// writing at that moment) never ran, so it is tried again, as in verify-stats.
 function sql(command) {
-    const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
-        '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
-    return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
+                '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+            return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+        } catch (error) {
+            if (attempt >= 4 || !String(error.stderr || error.message).includes('SQLITE_BUSY')) throw error;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * attempt);
+        }
+    }
 }
 
 function client() {
@@ -116,21 +125,91 @@ const a = await register('fa'), b = await register('fb'), c = await register('fc
     equal((await client()('auth/login', 'POST', huge)).status, 413, 'JSON bodies over 64 KB are refused');
 }
 
-// 대리(진행) needs 대리 인증 for every edit, and listings follow the badge.
+// 대리 (2026-10-22: 게임산업법 제32조 제1항 제11호): no post of the two retired kinds can be written, edited, bumped
+// or found, and 대리 인증 is neither applied for, granted nor shown. Two old posts stand for one the previous Worker
+// wrote during the deploy (still visible); 0064_proxy_closed then hides them and cancels the waiting application.
 {
-    equal((await manager(`manage/users/${c.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).status, 200, 'manager grants 대리 인증');
-    const post = { kind: 'proxy_offer', category: 'ladder', title: `[QA] 대리 진행 ${run}`, body: '자동 검증', price: 20000, status: 'open', tags: [], images: [], details: {} };
-    const created = await c('posts', 'POST', post);
-    equal(created.status, 201, 'badge holder posts 대리(진행)');
-    const listed = async viewer => (await viewer('posts?' + new URLSearchParams({ kind: 'proxy_offer', q: run }))).data.posts.some(p => p.id === created.data.id);
-    check(await listed(guest), '대리(진행) post is listed');
-    equal((await manager(`manage/users/${c.user.id}/badges`, 'POST', { badge: 'proxy', active: false })).status, 200, 'manager removes 대리 인증');
-    equal((await c('posts/' + created.data.id, 'PUT', { ...post, title: post.title + ' 수정' })).status, 403, 'editing 대리(진행) needs the badge');
-    equal((await c(`posts/${created.data.id}/status`, 'PATCH', { status: 'reserved' })).status, 200, 'a legacy 예약중 request on an open post changes nothing (two states)');
-    check(!await listed(guest), 'post leaves the 대리(진행) board when the badge is removed');
-    check((await c('posts?' + new URLSearchParams({ author: c.user.id }))).data.posts.some(p => p.id === created.data.id), 'the author still sees the post');
-    equal((await c(`posts/${created.data.id}/status`, 'PATCH', { status: 'closed' })).status, 200, 'closing works without the badge');
-    equal((await c('posts/' + created.data.id, 'DELETE')).status, 200, 'deleting works without the badge');
+    const PROXY_CLOSED = '대리 글은 더 이상 쓸 수 없습니다.', NO_BUMP = '대리 글은 끌올할 수 없습니다.';
+    const old = { category: 'ladder', title: `[QA] 대리 ${run}`, body: '자동 검증', price: 20000, status: 'open', tags: [], images: [], details: {} };
+    for (const kind of ['proxy_offer', 'proxy_request']) {
+        const r = await c('posts', 'POST', { ...old, kind });
+        equal([r.status, r.data.error], [400, PROXY_CLOSED], `a new ${kind} post is refused`);
+        equal((await manager('posts', 'POST', { ...old, kind })).status, 400, `the manager cannot write ${kind} either`);
+    }
+    const apply = await c('applications', 'POST', { kind: 'badge', target: 'proxy' });
+    equal([apply.status, apply.data.error], [400, '신청할 인증을 선택해 주세요.'], 'a 대리 인증 application is refused');
+    equal((await manager(`manage/users/${c.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).status, 400, 'the manager cannot grant 대리 인증');
+    const countBefore = (await guest('users/' + c.user.id)).data.user.postCount, now = Date.now();
+    sql(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,details,images,created_at,updated_at,bumped_at,title_key) VALUES
+        ('${c.user.id}','proxy_offer','[QA] 옛 대리 진행 ${run}','자동 검증',20000,'open','ladder','fixed','{}','[]',${now},${now},${now},'qa옛대리진행${run}'),
+        ('${c.user.id}','proxy_request','[QA] 옛 대리 구함 ${run}','자동 검증',NULL,'open','story','negotiate','{}','[]',${now},${now},${now},'qa옛대리구함${run}');
+        INSERT INTO user_badges(user_id,badge,granted_by,granted_at) VALUES('${c.user.id}','proxy','manager',${now});
+        INSERT INTO applications(id,user_id,kind,target,plan,status,conversation_id,note,created_at,updated_at) VALUES('qa-proxy-${run}','${c.user.id}','badge','proxy',NULL,'pending',NULL,'',${now},${now});`);
+    const idOf = kind => sql(`SELECT id FROM posts WHERE author_id='${c.user.id}' AND kind='${kind}'`)[0].id;
+    const offerId = idOf('proxy_offer'), requestId = idOf('proxy_request'), olds = [offerId, requestId];
+    const sale = await c('posts', 'POST', { ...old, kind: 'sell', category: 'other', title: `[QA] 대리 옆 판매 ${run}` });
+    equal(sale.status, 201, 'a 판매 post of the same member');
+    const shows = async (viewer, query) => (await viewer('posts?' + new URLSearchParams({ size: '40', ...query }))).data.posts.some(p => olds.includes(p.id));
+    check(!await shows(guest, { q: run }) && !await shows(a, { q: run }) && !await shows(guest, { q: run, kind: 'proxy_offer' }), 'no search lists an old 대리 post');
+    check(!await shows(guest, { kind: 'proxy_request', category: 'story' }) && !await shows(guest, { old: '1' }), 'no board lists one');
+    const counts = (await guest('posts?' + new URLSearchParams({ q: run }))).data.counts;
+    equal(Object.keys(counts || {}).sort(), ['buy', 'exchange', 'sell'], 'a search counts the three boards only');
+    check(!await shows(guest, { author: c.user.id }) && await shows(c, { author: c.user.id }), 'the profile list leaves them out; the author still has them in 내 글');
+    const profile = (await guest('users/' + c.user.id)).data.user;
+    equal(profile.postCount, countBefore + 1, 'the profile post count leaves them out (only the 판매 post is added)');
+    check(!profile.badges.includes('proxy'), 'an old 대리 인증 row is not shown');
+    check(!(await manager('manage/users/' + c.user.id)).data.badges.some(x => x.badge === 'proxy'), 'not in the member panel either');
+    const home = (await guest('home')).data;
+    check(!('proxy_offer' in home.shelves) && !Object.values(home.shelves).flat().some(p => olds.includes(p.id)), 'the home page has no 대리 shelf and no 대리 post');
+    equal([(await guest('posts/' + offerId)).status, (await a('posts/' + requestId)).status], [404, 404], 'other members get 404');
+    equal([(await c('posts/' + offerId)).status, (await manager('posts/' + requestId)).status], [200, 200], 'the author and the manager still open them');
+    equal((await c('posts/' + offerId, 'PUT', { ...old, kind: 'proxy_offer' })).data.error, PROXY_CLOSED, 'an edit is refused');
+    equal((await c('posts/' + offerId, 'PUT', { ...old, kind: 'sell', category: 'other' })).data.error, PROXY_CLOSED, 'and so is an edit into another board');
+    equal((await c(`posts/${offerId}/bump`, 'POST')).data.error, NO_BUMP, '끌올 is refused');
+    equal((await c('posts/bulk', 'POST', { action: 'bump', ids: [requestId] })).data.skipped, [{ id: requestId, reason: NO_BUMP }], '일괄 끌올 skips it');
+    equal((await c(`posts/${offerId}/auto`, 'PUT', { bump: true })).data.error, NO_BUMP, '자동 끌올 is refused');
+    // 광고 and 자동 끌올 slots: a 대리 post still visible never takes one. A 프리미엄 grant fills the ad slot with the newest
+    // open post that is not of a retired kind (the 대리 post is bumped last here).
+    sql(`UPDATE posts SET bumped_at=${Date.now() + 60000} WHERE id=${offerId}`);
+    equal((await manager(`manage/users/${c.user.id}/grades`, 'POST', { grade: 'premium', plan: '6m' })).status, 201, 'c gets 프리미엄');
+    equal(sql(`SELECT id FROM posts WHERE author_id='${c.user.id}' AND featured_at IS NOT NULL`).map(r => r.id), [sale.data.id], 'the grant fills the ad slot with the 판매 post, not the newer 대리 post');
+    check(!sql(`SELECT post_id FROM post_auto WHERE user_id='${c.user.id}' AND bump=1`).some(r => olds.includes(r.post_id)), 'and enrols no 대리 post in 자동 끌올');
+    sql(`UPDATE posts SET featured_at=${Date.now()} WHERE id=${offerId}`);
+    equal((await c('me/usage')).data.featured.map(p => p.id), [sale.data.id], "a 대리 post the previous Worker stamped is not counted as the member's ad");
+    const premium = sql(`SELECT id FROM user_grades WHERE user_id='${c.user.id}' AND grade='premium'`)[0].id;
+    equal((await manager(`manage/users/${c.user.id}/grades/${premium}`, 'DELETE')).status, 200, '프리미엄 회수');
+    // What 0064 also clears: saved searches and 알림 of the retired boards, the chat's '문의한 글' title, 알림함 rows, and
+    // the public 거래 기록 never shows the title of a trade of a retired kind.
+    sql(`INSERT INTO saved_searches(id,user_id,name,query,created_at,alert,alert_kind,keyword) VALUES
+        ('qa-ss1-${run}','${c.user.id}','옛 게시판 알림','category=ladder&kind=proxy_offer',${now},1,'proxy_offer',1),
+        ('qa-ss2-${run}','${c.user.id}','옛 검색','kind=proxy_request&q=x',${now},0,'',1),
+        ('qa-ss3-${run}','${c.user.id}','판매 검색','kind=sell&q=proxy_offer',${now},0,'',1)`);
+    const room = (await a('chats', 'POST', { userId: c.user.id })).data.id;
+    sql(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) VALUES
+        ('${room}','${a.user.id}','[QA] 옛 대리 진행 ${run}','listing','${offerId}','[]',${now}),('${room}','${a.user.id}','[QA] 대리 옆 판매 ${run}','listing','${sale.data.id}','[]',${now});
+        INSERT INTO notifications(user_id,type,ref,post_id,actor_id,text,created_at) VALUES
+        ('${a.user.id}','fav_closed','${offerId}',${offerId},'${c.user.id}','[QA] 옛 알림 ${run}',${now}),('${a.user.id}','fav_closed','${sale.data.id}',${sale.data.id},'${c.user.id}','[QA] 판매 알림 ${run}',${now});
+        INSERT INTO trades(id,post_id,seller_id,buyer_id,price,created_at,author_id,confirmed_at,kind,category,title) VALUES
+        ('qa-tp-${run}',${offerId},'${c.user.id}','${a.user.id}',20000,${now},'${c.user.id}',${now},'proxy_offer','ladder','[QA] 옛 대리 진행 ${run}');`);
+    const traded = (await guest(`users/${c.user.id}/trades`)).data.trades.find(t => t.id === `qa-tp-${run}`);
+    equal([traded?.kind, traded?.title], ['proxy_offer', ''], 'the public 거래 기록 sends a trade of a retired kind without its title');
+    // 0064_proxy_closed, as the deploy applies it.
+    sql(readFileSync(new URL('../migrations/0064_proxy_closed.sql', import.meta.url), 'utf8').replace(/^--.*$/gm, '').trim());
+    equal(sql(`SELECT id FROM saved_searches WHERE id LIKE 'qa-ss%-${run}' ORDER BY id`).map(r => r.id), [`qa-ss3-${run}`], '0064 removes the saved searches and 알림 of the retired boards only');
+    equal(sql(`SELECT body FROM messages WHERE conversation_id='${room}' AND type='listing' ORDER BY id`).map(r => r.body), ['종료된 분류의 글', `[QA] 대리 옆 판매 ${run}`], "0064 makes the '문의한 글' card of a 대리 post neutral");
+    equal(sql(`SELECT text FROM notifications WHERE user_id='${a.user.id}' AND text LIKE '[QA] %${run}'`).map(r => r.text), [`[QA] 판매 알림 ${run}`], '0064 removes the 알림함 rows about 대리 posts');
+    sql(`DELETE FROM saved_searches WHERE id='qa-ss3-${run}'; DELETE FROM trades WHERE id='qa-tp-${run}'; DELETE FROM notifications WHERE user_id='${a.user.id}' AND text LIKE '[QA] %${run}'`);
+    equal(sql(`SELECT hidden,hidden_reason FROM posts WHERE id IN (${olds.join(',')}) ORDER BY id`), [{ hidden: 1, hidden_reason: '대리 카테고리 종료' }, { hidden: 1, hidden_reason: '대리 카테고리 종료' }], '0064 hides the old 대리 posts with the reason');
+    equal(sql(`SELECT hidden FROM posts WHERE id=${sale.data.id}`)[0].hidden, 0, 'and leaves the 판매 post alone');
+    equal(sql(`SELECT status FROM applications WHERE id='qa-proxy-${run}'`)[0].status, 'cancelled', '0064 cancels the waiting 대리 인증 application');
+    equal(sql(`SELECT COUNT(*) AS n FROM user_badges WHERE user_id='${c.user.id}' AND badge='proxy'`)[0].n, 1, 'the user_badges row stays as the record');
+    equal((await c('posts/' + offerId)).data.post.hidden_reason, '대리 카테고리 종료', 'the author sees why');
+    equal((await manager('manage/visibility', 'POST', { postId: offerId, hidden: false })).data.error, '대리 글은 다시 공개할 수 없습니다.', 'the manager cannot publish one again');
+    check((await manager('manage')).data.hidden.some(p => p.id === offerId), "the manager's 숨긴 글 lists it");
+    equal((await c(`posts/${offerId}/status`, 'PATCH', { status: 'closed' })).status, 200, 'its author can still close it');
+    equal((await c('posts/' + requestId, 'DELETE')).status, 200, 'and delete it');
+    for (const id of [offerId, sale.data.id]) equal((await c('posts/' + id, 'DELETE')).status, 200, `test post ${id} removed`);
+    sql(`DELETE FROM user_badges WHERE user_id='${c.user.id}' AND badge='proxy'`);
 }
 
 // Exchange posts store the ladders they want and can be searched from the wanted side.

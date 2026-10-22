@@ -1,4 +1,4 @@
-import { db } from './http';
+import { db, listedKind, RETIRED_SQL } from './http';
 import { PERKS, adSlotsOfRank } from '../shared/membership';
 import { SUSPENDED_AUTHORS, baseFilters, postSelect } from './posts';
 import type { User } from '../shared/market';
@@ -11,8 +11,8 @@ import type { User } from '../shared/market';
 //   post in a slot, '광고 빼기' (featured_pin -1) keeps it out; adTrimStatement cuts the rest.
 // - Shown only while eligible (adWhere): 프리미엄+ from the manager (never the 체험), 본인 인증 (the
 //   manager is exempt), no 이용 정지 and no suspension in 30 days, not '광고 제외', the post open, visible,
-//   without a pending report and touched in 7 days, and the member seen within pauseDays; a 대리(진행)
-//   post also needs 대리 인증 (even for its own author, whom the list filters let see it).
+//   without a pending report and touched in 7 days, and the member seen within pauseDays; never a post of a
+//   retired kind (대리, listedKind; even for its own author, whom the list filters let see it).
 // - Placements: the board top box (page 1, 최신순, the 진행중 view, more than 16 진행중 posts), '비슷한 매물' under a
 //   completed post (2), the home '엘리트 매물' row (6, 엘리트 and above). Each reads at most 60
 //   candidates through the posts_ad index; the rotation runs here, seeded per 10 minutes.
@@ -43,7 +43,7 @@ export function adWhere(now: number, minRank: number) {
             AND ${AD_RANK}>=?
             AND (u.role='manager' OR (COALESCE(u.last_seen_at,u.created_at)>?-CASE WHEN ${AD_RANK}>=3 THEN ? ELSE ? END
                 AND EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='identity')))
-            AND (p.kind!='proxy_offer' OR u.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))
+            AND ${listedKind('p')}
             AND NOT EXISTS(SELECT 1 FROM reports r WHERE r.post_id=p.id AND r.status='pending' AND r.comment_id IS NULL)
             AND NOT EXISTS(SELECT 1 FROM sanctions s WHERE s.user_id=p.author_id AND s.days IS NOT NULL AND s.created_at>?)`,
         args: [now - STALE_MS, now, now, minRank, now, now, PERKS.elite.pauseDays * DAY, PERKS.premium.pauseDays * DAY, now - SANCTION_MS],
@@ -109,7 +109,7 @@ export function pickSimilar<T extends AdRow & { category: string }>(rows: T[], p
 }
 
 // The home '엘리트 매물' row: 엘리트 and above, 판매 posts only (WP70: 판매중 accounts and other 판매 listings;
-// 구매, 교환 and 대리 ads stay in their own boards' box), read through posts_ad (kind, featured_at).
+// 구매 and 교환 ads stay in their own boards' box), read through posts_ad (kind, featured_at).
 export function homeAdsStatement(u: User | null, now: number) {
     const f = baseFilters(u, null, now), base = adFilters(f.where, f.values), w = adWhere(now, 3);
     return db().prepare(`${adSelect()} WHERE p.kind='sell' AND ${w.sql} AND ${base.where.join(' AND ')} ORDER BY p.featured_at DESC LIMIT ${AD_CANDIDATES}`).bind(now, ...w.args, ...base.values);
@@ -142,22 +142,26 @@ export function stripAdRank<T extends { ad_rank?: unknown }>(rows: T[]) {
     return rows;
 }
 
-// The member's posts that keep a slot: open, visible, not '광고 빼기', 고정 first, then the newest stamp;
-// every other featured_at of the member is cleared.
+// A post holds a slot while it is open, visible, not '광고 빼기' and never of a retired kind (대리, which no
+// ad shows: one the previous Worker wrote during the deploy may still be visible). Unaliased posts; a
+// function, like listedKind, since the worker modules import each other.
+export const slotPost = () => `status='open' AND hidden=0 AND featured_pin>=0 AND kind NOT IN ${RETIRED_SQL}`;
+// The member's posts that keep a slot (slotPost), 고정 first, then the newest stamp; every other
+// featured_at of the member is cleared.
 export function adTrimStatement(authorId: string, slots: number) {
     return db().prepare(`UPDATE posts SET featured_at=NULL WHERE author_id=? AND featured_at IS NOT NULL AND id NOT IN (SELECT id FROM posts INDEXED BY posts_ad_author
-        WHERE author_id=? AND featured_at IS NOT NULL AND status='open' AND hidden=0 AND featured_pin>=0 ORDER BY featured_pin DESC,featured_at DESC LIMIT ?)`).bind(authorId, authorId, slots);
+        WHERE author_id=? AND featured_at IS NOT NULL AND ${slotPost()} ORDER BY featured_pin DESC,featured_at DESC LIMIT ?)`).bind(authorId, authorId, slots);
 }
 // A free slot takes the member's newest open automatic post without one (its place in time is its
 // bumped_at, so it never jumps ahead of newer slot posts). With a guard, only while it holds.
 export function adFillStatement(authorId: string, slots: number, now: number, guard = '1', guardArgs: unknown[] = []) {
-    return db().prepare(`UPDATE posts SET featured_at=MIN(bumped_at,?) WHERE id=(SELECT id FROM posts INDEXED BY posts_author_bumped WHERE author_id=? AND status='open' AND hidden=0 AND featured_pin=0 AND featured_at IS NULL ORDER BY bumped_at DESC LIMIT 1)
-        AND (SELECT COUNT(*) FROM posts INDEXED BY posts_ad_author WHERE author_id=? AND featured_at IS NOT NULL AND status='open' AND hidden=0 AND featured_pin>=0)<? AND ${guard}`).bind(now, authorId, authorId, slots, ...guardArgs);
+    return db().prepare(`UPDATE posts SET featured_at=MIN(bumped_at,?) WHERE id=(SELECT id FROM posts INDEXED BY posts_author_bumped WHERE author_id=? AND featured_pin=0 AND featured_at IS NULL AND ${slotPost()} ORDER BY bumped_at DESC LIMIT 1)
+        AND (SELECT COUNT(*) FROM posts INDEXED BY posts_ad_author WHERE author_id=? AND featured_at IS NOT NULL AND ${slotPost()})<? AND ${guard}`).bind(now, authorId, authorId, slots, ...guardArgs);
 }
 // Set-based trim for the 자동 끌올 tick: list is JSON [{u, a}] (member, slots).
 export function adTrimManyStatement(list: string) {
-    return db().prepare(`UPDATE posts SET featured_at=NULL WHERE id IN (SELECT x.id FROM (SELECT p.id,p.status,p.hidden,p.featured_pin,j.a,
-            ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY (p.status='open' AND p.hidden=0 AND p.featured_pin>=0) DESC,p.featured_pin DESC,p.featured_at DESC) AS rn
+    return db().prepare(`UPDATE posts SET featured_at=NULL WHERE id IN (SELECT x.id FROM (SELECT p.id,p.status,p.hidden,p.featured_pin,p.kind,j.a,
+            ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY (p.status='open' AND p.hidden=0 AND p.featured_pin>=0 AND p.kind NOT IN ${RETIRED_SQL}) DESC,p.featured_pin DESC,p.featured_at DESC) AS rn
         FROM (SELECT DISTINCT json_extract(value,'$.u') AS u,json_extract(value,'$.a') AS a FROM json_each(?)) j JOIN posts p INDEXED BY posts_ad_author ON p.author_id=j.u AND p.featured_at IS NOT NULL WHERE j.a>0) x
-        WHERE x.rn>x.a OR x.status!='open' OR x.hidden!=0 OR x.featured_pin<0)`).bind(list);
+        WHERE x.rn>x.a OR x.status!='open' OR x.hidden!=0 OR x.featured_pin<0 OR x.kind IN ${RETIRED_SQL})`).bind(list);
 }

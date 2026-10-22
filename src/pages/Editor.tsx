@@ -1,10 +1,10 @@
 import { Suspense, lazy, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { LoaderCircle, Lock, X } from 'lucide-react';
+import { LoaderCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
     ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_ICONS, KIND_NAMES, NICK_RANKS, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, RECORD_PREFERENCES, TRADE_KINDS,
-    categoriesForKind, categoryName, choiceLabel, featureTags, isProxyKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
-    type DetailField, type Post, type SeasonTag, type TradeKind,
+    PROXY_CLOSED, categoriesForKind, categoryName, choiceLabel, featureTags, isRetiredKind, isTradeKind, manToWon, normalizeTrade, parseList, skinTags, suspendUntilText, wonToMan,
+    type BoardKind, type DetailField, type Post, type SeasonTag,
 } from '../../shared/market';
 import { SITE_RULES, kstDateTime, linkPreviewAllowed } from '../../shared/membership';
 import { validHidden, type LadderHidden } from '../../shared/ladder';
@@ -23,7 +23,7 @@ import { ClanTierPicker, IntegerInput, NickTypePicker, RankPicker, SeasonPicker,
 const StyleSheet = lazy(() => import('../components/StyleSheet'));
 
 type Form = {
-    kind: TradeKind; category: string; title: string; body: string;
+    kind: BoardKind; category: string; title: string; body: string;
     price: string; // 만원
     offer: string; // 현젯, 만원
     accepts_offers: boolean; status: string; tags: SeasonTag[]; details: Record<string, string>; images: string[];
@@ -39,10 +39,12 @@ const blank: Form = { kind: 'sell', category: 'account', title: '', body: '', pr
 // 시즌 비공개 goes with 판매 and the offered side of 교환, on account posts only (the server refuses it elsewhere).
 const holdsHidden = (f: Pick<Form, 'kind' | 'category'>) => (f.kind === 'sell' || f.kind === 'exchange') && f.category === 'account';
 
-function normalize(raw: Partial<Form>): Form {
+// A draft of a retired board (대리, 2026-10-22) opens as a 판매 form.
+function normalize(raw: Partial<Omit<Form, 'kind'>> & { kind?: string }): Form {
     const t = normalizeTrade(raw.kind || 'sell', raw.category || 'account');
-    const cats = categoriesForKind(t.kind);
-    const form: Form = { ...blank, ...raw, kind: t.kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [], ladderHidden: validHidden(raw.ladderHidden) || {}, clanTags: raw.clanTags || [], wantedClanTags: raw.wantedClanTags || [] };
+    const kind: BoardKind = isTradeKind(t.kind) ? t.kind : 'sell';
+    const cats = categoriesForKind(kind);
+    const form: Form = { ...blank, ...raw, kind, category: cats.some(c => c.id === t.category) ? t.category : cats[0].id, details: { ...(raw.details || {}) }, tags: raw.tags || [], images: raw.images || [], wantedTags: raw.wantedTags || [], ladderHidden: validHidden(raw.ladderHidden) || {}, clanTags: raw.clanTags || [], wantedClanTags: raw.wantedClanTags || [] };
     form.body_style = normalizeMarks(form.body, Array.isArray(raw.body_style) ? raw.body_style : []);
     if (form.kind === 'exchange') { form.price = ''; form.details.wantedCategory = form.details.wantedCategory === 'clan' ? 'clan' : 'account'; }
     return form;
@@ -53,38 +55,32 @@ function fromPost(p: Post): Form {
     return normalize({ kind: p.kind, category: p.category, title: p.title, body: p.body, price: wonToMan(p.price), offer: currentOffer ? wonToMan(Number(currentOffer)) : '', accepts_offers: !!p.accepts_offers, status: p.status, tags: p.tags, details, images: p.images, wantedTags: p.wanted_tags || [], ladderHidden: p.ladder_hidden || {}, clanTags: p.clan_tags || [], wantedClanTags: p.wanted_clan_tags || [], link_preview: p.link_preview !== false, body_style: p.body_style?.m || [] });
 }
 
-function template(kind: TradeKind, category: string) {
+function template(kind: BoardKind, category: string) {
     if (kind === 'exchange') return '내놓는 것:\n원하는 것:\n추금: 받음 / 드림 / 없음\n';
-    if (kind === 'proxy_request') return '종목:\n현재 -> 목표:\n가능 시간:\n';
-    if (kind === 'proxy_offer') return '가능 종목:\n가격: (예: 천점당 0.7)\n경력: (예: 30 챌린저, 31 마스터)\n조건: (예: 선입금, 동접 시 중단)\n';
     if (kind === 'buy') return '필수:\n우대:\n거래 방법:\n';
     if (category === 'account') return '스킨/악세:\n라이드/펫:\n엠블럼:\n거래 방법: (쿨거, 전비변 바로 등)\n';
     return '내용:\n거래 방법:\n';
 }
 
-// Title examples per board, written the way cafe titles are (5렙 공백클랜, 코믹스 1권 미쿺, 은하고 올클, 래더 대리·서폿).
+// Title examples per board, written the way cafe titles are (5렙 공백클랜, 코믹스 1권 미쿺).
 // Exchange is keyed by 내놓는 대상:구하는 대상 and follows the board's '[계정|클랜]에서 [계정|클랜] 구함'.
-const TITLE_EXAMPLES: Record<TradeKind, Record<string, string>> = {
+const TITLE_EXAMPLES: Record<BoardKind, Record<string, string>> = {
     sell: { account: '예: 28 챌린저 2대주 계정 팝니다', clan: '예: 5렙 공백클랜 팝니다', goods_coupon: '예: 코믹스 1권 미쿺 팝니다', other: '예: 기여 용병 합니다' },
     buy: { account: '예: 3대주 이하 무전적 계정 구합니다', clan: '예: 5렙 이상 공백클랜 구합니다', goods_coupon: '예: 유루미 스쿺 구합니다', other: '예: 기여 용병 구합니다' },
     exchange: {
         'account:account': '예: 2글자 닉 계정에서 래더계 구함', 'account:clan': '예: 래더계에서 5렙 공백클랜 구함',
         'clan:account': '예: 5렙 공백클랜에서 계정 구함', 'clan:clan': '예: 5렙 공백클랜에서 10렙 클랜 구함',
     },
-    proxy_request: { ladder: '예: 32시즌 다이아 래더 대리 구합니다', story: '예: 은하고 올클 대리 구합니다', event: '예: 이벤트 코인 대리 구합니다' },
-    proxy_offer: { ladder: '예: 32시즌 래더 대리·서폿 합니다', story: '예: 마법고 대리 합니다', event: '예: 이벤트 코인 대리 합니다' },
 };
 
-function titlePlaceholder(kind: TradeKind, category: string, wanted: string) {
+function titlePlaceholder(kind: BoardKind, category: string, wanted: string) {
     return TITLE_EXAMPLES[kind][kind === 'exchange' ? category + ':' + wanted : category] || '';
 }
 
 // Body hints mirror each board's 양식; the clan and goods hints skip what their fields already ask (레벨, 인원, 상태, 거래 방법).
-function bodyPlaceholder(kind: TradeKind, category: string) {
+function bodyPlaceholder(kind: BoardKind, category: string) {
     if (kind === 'buy') return '필수, 우대 조건 등';
     if (kind === 'exchange') return '원하는 조건, 추금 등';
-    if (kind === 'proxy_request') return '종목, 현재 -> 목표, 가능 시간 등';
-    if (kind === 'proxy_offer') return '가격, 경력, 진행 조건 등';
     return ({ account: '스킨, 악세, 라이드, 거래 방법 등', clan: '순위, 기여, 거래 방법 등', goods_coupon: '구성, 특이 사항 등' } as Record<string, string>)[category] || '상태, 거래 방법 등';
 }
 
@@ -129,7 +125,7 @@ function Num({ label, value, onChange, unit, max = 1000000000, placeholder = '',
 
 // Switching 거래 구분 keeps what the new kind shows the same way: 판매 and the offered side of
 // 교환 share the account (or clan) fields and the ladder record. Everything else starts empty.
-function forKind(f: Form, kind: TradeKind): Form {
+function forKind(f: Form, kind: BoardKind): Form {
     const cats = categoriesForKind(kind);
     const category = cats.some(c => c.id === f.category) ? f.category : cats[0].id;
     const shared = category === f.category && ((f.kind === 'sell' && kind === 'exchange') || (f.kind === 'exchange' && kind === 'sell'));
@@ -159,22 +155,19 @@ const draftLabel = (d: DraftInfo) => isNewKey(d.key) ? (isTradeKind(d.kind) ? KI
 // Photos per post (the same for every member; SITE_RULES.photosPerPost) until GET me/usage answers.
 const PHOTO_CAP = SITE_RULES.photosPerPost;
 const EXCHANGE_SIDES = ['account', 'clan'] as const;
-const PROXY_MORE_KEYS = ['mode', 'current', 'target', 'schedule', 'duration', 'conditions'];
 const ACCOUNT_MORE_KEYS = ['integrated', 'passwordChange', 'phoneChange', 'backupEmail', 'level', 'labLevel', 'humanSkins', 'zombieSkins', 'closet'];
 
 export default function Editor({ id }: { id?: string }) {
-    const { me, ready, requireLogin, openApply, refreshMe } = useApp();
+    const { me, ready, requireLogin, refreshMe } = useApp();
     const { params } = useLocation();
-    const proxyAllowed = me?.role === 'manager' || !!me?.badges.includes('proxy');
-    // A link to a 대리(진행) form without 대리 인증 opens 대리(구함) instead and offers the application.
-    const proxyBlocked = !id && params.get('kind') === 'proxy_offer' && !!me && !proxyAllowed;
+    // A link to a retired board (/write?kind=proxy_offer) opens the 판매 form.
     const urlKind = isTradeKind(params.get('kind'));
     // '다시 올리기' and '복사해서 새 글' (WP58): /write?from=<id> starts a new post from one of the member's
     // own posts, with the photos the member still owns. Saving places it as WP44 decides (a relist of the
     // same listing is a 끌올, or its old place inside the gap).
     const fromId = !id && /^\d+$/.test(params.get('from') || '') ? params.get('from')! : null;
     const [initial] = useState(() => normalize({
-        kind: proxyBlocked ? 'proxy_request' : urlKind ? params.get('kind') as TradeKind : 'sell',
+        kind: urlKind ? params.get('kind')! : 'sell',
         category: params.get('category') || undefined,
         details: params.get('kind') === 'exchange' ? { wantedCategory: params.get('wantedCategory') === 'clan' ? 'clan' : 'account' } : {},
     }));
@@ -190,7 +183,7 @@ export default function Editor({ id }: { id?: string }) {
     const [overwrite, setOverwrite] = useState<string | null>(null);
     // Bumped when the whole form is replaced, so folds and pickers open again for the new values.
     const [version, setVersion] = useState(0);
-    const [pendingKind, setPendingKind] = useState<TradeKind | null>(null);
+    const [pendingKind, setPendingKind] = useState<BoardKind | null>(null);
     const [photoCap, setPhotoCap] = useState(PHOTO_CAP);
     // GET me/usage for the 새 글 allowance line above [등록] (first 3 new posts a day are free).
     const [usage, setUsage] = useState<Usage | null>(null);
@@ -222,10 +215,7 @@ export default function Editor({ id }: { id?: string }) {
     const [leaveAsk, setLeaveAsk] = useState<null | ((leave: boolean) => void)>(null);
 
     useEffect(() => { if (ready && !me) requireLogin(); }, [ready, me, requireLogin]);
-    useEffect(() => {
-        void refreshMe().catch(() => {});
-        if (proxyBlocked) { openApply({ kind: 'badge', target: 'proxy' }); toast('대리(진행): 대리 인증이 필요합니다. 대리(구함)으로 열었습니다.'); }
-    }, []);
+    useEffect(() => { void refreshMe().catch(() => {}); }, []);
 
     // Puts a whole form on screen without marking it as an edit to save again.
     const replaceForm = (next: Form, saved: boolean) => {
@@ -272,7 +262,9 @@ export default function Editor({ id }: { id?: string }) {
             if (!alive) return;
             setDrafts(all);
             if (src && src.post.author_id !== me.id) throw new Error(id ? '본인 글만 수정할 수 있습니다.' : '본인 글만 복사할 수 있습니다.');
-            // A completed post is read-only (WP43); it can still be copied (WP58).
+            // A completed post is read-only (WP43); it can still be copied (WP58). A post of a retired kind (대리) can
+            // be neither edited nor copied.
+            if (src && isRetiredKind(src.post.kind)) throw new Error(PROXY_CLOSED);
             if (src && id && src.post.status === 'closed') throw new Error('완료된 글은 수정할 수 없습니다.');
             const p = id ? src : null;
             const cap = usage?.rules.photosPerPost ?? PHOTO_CAP;
@@ -391,13 +383,12 @@ export default function Editor({ id }: { id?: string }) {
     const patchBody = (body: string) => { dirty.current = true; setForm(f => ({ ...f, body, body_style: shiftOnEdit(f.body, body, f.body_style) })); };
     const setDetail = (key: string, value: string) => patch({ details: { ...formRef.current.details, [key]: value } });
 
-    function changeKind(kind: TradeKind) {
+    function changeKind(kind: BoardKind) {
         if (kind === form.kind) return;
-        if (kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
         if (dropsInput(form, forKind(form, kind))) { setPendingKind(kind); return; }
         applyKind(kind);
     }
-    function applyKind(kind: TradeKind) {
+    function applyKind(kind: BoardKind) {
         const next = forKind(formRef.current, kind);
         dirty.current = true;
         setForm(next);
@@ -493,7 +484,6 @@ export default function Editor({ id }: { id?: string }) {
         if (Number.isNaN(price) || Number.isNaN(offer)) { showError('가격은 만원 단위 숫자로 입력해 주세요. 예: 35, 1.5'); return; }
         // The rule shows under 현젯; nothing is sent until it is fixed.
         if (offerTooHigh) { document.getElementById('ed-offer')?.focus(); return; }
-        if (form.kind === 'proxy_offer' && !proxyAllowed) { openApply({ kind: 'badge', target: 'proxy' }); return; }
         setBusy(true);
         try {
             const details = { ...form.details, ...(offer !== null ? { currentOffer: String(offer) } : {}) };
@@ -629,17 +619,9 @@ export default function Editor({ id }: { id?: string }) {
         ? <Num key={f.id} label={f.label} value={d[f.id] || ''} onChange={v => setDetail(f.id, v)} />
         : <label className="field" key={f.id}><span className="field-label">{f.label}</span><input className="input" type={f.type === 'date' ? 'date' : 'text'} maxLength={500} placeholder={f.placeholder || ''} value={d[f.id] || ''} onChange={e => setDetail(f.id, e.target.value)} /></label>;
     const generic = (cat: string) => {
-        const fields = (DETAIL_FIELDS[cat] || []).filter(f => !(kind === 'proxy_offer' && f.id === 'current'));
-        // 대리: only 가격 기준 stays out; 종목, 현재, 목표, 가능 시간, 기간, 조건 fold into 추가 정보.
-        const proxy = isProxyKind(kind);
-        const main = proxy ? fields.filter(f => !PROXY_MORE_KEYS.includes(f.id)) : fields;
-        const more = proxy ? fields.filter(f => PROXY_MORE_KEYS.includes(f.id)) : [];
+        const fields = DETAIL_FIELDS[cat] || [];
         return <div className="grid-gap-16">
-            {cat === 'ladder' && <div className="field"><span className="field-label">{kind === 'proxy_offer' ? '내 래더 기록' : kind === 'proxy_request' ? '계정 래더 기록' : '래더 시즌'}</span><SeasonPicker value={form.tags} onChange={tags => patch({ tags })} /></div>}
-            {main.length > 0 && <div className="ed-grid">{main.map(field)}</div>}
-            {more.length > 0 && <Fold filled={more.some(f => d[f.id])} summary={<>추가 정보 <span>{more.map(f => f.label).join(', ')}</span></>}>
-                <div className="ed-grid mt-16">{more.map(field)}</div>
-            </Fold>}
+            {fields.length > 0 && <div className="ed-grid">{fields.map(field)}</div>}
         </div>;
     };
 
@@ -656,7 +638,7 @@ export default function Editor({ id }: { id?: string }) {
         <div className="field"><span className="field-label">원하는 클랜 티어</span><SeasonPicker clan value={form.wantedClanTags} onChange={wantedClanTags => patch({ wantedClanTags })} /></div>
     </div>;
 
-    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : category === 'clan' && buying ? '원하는 클랜' : kind === 'proxy_request' ? '요청 내용' : kind === 'proxy_offer' ? '진행 내용' : `${categoryName(category)} 정보`;
+    const infoTitle = account ? (buying ? '원하는 계정' : '계정 정보') : category === 'clan' && buying ? '원하는 클랜' : `${categoryName(category)} 정보`;
     const hasInfo = account || (DETAIL_FIELDS[category]?.length || 0) > 0;
     const photoCount = `${form.images.length}/${photoCap}`;
     // 링크 미리보기 (WP48): the switch shows for 플러스 and up (the 무료 체험 too) once the body holds a link.
@@ -685,14 +667,10 @@ export default function Editor({ id }: { id?: string }) {
             <fieldset disabled={busy}>
                 <Section title="게시판">
                     <div className="kind-cards" role="radiogroup" aria-label="거래 구분">
-                        {TRADE_KINDS.map(k => {
-                            const locked = k === 'proxy_offer' && !proxyAllowed;
-                            return <label key={k} className={'kind-card' + (locked ? ' is-locked' : '')}>
-                                <input type="radio" name="kind" checked={kind === k} onChange={() => changeKind(k)} onClick={() => { if (locked) changeKind(k); }} />
-                                <Icon name={KIND_ICONS[k]} size={24} /><span>{KIND_NAMES[k]}</span>
-                                {locked && <small><Lock size={11} /><span>대리 인증 필요</span></small>}
-                            </label>;
-                        })}
+                        {TRADE_KINDS.map(k => <label key={k} className="kind-card">
+                            <input type="radio" name="kind" checked={kind === k} onChange={() => changeKind(k)} />
+                            <Icon name={KIND_ICONS[k]} size={24} /><span>{KIND_NAMES[k]}</span>
+                        </label>)}
                     </div>
                     {kind === 'exchange' ? <div className="exchange-pick mt-16">
                         <Segmented name="내놓는 대상" options={EXCHANGE_SIDES} label={categoryName} allowEmpty={false} value={category} onChange={v => { if (v) changeCategory(v); }} />
@@ -722,7 +700,7 @@ export default function Editor({ id }: { id?: string }) {
                         {id && <p className="field-hint">이전 즉거가는 취소선으로 남습니다.</p>}
                         <label className="switch"><input type="checkbox" checked={form.price === '' || form.accepts_offers} disabled={form.price === ''} onChange={e => patch({ accepts_offers: e.target.checked })} />제시 받기</label>
                     </div> : <div className="ed-grid">
-                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : kind === 'proxy_request' ? '희망 가격' : '가격'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder={buying ? '미정' : '협의'} />
+                        <Num decimal label={buying ? '최대 사용 가능 금액 (MAX)' : '가격'} value={form.price} onChange={v => patch({ price: v })} unit="만원" placeholder={buying ? '미정' : '협의'} />
                     </div>}
                 </Section>}
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Ban, Bell, BellRing, Camera, ChevronRight, Flag, LoaderCircle, MessageCircle, Pencil, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { dateText, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
+import { dateText, isRetiredKind, longDate, priceText, reviewName, suspendUntilText, tradeStatsText, type Post, type Review, type User } from '../../shared/market';
 import { ALERT_TEXT, BADGES, GRADES, PIN_TEXT, PROVIDER_TEXT, gradeInfo, isProviderType, ringTier, trialStatus, type ProviderType } from '../../shared/membership';
 import { ApiError, api, errorText, imageUrl, setAvatar } from '../lib/api';
 import { Link, navigate } from '../lib/router';
@@ -211,7 +211,7 @@ export default function ProfilePage({ id }: { id?: string }) {
         <section className="profile-cards">
             <div className="card card-pad">
                 <h2 className="card-title">인증</h2>
-                {/* 본인 인증, 대리 인증, 신용인 (the BADGES order). The owner applies from the row. */}
+                {/* 본인 인증, 신용인, 중개 인증, 가측 인증 (the BADGES order). The owner applies from the row. */}
                 <ul className="verify-list">{BADGES.map(b => {
                     const on = user.badges.includes(b.id);
                     return <li key={b.id} className={on ? 'on' : ''}><Icon name={b.icon} size={20} className="verify-icon" /><span className="grow">{b.name}</span>{on ? <>
@@ -323,15 +323,16 @@ function ReviewList({ userId }: { userId: string }) {
     </>;
 }
 
-// The member's side of a trade, as the board names it.
+// The member's side of a trade, as the board names it (a trade of a retired kind by its side too; its
+// title line is neutral).
 function sideName(t: TradeRow) {
     if (t.kind === 'exchange') return '교환';
-    if (t.kind === 'proxy_request' || t.kind === 'proxy_offer') return t.sold ? '대리(진행)' : '대리(구함)';
     return t.sold ? '판매' : '구매';
 }
 
 // 거래 기록 (WP51): the member's confirmed trades, newest first, 20 at a time (GET /users/:id/trades). A deleted
-// post keeps the title the trade saved, marked '삭제된 글'; a hidden one is not linked.
+// post keeps the title the trade saved, marked '삭제된 글'; a hidden one is not linked. A trade of a retired
+// kind (대리) comes without its title and reads '종료된 분류의 거래', never linked.
 function TradeList({ userId }: { userId: string }) {
     const [rows, setRows] = useState<TradeRow[] | null>(null), [total, setTotal] = useState(0), [page, setPage] = useState(1), [busy, setBusy] = useState(false);
     const load = (n: number) => api<{ trades: TradeRow[]; total: number }>(`users/${userId}/trades?page=${n}`);
@@ -360,8 +361,9 @@ function TradeList({ userId }: { userId: string }) {
         <ul className="review-list trade-list">{rows.map(t => <li key={t.id}>
             <div className="review-head">
                 <span className="trade-title"><span className="tag">{sideName(t)}</span>
-                    {t.post_gone || t.post_hidden ? <span className="trade-title-text">{t.title || '삭제된 글'}</span> : <Link to={'/posts/' + t.post_id} className="trade-title-text">{t.title}</Link>}
-                    {t.post_gone && t.title && <span className="tag tag-line">삭제된 글</span>}</span>
+                    {isRetiredKind(t.kind) ? <span className="trade-title-text">종료된 분류의 거래</span>
+                        : t.post_gone || t.post_hidden ? <span className="trade-title-text">{t.title || '삭제된 글'}</span> : <Link to={'/posts/' + t.post_id} className="trade-title-text">{t.title}</Link>}
+                    {t.post_gone && t.title && !isRetiredKind(t.kind) && <span className="tag tag-line">삭제된 글</span>}</span>
                 <time className="review-date">{dateText(t.created_at)}</time>
             </div>
             <div className="review-line">

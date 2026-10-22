@@ -9,8 +9,8 @@ import { LEGACY_SKELETON, FULL_SET, NICK_TYPES, SKIN_TAGS, parseList, type Seaso
 import { titleKey } from './membership';
 
 // m: how the fields compare. 'acct': an account offered (판매, 교환) with distinctive fields that can
-// match and supporting fields that can only contradict. 'want': 구매 and 대리(구함), where the whole
-// filled map must be equal. 'key': one naming field (클랜명, 상품명/쿠폰명, 대리(진행) 종목). 'none': 기타.
+// match and supporting fields that can only contradict. 'want': 구매, where the whole filled map must be
+// equal. 'key': one naming field (클랜명, 상품명/쿠폰명). 'none': 기타 (and the retired 대리 categories).
 export type ListingFields = { m: 'acct' | 'want' | 'key' | 'none'; d: Record<string, string>; s: Record<string, string> };
 // One print as the matcher sees it. photos: up to 12 entries, one per photo, each the photo's keys
 // (16 hex characters of the compressed file's and of the original's SHA-256, or 'u:<upload id>' when the
@@ -35,11 +35,10 @@ const SUPPORTING_TEXT = ['joined', 'accountType', 'progress'];
 const KEY_FIELDS: Record<string, [string, string][]> = {
     clan: [['clanName', '클랜명']],
     goods_coupon: [['couponName', '쿠폰명'], ['goodsName', '상품명']],
-    proxy: [['mode', '종목']],
 };
 const WANT_NAMES: Record<string, string> = {
     ladder: '래더', skinTags: '스킨', maxOwners: '대주 수', recordPreference: '전적', nicknameCharsMin: '닉네임 글자 수', nicknameCharsMax: '닉네임 글자 수',
-    nicknameRanks: '닉 등급', wantedNicknameTypes: '닉 종류', phantomMin: '팬텀', mode: '종목', current: '현재', target: '목표',
+    nicknameRanks: '닉 등급', wantedNicknameTypes: '닉 종류', phantomMin: '팬텀',
 };
 
 // The same-title key. A title with no letters or digits ('!!') keeps its symbols, so it never
@@ -75,7 +74,7 @@ const filled = (o: Record<string, string>) => Object.fromEntries(Object.entries(
 // stay empty on older posts, so earlier prints keep matching.
 export function listingFields(kind: string, category: string, details: Record<string, string>, seasons: SeasonTag[] = [], hidden?: Record<string, number> | null, clan: SeasonTag[] = []): ListingFields {
     const d = details || {};
-    if (kind === 'buy' || kind === 'proxy_request') {
+    if (kind === 'buy') {
         const want: Record<string, string> = { ladder: ladderOf(seasons), clanLadder: ladderOf(clan) };
         for (const [k, v] of Object.entries(d)) {
             if (k === 'currentOffer') continue;
@@ -99,7 +98,7 @@ export function listingFields(kind: string, category: string, details: Record<st
         };
         return { m: 'acct', d: filled(dist), s: filled(sup) };
     }
-    const keys = KEY_FIELDS[kind === 'proxy_offer' ? 'proxy' : category];
+    const keys = KEY_FIELDS[category];
     if (!keys) return { m: 'none', d: {}, s: {} };
     const key: Record<string, string> = {}, rest: Record<string, string> = {};
     for (const [k, v] of Object.entries(d)) {
@@ -140,7 +139,7 @@ function fieldMatch(a: Print, b: Print): string[] | null {
         if (!kx.length || kx.length !== ky.length || kx.some(k => x.d[k] !== y.d[k])) return null;
         return [...new Set(kx.map(k => WANT_NAMES[k] || '조건'))];
     }
-    const keys = KEY_FIELDS[a.kind === 'proxy_offer' ? 'proxy' : a.category] || [];
+    const keys = KEY_FIELDS[a.category] || [];
     const names = keys.filter(([k]) => x.d[k] && x.d[k] === y.d[k]).map(([, name]) => name);
     return names.length ? names : null;
 }

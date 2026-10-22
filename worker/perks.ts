@@ -1,6 +1,6 @@
 import { db, requireUser, json } from './http';
 import { perksOf, rulesOf, kstDayStart } from '../shared/membership';
-import { FEATURED_MINE, walletJson } from './posts';
+import { featuredMine, walletJson } from './posts';
 import { photoBytesSql } from './files';
 import { storageMode, userLimit } from './storage';
 
@@ -18,7 +18,7 @@ export async function usageHandler(req: Request) {
             (SELECT COUNT(*) FROM posts WHERE author_id=u.id AND status!='closed') AS open,
             (SELECT COUNT(*) FROM post_auto pa JOIN posts q ON q.id=pa.post_id WHERE pa.user_id=u.id AND pa.bump=1 AND q.status!='closed' AND q.hidden=0) AS auto_on,
             (SELECT bump_on FROM automation WHERE user_id=u.id) AS auto_switch,${photoBytesSql(mode)} AS photo_bytes FROM users u WHERE u.id=?`).bind(dayStart, dayStart, u.id),
-        db().prepare(`SELECT id,title,kind FROM posts WHERE ${FEATURED_MINE} ORDER BY featured_at DESC`).bind(u.id),
+        db().prepare(`SELECT id,title,kind FROM posts WHERE ${featuredMine()} ORDER BY featured_at DESC`).bind(u.id),
     ]);
     const c = counts.results[0] as { bump_tokens: number; bump_at: number; posts: number; fresh: number; open: number; auto_on: number; auto_switch: number | null; photo_bytes: number };
     // The editor's '사진 용량 12.3MB/100MB' (KV and D1 only; the same as GET uploads/usage).

@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { SUSPEND_FOREVER, suspendUntilText, type User } from '../shared/market';
+import { RETIRED_KINDS, SUSPEND_FOREVER, suspendUntilText, type User } from '../shared/market';
 import { BADGES, PERKS, TRIAL_MS, type BadgeId } from '../shared/membership';
 import { meteredDb } from './meter';
 import { enrolStatements } from './automation';
@@ -96,6 +96,12 @@ export const paidRankSql = (alias: string) => `COALESCE((SELECT MIN(MAX(g.rank),
 // A trade counts once the other member confirmed it ('확인' or their 후기) and while the manager has
 // not removed it. Rows recorded before the confirm step (no author_id) count as confirmed.
 export const countedTrade = (t: string) => `${t}.removed_at IS NULL AND (${t}.confirmed_at IS NOT NULL OR ${t}.author_id IS NULL)`;
+// 대리 (proxy_request, proxy_offer) ended on 2026-10-22 (0064 hid those posts): no board, count, search, 알림,
+// share card or ad lists a post of a retired kind, also one the previous Worker wrote during the deploy.
+// Only its author (내 글, the post itself) and the manager still open it. `p` is the posts alias; binds nothing.
+// RETIRED_SQL is the list itself, for a kind expression or an unaliased posts subquery.
+export const RETIRED_SQL = `(${RETIRED_KINDS.map(k => `'${k}'`).join(',')})`;
+export const listedKind = (p: string) => `${p}.kind NOT IN ${RETIRED_SQL}`;
 // A 후기 shows while neither it nor its trade was removed by the manager.
 export const liveReview = (r: string) => `${r}.removed_at IS NULL AND EXISTS(SELECT 1 FROM trades lt WHERE lt.id=${r}.trade_id AND lt.removed_at IS NULL)`;
 

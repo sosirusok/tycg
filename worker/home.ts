@@ -5,8 +5,8 @@ import { hash01, homeAdsStatement, pickHome, stripAdRank, ROTATE_MS } from './ad
 import { popupProviders, popupStatement, type ProviderItem } from './providers';
 
 // The home shelves, in the order Home.tsx shows them. 판매 has category chips (?category=, default
-// the first one); the other shelves show every category.
-const SHELVES = ['sell', 'buy', 'proxy_offer'] as const;
+// the first one); the other shelves show every category. 교환 took the place of the 대리(진행) shelf (2026-10-22).
+const SHELVES = ['sell', 'buy', 'exchange'] as const;
 const SHELF_SIZE = 6;
 
 // GET /api/home (WP42): the whole home page in one request and one batch, instead of five requests.
@@ -53,8 +53,8 @@ export async function homeHandler(req: Request, url: URL) {
     rows.push(stripAdRank(home.card));
     const all = await decorate(rows.flat(), u);
     let at = 0;
-    const [sell, buy, proxy_offer, ads, cardAds] = rows.map(list => all.slice(at, at += list.length));
+    const [sell, buy, exchange, ads, cardAds] = rows.map(list => all.slice(at, at += list.length));
     // cardAds: for the home bottom card only (never a post of the row); card: the same posts mixed with the providers.
     const card = cardMix(cardAds, popupProviders(r[SHELVES.length + 2].results as any[], now), now);
-    return json({ shelves: { sell, buy, proxy_offer }, sellCategory, ads, cardAds, card, notices: r[SHELVES.length + 1].results });
+    return json({ shelves: { sell, buy, exchange }, sellCategory, ads, cardAds, card, notices: r[SHELVES.length + 1].results });
 }

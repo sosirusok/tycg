@@ -1,10 +1,10 @@
 import { MARKET_SQL, marketOf, marketSince, weeklyDone, weeklyStatements, type MarketTrade } from './stats';
-import { db, fail, requireUser, requireActive, json, body, isManager, isSuspended } from './http';
+import { db, fail, requireUser, requireActive, json, body, isManager, isSuspended, listedKind } from './http';
 import { notifyStatement } from './notifications';
-import { amount, walletJson } from './posts';
+import { amount, walletJson, PROXY_NO_BUMP } from './posts';
 import { adTrimManyStatement } from './ads';
 import { assertNoBlockedLinks } from './unfurl';
-import { TRADE_KINDS, categoriesForKind, priceText, type User } from '../shared/market';
+import { TRADE_KINDS, categoriesForKind, isRetiredKind, priceText, type User } from '../shared/market';
 import { AUTO_REPLY_MAX, AUTO_RESERVE, AUTO_TEXT, AWAY_FROM, AWAY_NOW_MS, AWAY_TO, CHAT_AUTO_TEXT, DROP_MAX, DROP_PCTS, DROP_STEPS, DROP_TEXT, MANAGER_PERKS, MATCH_TEXT, TEMPLATE_MAX, PERKS, defaultDropFloor, dropSlotAt, gradeInfo, kstDate, kstDayStart, nextDropPrice, perksOf, perksOfRank, walletOf, type GradeId, type Perks } from '../shared/membership';
 
 // 자동 끌올 (WP52). Two cron ticks share the work:
@@ -63,7 +63,7 @@ const walletArgs = (perks: Perks) => ({ g: perks.bumpGapMinutes * MIN, m: Number
 
 type Due = {
     id: string; next: number; auto_today: number; reason: string; paused_at: number | null; role: string; suspended_until: number | null;
-    bump_tokens: number; bump_at: number; last_seen_at: number | null; rank: number; paying: number; proxy: number;
+    bump_tokens: number; bump_at: number; last_seen_at: number | null; rank: number; paying: number;
 };
 // e 1: a real candidate; e 0: one row per member without one, carrying n (listed posts) and f (those
 // held back by page 1 or a top-5 place), so the card names the real reason.
@@ -75,7 +75,7 @@ type Bump = { p: number; u: string; g: number; m: number; r: number; a: number }
 // Members due for a look: on, not paused for 'away', due by now. The rank, whether they pay and the
 // wallet come along. Bind now ×4.
 const dueSelect = (now: number) => db().prepare(`SELECT a.user_id AS id,a.bump_next_at AS next,a.auto_today,a.pause_reason AS reason,a.paused_at,u.role,u.suspended_until,u.bump_tokens,u.bump_at,COALESCE(u.last_seen_at,u.created_at) AS last_seen_at,
-        ${RANK('a.user_id')} AS rank,${PAYING('a.user_id')} AS paying,(u.role='manager' OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=a.user_id AND b.badge='proxy')) AS proxy
+        ${RANK('a.user_id')} AS rank,${PAYING('a.user_id')} AS paying
     FROM automation a INDEXED BY automation_due JOIN users u ON u.id=a.user_id
     WHERE a.bump_on=1 AND a.pause_reason!='away' AND a.bump_next_at<=? AND u.deleted_at IS NULL ORDER BY a.bump_next_at LIMIT ${TICK_MEMBERS}`).bind(now, now, now);
 
@@ -131,7 +131,7 @@ function staleNotice(now: number) {
 // (새 글 우선), off page 1 of their board (or older than the board window), on a board where the member
 // has nothing in the top 5. Oldest-bumped first, at most 5 per member (e=1). A member with none gets one
 // e=0 row with n (listed open posts) and f (how many of them page 1 or the top 5 holds back).
-function candidatesStatement(members: { u: string; g: number; x: number }[], boards: string, now: number) {
+function candidatesStatement(members: { u: string; g: number }[], boards: string, now: number) {
     const k = "p.kind||'/'||p.category";
     return db().prepare(`SELECT id,author_id,kind,bumped_at,rn,e,n,f FROM (
         SELECT q.*,ROW_NUMBER() OVER (PARTITION BY q.author_id,q.e ORDER BY q.bumped_at,q.id) AS rn,COUNT(*) OVER (PARTITION BY q.author_id) AS n,SUM(1-q.off) OVER (PARTITION BY q.author_id) AS f
@@ -142,7 +142,7 @@ function candidatesStatement(members: { u: string; g: number; x: number }[], boa
                 AND NOT EXISTS(SELECT 1 FROM json_each(?) b,json_each(json_extract(b.value,'$.t')) t WHERE json_extract(b.value,'$.k')=${k} AND t.value=p.author_id),0) AS off
         FROM json_each(?) d JOIN post_auto pa INDEXED BY post_auto_user ON pa.user_id=json_extract(d.value,'$.u') AND pa.bump=1
         JOIN posts p ON p.id=pa.post_id AND p.author_id=pa.user_id
-        WHERE p.status='open' AND p.hidden=0 AND (p.kind!='proxy_offer' OR json_extract(d.value,'$.x')=1)) b0) q)
+        WHERE p.status='open' AND p.hidden=0 AND ${listedKind('p')}) b0) q)
         WHERE (e=1 AND rn<=${CANDIDATES}) OR (e=0 AND rn=1)`).bind(now, now, now - STALE_MS, now - LIST_WINDOW, boards, boards, JSON.stringify(members));
 }
 
@@ -213,7 +213,7 @@ export async function bumpJob(now: number) {
     });
     let candidates: Candidate[] = [], replies = new Map<string, number>();
     if (looked.length) {
-        const members = looked.map(d => ({ u: d.id, g: walletArgs(perksFor(num(d.rank), d.role === 'manager')).g, x: d.proxy ? 1 : 0 }));
+        const members = looked.map(d => ({ u: d.id, g: walletArgs(perksFor(num(d.rank), d.role === 'manager')).g }));
         const waitIds = looked.filter(d => d.role !== 'manager').map(d => d.id);
         // A lower grade's count first (the trim runs before the candidates read, in the same batch).
         const trim = looked.flatMap(d => {
@@ -323,18 +323,18 @@ function countStatement(list: string, now: number, day: string, delayed: number)
 
 // Tick B: '‘제목’ 글 끌올 가능' for the posts whose reminder time came, once the post can really be bumped
 // (its gap, 새 글 우선 and 1 끌올 in the wallet). Not yet: the reminder moves to the new time. A post that
-// was completed, hidden or deleted drops its reminder. Two calls, at most 100 rows.
+// was completed, hidden or deleted, or is of a retired kind (대리), drops its reminder. Two calls, at most 100 rows.
 // The 엘리트 주간 요약 (WP63, stats.ts) rides the first call while the week is not known to be done.
 export async function remindJob(now: number) {
     const weekly = weeklyStatements(now);
-    const [read, ...weeklyR] = await db().batch([db().prepare(`SELECT pa.post_id,p.title,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
+    const [read, ...weeklyR] = await db().batch([db().prepare(`SELECT pa.post_id,p.title,p.kind,p.status,p.hidden,p.bumped_at,p.bump_count,p.created_at,u.bump_tokens,u.bump_at,u.role,${RANK('pa.user_id')} AS rank,pa.user_id
         FROM post_auto pa INDEXED BY post_auto_remind JOIN posts p ON p.id=pa.post_id JOIN users u ON u.id=pa.user_id
         WHERE pa.bump_remind>0 AND pa.bump_remind<=? ORDER BY pa.bump_remind LIMIT ${REMINDS_PER_TICK}`).bind(now, now), ...weekly]);
     const rows = read.results as any[], weeklySent = weeklyDone(weeklyR, now);
     if (!rows.length) return { reminded: 0, ...weekly.length ? { weekly: weeklySent } : {} };
     const send: { u: string; p: number; t: string }[] = [], next: { p: number; t: number }[] = [];
     for (const r of rows) {
-        if (r.status !== 'open' || r.hidden) { next.push({ p: r.post_id, t: 0 }); continue; }
+        if (r.status !== 'open' || r.hidden || isRetiredKind(r.kind)) { next.push({ p: r.post_id, t: 0 }); continue; }
         const at = bumpReadyAt(r, perksFor(num(r.rank), r.role === 'manager'), now);
         if (at > now) { next.push({ p: r.post_id, t: at }); continue; }
         send.push({ u: r.user_id, p: r.post_id, t: AUTO_TEXT.ready(r.title) });
@@ -519,8 +519,9 @@ function dropWrites(plans: DropPlan[], drops: { p: number; u: string; o: number;
 const slotsOf = (perks: Perks) => perks.autoBumpPosts;
 
 // A grant or the trial: the member's automation row (on, due now, 새 글 자동 포함 for 엘리트 and above)
-// and their most recently bumped open posts up to the grade's count. Written only when `guard` holds
-// (the grant row was written at this time). force: a manager grant turns 자동 끌올 on again.
+// and their most recently bumped open posts up to the grade's count, never a post of a retired kind (대리,
+// listedKind). Written only when `guard` holds (the grant row was written at this time). force: a manager
+// grant turns 자동 끌올 on again.
 // 자동 매칭 (WP58) is on from a 프리미엄 or higher grant too (match_on), and a manager grant turns it on again.
 export function enrolStatements(userId: string, grade: GradeId, now: number, guard: string, guardArgs: unknown[], force: boolean) {
     const perks = PERKS[grade], slots = slotsOf(perks), elite = gradeInfo(grade).rank >= 3 ? 1 : 0, match = perks.matchPosts ? 1 : 0;
@@ -529,7 +530,7 @@ export function enrolStatements(userId: string, grade: GradeId, now: number, gua
         db().prepare(`INSERT INTO automation(user_id,bump_on,bump_new,bump_next_at,match_on,updated_at) SELECT ?,1,?,?,?,? WHERE ${guard}
             ON CONFLICT(user_id) DO UPDATE SET ${force ? 'bump_on=1,' : ''}${force && match ? 'match_on=1,' : ''}bump_new=MAX(automation.bump_new,excluded.bump_new),bump_next_at=MIN(COALESCE(automation.bump_next_at,excluded.bump_next_at),excluded.bump_next_at),updated_at=excluded.updated_at`)
             .bind(userId, elite, now, match, now, ...guardArgs),
-        db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT p.id,p.author_id,1 FROM posts p WHERE p.author_id=? AND p.status!='closed' AND p.hidden=0 AND ${guard}
+        db().prepare(`INSERT INTO post_auto(post_id,user_id,bump) SELECT p.id,p.author_id,1 FROM posts p WHERE p.author_id=? AND p.status!='closed' AND p.hidden=0 AND ${listedKind('p')} AND ${guard}
             AND NOT EXISTS(SELECT 1 FROM post_auto x WHERE x.post_id=p.id AND x.bump=1) ORDER BY p.bumped_at DESC,p.id DESC LIMIT ${limit}
             ON CONFLICT(post_id) DO UPDATE SET bump=1`).bind(userId, ...guardArgs, ...Number.isFinite(slots) ? [userId] : []),
     ];
@@ -811,6 +812,8 @@ export async function automationHandler(req: Request, p: string[]): Promise<Resp
 // listed posts, for the '뺄 글 선택' sheet.
 export async function postAutoHandler(req: Request, u: User, post: any) {
     const b = await body(req), now = Date.now(), perks = perksOf(u);
+    // 대리 (retired 2026-10-22): no 자동 끌올 and no '끌올 가능' 알림 for such a post (turning them off still works).
+    if (isRetiredKind(post.kind) && (b.bump === true || b.remind === true)) fail(400, PROXY_NO_BUMP);
     if (b.drop !== undefined) return dropSwitch(u, post, b.drop, now);
     if (b.match !== undefined) return matchSwitch(u, post, b.match, now);
     if (typeof b.remind === 'boolean') {

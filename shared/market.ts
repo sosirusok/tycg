@@ -83,8 +83,17 @@ export type User = {
     celebrated_rank?: number;
 };
 
-export type TradeKind = 'buy' | 'sell' | 'exchange' | 'proxy_request' | 'proxy_offer';
-export const TRADE_KINDS: TradeKind[] = ['buy', 'sell', 'exchange', 'proxy_request', 'proxy_offer'];
+// The boards members write on. 대리(구함) and 대리(진행) (proxy_request, proxy_offer) ended on 2026-10-22: 대리 게임
+// and its 알선 are against 게임산업법 제32조 제1항 제11호. Old rows keep their kind (RetiredKind) and still read,
+// but no screen offers it, the server refuses it, and 0064 hid every such post.
+export type BoardKind = 'buy' | 'sell' | 'exchange';
+export type RetiredKind = 'proxy_request' | 'proxy_offer';
+export type TradeKind = BoardKind | RetiredKind;
+export const TRADE_KINDS: BoardKind[] = ['buy', 'sell', 'exchange'];
+export const RETIRED_KINDS: RetiredKind[] = ['proxy_request', 'proxy_offer'];
+// The server's refusal for a new post, an edit, 끌올 and 광고 of a retired kind.
+export const PROXY_CLOSED = '대리 글은 더 이상 쓸 수 없습니다.';
+export const PROXY_RULE = '대리 게임(대신 플레이해 주는 거래)과 그 알선은 게임산업법으로 금지되어 있어 글을 쓸 수 없습니다.';
 
 export type PriceHistoryEntry = { price: number; changed_at: number };
 
@@ -203,40 +212,41 @@ export const CATEGORIES = [
     { id: 'event', name: '이벤트', icon: 'party-popper' },
 ] as const;
 
-export const KIND_NAMES: Record<TradeKind, string> = { buy: '구매', sell: '판매', exchange: '교환', proxy_request: '대리(구함)', proxy_offer: '대리(진행)' };
+// A retired kind reads '종료된 분류' wherever an old row still shows (its author's 내 글, the manager's 숨긴 글).
+export const KIND_NAMES: Record<TradeKind, string> = { buy: '구매', sell: '판매', exchange: '교환', proxy_request: '종료된 분류', proxy_offer: '종료된 분류' };
 // Line icon names (src/components/ui.tsx ICONS).
-export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'tag', exchange: 'arrow-left-right', proxy_request: 'user-search', proxy_offer: 'gamepad-2' };
-// Two states (WP43): 진행중 ('open') and 완료 ('closed', final). Each kind names them its own way;
-// screens that mix kinds use 거래중/거래완료. A legacy 'reserved' reads as open.
+export const KIND_ICONS: Record<TradeKind, string> = { buy: 'shopping-cart', sell: 'tag', exchange: 'arrow-left-right', proxy_request: 'file-text', proxy_offer: 'file-text' };
+// Two states (WP43): 진행중 ('open') and 완료 ('closed', final). Each board names them its own way;
+// screens that mix kinds (and a retired kind) use 거래중/거래완료. A legacy 'reserved' reads as open.
 export const STATUS_NAMES: Record<string, string> = { open: '거래중', closed: '거래완료' };
-export const STATUS_LABELS: Record<TradeKind, { open: string; closed: string }> = {
+export const STATUS_LABELS: Record<BoardKind, { open: string; closed: string }> = {
     sell: { open: '판매중', closed: '판매완료' },
     buy: { open: '구매중', closed: '구매완료' },
-    proxy_request: { open: '구하는중', closed: '구함완료' },
     exchange: { open: '교환중', closed: '교환완료' },
-    proxy_offer: { open: '받는중', closed: '마감' },
 };
 export function statusName(kind: string, status: string) {
-    const labels = STATUS_LABELS[kind as TradeKind];
     const st = status === 'closed' ? 'closed' : 'open';
-    return labels ? labels[st] : STATUS_NAMES[st];
+    return isTradeKind(kind) ? STATUS_LABELS[kind][st] : STATUS_NAMES[st];
 }
 export const closedLabel = (kind: string) => statusName(kind, 'closed');
 
-export function isProxyKind(kind: string) { return kind === 'proxy_request' || kind === 'proxy_offer'; }
-export function isTradeKind(kind: unknown): kind is TradeKind { return typeof kind === 'string' && (TRADE_KINDS as string[]).includes(kind); }
+export function isRetiredKind(kind: unknown): kind is RetiredKind { return typeof kind === 'string' && (RETIRED_KINDS as string[]).includes(kind); }
+// A board members can open and write on (never a retired kind).
+export function isTradeKind(kind: unknown): kind is BoardKind { return typeof kind === 'string' && (TRADE_KINDS as string[]).includes(kind); }
+// Any kind a stored row may hold, retired ones included.
+export function isKnownKind(kind: unknown): kind is TradeKind { return isTradeKind(kind) || isRetiredKind(kind); }
 
 export function categoriesForKind(kind: string) {
-    const ids: string[] = isProxyKind(kind) ? ['ladder', 'story', 'event'] : kind === 'exchange' ? ['account', 'clan'] : ['account', 'clan', 'goods_coupon', 'other'];
+    const ids: string[] = isRetiredKind(kind) ? ['ladder', 'story', 'event'] : kind === 'exchange' ? ['account', 'clan'] : ['account', 'clan', 'goods_coupon', 'other'];
     return CATEGORIES.filter(category => ids.includes(category.id));
 }
 export function categoryName(id: string) { return CATEGORIES.find(c => c.id === id)?.name || id; }
 
-// Older posts used different category ids; map them onto the current tabs.
+// Older posts used different category ids; map them onto the current tabs (a retired kind stays itself).
 export function normalizeTrade(kind: string, category: string): { kind: TradeKind; category: string } {
     if (category === 'service') return { kind: kind === 'buy' || kind === 'proxy_request' ? 'proxy_request' : 'proxy_offer', category: 'ladder' };
     const normalized = category === 'coupon' || category === 'goods' ? 'goods_coupon' : category === 'duo' ? 'other' : category;
-    return { kind: isTradeKind(kind) ? kind : 'sell', category: normalized };
+    return { kind: isKnownKind(kind) ? kind : 'sell', category: normalized };
 }
 
 export function exchangeLabel(category: string, wantedCategory?: string) {
@@ -250,14 +260,15 @@ export const PHANTOM_MAX = 5000;
 export const PHANTOM_LABEL = '스킨 수 (팬텀 %)';
 export const PHANTOM_HINT = '3팬텀 = 300%';
 
-const PROXY_FIELDS: DetailField[] = [
-    { id: 'mode', label: '종목', placeholder: '예: 래더 솔큐, 엘프고' },
-    { id: 'current', label: '현재', placeholder: '예: 플래 3.6 (36,000점)' },
-    { id: 'target', label: '목표', placeholder: '예: 5.8까지, 다이아 달성' },
-    { id: 'schedule', label: '가능 시간', placeholder: '예: 평일 저녁, 점검 후' },
-    { id: 'duration', label: '기간', placeholder: '예: 3일' },
-    { id: 'priceUnit', label: '가격 기준', placeholder: '예: 천점당 0.7, 판당, 챕터당 0.3' },
-    { id: 'conditions', label: '조건', placeholder: '예: 선입금, 동접 시 중단' },
+// The fields old posts of a retired kind hold, so their detail page still reads them (no form writes them).
+const RETIRED_FIELDS: DetailField[] = [
+    { id: 'mode', label: '종목' },
+    { id: 'current', label: '현재' },
+    { id: 'target', label: '목표' },
+    { id: 'schedule', label: '가능 시간' },
+    { id: 'duration', label: '기간' },
+    { id: 'priceUnit', label: '가격 기준' },
+    { id: 'conditions', label: '조건' },
 ];
 
 export const DETAIL_FIELDS: Record<string, DetailField[]> = {
@@ -294,9 +305,9 @@ export const DETAIL_FIELDS: Record<string, DetailField[]> = {
         { id: 'used', label: '사용 여부' },
     ],
     other: [],
-    ladder: PROXY_FIELDS,
-    story: PROXY_FIELDS,
-    event: PROXY_FIELDS,
+    ladder: RETIRED_FIELDS,
+    story: RETIRED_FIELDS,
+    event: RETIRED_FIELDS,
 };
 
 export function listingPrice(p: Pick<Post, 'price' | 'price_mode' | 'kind'>) {
@@ -308,7 +319,7 @@ export function listingPrice(p: Pick<Post, 'price' | 'price_mode' | 'kind'>) {
 }
 
 export function priceLabel(kind: string) {
-    return kind === 'sell' ? '즉거가' : kind === 'buy' ? 'MAX' : kind === 'exchange' ? '교환' : kind === 'proxy_request' ? '희망 가격' : '가격';
+    return kind === 'sell' ? '즉거가' : kind === 'buy' ? 'MAX' : kind === 'exchange' ? '교환' : '가격';
 }
 
 export function relativeTime(t: number) {
@@ -370,7 +381,8 @@ export const NICK_TYPES = ['여사', '남사', '중성', '귀욤', '영어', '�
 export const RARE_NICK_HINT = '레어닉: 누구나 아는 단어나 게임 속 이름 (예: 사과, 철수, 엠제이)';
 export function nickTypesText(types: readonly string[]) { return types.join('/'); }
 
-export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '욕설·비방', '기타'] as const;
+// '대리 게임·알선' (2026-10-22): a post that offers or asks for 대리 게임 under another name (PROXY_RULE).
+export const REPORT_REASONS = ['사기·먹튀', '허위 매물', '대주수·전적 속임', '회수·해킹 계정', '도배·중복 글', '대리 게임·알선', '욕설·비방', '기타'] as const;
 // A report about a member (from the chat header or the profile) adds the cafe words 젯취·거파 and 잠수.
 export const MEMBER_REPORT_REASONS = ['사기·먹튀', '젯취·거파', '잠수', '대주수·전적 속임', '욕설·비방', '기타'] as const;
 
@@ -534,8 +546,8 @@ export function matchQuery(p: Pick<Post, 'kind' | 'category' | 'price' | 'detail
 
 // Quick replies (WP57): chips that fill the chat composer, never sent on their own. User voice (casual
 // cafe talk), one set per board for the member who writes to the post (writer) and one for its author.
-// A chat about no post uses the 판매 writer set.
-export const QUICK_REPLIES: Record<TradeKind, { writer: string[]; author: string[] }> = {
+// A chat about no post uses the 판매 writer set. A post of a retired kind has none.
+export const QUICK_REPLIES: Record<BoardKind, { writer: string[]; author: string[] }> = {
     sell: {
         // copy-lint-ignore-next-line
         writer: ['아직 판매중인가요?', '쿨거 가능해요', '이중창 인증 가능할까요?', '전번·계좌 인증 되나요?'],
@@ -553,19 +565,6 @@ export const QUICK_REPLIES: Record<TradeKind, { writer: string[]; author: string
         writer: ['교환 아직 되나요?', '제 계정 스펙 보내드릴게요'],
         // copy-lint-ignore-next-line
         author: ['네 교환 가능합니다', '이중창 인증 가능할까요?'],
-    },
-    // 대리(구함): the writer is the one who would do the 대리, so they send their own 경력.
-    proxy_request: {
-        // copy-lint-ignore-next-line
-        writer: ['바로 진행 가능합니다', '천점당 얼마인가요?', '경력 캡처 보내드릴게요'],
-        // copy-lint-ignore-next-line
-        author: ['네 아직 구합니다', '가격 알려주세요', '경력 있으신가요?'],
-    },
-    proxy_offer: {
-        // copy-lint-ignore-next-line
-        writer: ['천점당 얼마인가요?', '경력 캡처 있나요?', '바로 진행 가능합니다'],
-        // copy-lint-ignore-next-line
-        author: ['네 진행 가능합니다', '가격 알려주세요'],
     },
 };
 // The board chips for a chat: by the post's board and side; after 완료 only a sale's author keeps

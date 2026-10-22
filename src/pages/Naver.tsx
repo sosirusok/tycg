@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import type { User } from '../../shared/market';
+import { PROXY_RULE, type User } from '../../shared/market';
 import type { TrialState } from '../../shared/membership';
 import { api, errorText } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
@@ -32,7 +32,7 @@ export default function Naver() {
     const error = params.get('error');
     const [info, setInfo] = useState<Pending | null>(null);
     const [mode, setMode] = useState<'join' | 'link'>('join');
-    const [nickname, setNickname] = useState(''), [agree, setAgree] = useState(false);
+    const [nickname, setNickname] = useState(''), [agree, setAgree] = useState(false), [age14, setAge14] = useState(false);
     const [username, setUsername] = useState(''), [password, setPassword] = useState('');
     const [formError, setFormError] = useState(''), [busy, setBusy] = useState(false);
 
@@ -50,17 +50,17 @@ export default function Naver() {
     }
     async function join(e: FormEvent) {
         e.preventDefault();
-        if (busy || !agree) return;
+        if (busy || !agree || !age14) return;
         setBusy(true); setFormError('');
-        try { done(await api<Done>('auth/naver/finish', 'POST', { nickname, agree }), '가입 완료'); }
+        try { done(await api<Done>('auth/naver/finish', 'POST', { nickname, agree, age14 }), '가입 완료'); }
         catch (err) { setFormError(errorText(err)); }
         finally { setBusy(false); }
     }
     async function link(e: FormEvent) {
         e.preventDefault();
-        if (busy) return;
+        if (busy || !age14) return;
         setBusy(true); setFormError('');
-        try { const d = await api<Done>('auth/naver/link', 'POST', { username, password }); setPassword(''); done(d, '연결 완료'); }
+        try { const d = await api<Done>('auth/naver/link', 'POST', { username, password, age14 }); setPassword(''); done(d, '연결 완료'); }
         catch (err) { setFormError(errorText(err)); }
         finally { setBusy(false); }
     }
@@ -88,20 +88,25 @@ export default function Naver() {
                     <ul className="rules">
                         <li>사이트는 결제 대행, 안전거래, 거래 보증을 하지 않습니다. 거래 책임은 당사자에게 있습니다.</li>
                         <li>사기, 허위 매물, 도배 글은 숨김 또는 이용 정지됩니다.</li>
-                        <li>네이버 정보는 회원 구분에만 쓰이고 공개되지 않습니다.</li>
+                        <li>{PROXY_RULE}</li>
+                        <li>네이버 정보는 회원 구분에만 쓰이고 공개되지 않습니다. <a href="/privacy" target="_blank" rel="noreferrer">개인정보 처리방침</a></li>
                     </ul>
                     <label className="check"><input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} required />이용 규칙 동의</label>
+                    {/* 만 14세 미만은 가입할 수 없습니다 (worker/naver.ts finish refuses it without age14). */}
+                    <label className="check"><input type="checkbox" checked={age14} onChange={e => setAge14(e.target.checked)} required />만 14세 이상입니다</label>
                 </div>
                 {formError && <p className="field-error" role="alert">{formError}</p>}
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !agree || nickname.trim().length < 2}>{busy ? <LoaderCircle size={20} className="spin" /> : '가입'}</button>
+                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !agree || !age14 || nickname.trim().length < 2}>{busy ? <LoaderCircle size={20} className="spin" /> : '가입'}</button>
             </form> : <form className="form-stack" onSubmit={link}>
                 <p className="naver-desc">예전 아이디로 가입한 계정을 이 네이버 계정에 한 번 연결합니다. 연결 후에는 네이버로만 로그인합니다.</p>
                 <label className="field"><span className="field-label">아이디</span>
                     <input className="input" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} minLength={4} maxLength={24} required autoFocus /></label>
                 <label className="field"><span className="field-label">비밀번호</span>
                     <input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} minLength={8} maxLength={128} required /></label>
+                {/* The old sign-up never asked the age; worker/naver.ts link refuses it without age14. */}
+                <label className="check"><input type="checkbox" checked={age14} onChange={e => setAge14(e.target.checked)} required />만 14세 이상입니다</label>
                 {formError && <p className="field-error" role="alert">{formError}</p>}
-                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !username.trim() || !password}>{busy ? <LoaderCircle size={20} className="spin" /> : '연결'}</button>
+                <button className="btn btn-primary btn-lg btn-block" disabled={busy || !age14 || !username.trim() || !password}>{busy ? <LoaderCircle size={20} className="spin" /> : '연결'}</button>
             </form>}
             <p className="auth-switch">{mode === 'join'
                 ? <button type="button" disabled={busy} onClick={() => setMode('link')}>기존 계정 연결</button>

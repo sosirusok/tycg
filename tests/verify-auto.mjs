@@ -258,9 +258,9 @@ const m6 = await register('m6'), m6b = await register('m6b');
 const p6 = await created(m6), p6b = await created(m6b);
 await grant(m6, 'plus');
 await grant(m6b, 'plus');
-const events = (kind, auto, count, from) => `INSERT INTO post_events(user_id,post_id,kind,created_at,auto) SELECT '${seeder.user.id}',(SELECT MIN(id) FROM posts WHERE title_key LIKE 'qafill${run}proxy_requestladder%'),'${kind}',${from}+value*1000,${auto}
+const events = (kind, auto, count, from) => `INSERT INTO post_events(user_id,post_id,kind,created_at,auto) SELECT '${seeder.user.id}',(SELECT MIN(id) FROM posts WHERE title_key LIKE 'qafill${run}buyother%'),'${kind}',${from}+value*1000,${auto}
     FROM json_each('${JSON.stringify(Array.from({ length: count }, (_, i) => i))}');`;
-sql(fill('proxy_request', 'ladder', at(13, 30)) + place([p6, p6b], 'proxy_request', 'ladder', at(13)) + events('bump', 1, 2, at(13, 40)) + dueAt(m6) + dueAt(m6b));
+sql(fill('buy', 'other', at(13, 30)) + place([p6, p6b], 'buy', 'other', at(13)) + events('bump', 1, 2, at(13, 40)) + dueAt(m6) + dueAt(m6b));
 only(m6, m6b);
 await tick(at(14));
 equal([autoEvents(m6).length + autoEvents(m6b).length, autoRow(m6).pause_reason, autoRow(m6b).pause_reason], [0, 'busy', 'busy'], 'A60 = 2 and O60 = 0: no bump (게시판이 붐벼 …)');

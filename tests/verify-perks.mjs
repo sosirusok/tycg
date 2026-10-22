@@ -325,14 +325,19 @@ const mb = [await manager(`posts/${mp.data.id}/bump`, 'POST'), await manager(`po
 equal(mb.map(r => [r.status, r.data.bumpTokens]), [[200, null], [200, null]], 'the manager bumps twice in a row (no wallet, no gap)');
 await manager(`posts/${mp.data.id}`, 'DELETE');
 
-// 대리(진행) needs 대리 인증 to bump.
+// 대리 (retired 2026-10-22): no new 대리 post, and an old one (as the previous Worker could still write one during
+// the deploy, not hidden yet) is never bumped nor pinned as an ad, even by a 프리미엄 author with a full wallet.
 const proxy = await register('proxy');
-equal((await manager(`manage/users/${proxy.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).status, 200, 'proxy member gets 대리 인증');
-const proxyPost = await proxy('posts', 'POST', { kind: 'proxy_offer', category: 'ladder', title: `[QA] 대리 ${run}`, body: '자동 검증', price: 10000, status: 'open', tags: [], images: [], details: {} });
-equal(proxyPost.status, 201, '대리(진행) post is created');
-equal((await manager(`manage/users/${proxy.user.id}/badges`, 'POST', { badge: 'proxy', active: false })).status, 200, '대리 인증 is removed');
-age([proxyPost.data.id], 7);
-equal((await proxy(`posts/${proxyPost.data.id}/bump`, 'POST')).status, 403, 'a 대리(진행) post cannot be bumped without 대리 인증');
+await grant(proxy, 'premium');
+refused(await proxy('posts', 'POST', { kind: 'proxy_offer', category: 'ladder', title: `[QA] 대리 ${run}`, body: '자동 검증', price: 10000, status: 'open', tags: [], images: [], details: {} }), 400, '대리 글은 더 이상 쓸 수 없습니다.', 'a new 대리(진행) post is refused');
+sql(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,details,images,created_at,updated_at,bumped_at,title_key)
+    VALUES('${proxy.user.id}','proxy_offer','[QA] 옛 대리 ${run}','자동 검증',10000,'open','ladder','fixed','{}','[]',${Date.now()},${Date.now()},${Date.now()},'qa옛대리${run}')`);
+const proxyId = sql(`SELECT id FROM posts WHERE author_id='${proxy.user.id}' AND kind='proxy_offer'`)[0].id;
+age([proxyId], 7);
+refused(await proxy(`posts/${proxyId}/bump`, 'POST'), 400, '대리 글은 끌올할 수 없습니다.', 'an old 대리 post cannot be bumped');
+refused(await proxy(`posts/${proxyId}/feature`, 'PUT', { active: true }), 400, '대리 글은 광고할 수 없습니다.', 'nor pinned as an ad');
+equal((await proxy('me/usage')).data.featured.map(f => f.id).includes(proxyId), false, 'it holds no ad slot');
+equal((await proxy(`posts/${proxyId}`, 'DELETE')).status, 200, 'its author deletes it');
 
 // 4. 광고 slots (WP53): filled by new posts and 끌올 without a call, '광고 고정' and '광고 빼기', refills on
 // 완료. Where ads show (the board box, 비슷한 매물, the home row) is checked in verify-promo.

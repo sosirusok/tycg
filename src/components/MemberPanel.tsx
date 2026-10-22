@@ -113,7 +113,7 @@ export function MemberPanel({ userId, onChange, version = 0, inChat = false }: {
                 return <div key={b.id} className="mp-row">
                     <span className="grow">{b.name}{on && <span className="muted small"> · {dateText(data.badges.find(x => x.badge === b.id)?.granted_at || now)}</span>}</span>
                     <span className="switch"><input type="checkbox" role="switch" aria-label={b.name} checked={on} disabled={busy || (!on && !!u.deleted_at)}
-                        onChange={() => on ? setRevoke({ name: b.name, description: b.id === 'proxy' ? '대리(진행) 글이 목록에서 빠집니다.' : undefined, task: set(false), done: `${b.name} 회수 완료` }) : void run(set(true), `${b.name} 지급 완료`)} /></span>
+                        onChange={() => on ? setRevoke({ name: b.name, task: set(false), done: `${b.name} 회수 완료` }) : void run(set(true), `${b.name} 지급 완료`)} /></span>
                 </div>;
             })}
         </div>

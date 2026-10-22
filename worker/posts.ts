@@ -1,9 +1,9 @@
 import { env } from 'cloudflare:workers';
-import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStatsStatement, tradeStatsOf, withMember, isSuspended, setting, mayHaveBlocks, digest, WITHDRAWN_NAME } from './http';
+import { db, fail, currentUser, requireUser, requireActive, json, body, limit, textField, memberColumns, tradeStatsStatement, tradeStatsOf, withMember, isSuspended, setting, mayHaveBlocks, digest, listedKind, WITHDRAWN_NAME } from './http';
 import {
     CATEGORIES, TRADE_KINDS, DETAIL_FIELDS, BUYER_DETAIL_FIELDS, PHANTOM_MAX, ACCOUNT_CHOICES, RECORD_PREFERENCES, NICK_RANKS, NICK_TYPES, SKIN_TAGS,
     FULL_SET, LEGACY_SKELETON, LATEST_SEASON, TIERS, WANTED_NICK_TYPES_FIELD, categoriesForKind, normalizeTrade, validTags, choiceAllowed, skinsForWord, expandSkins, priceText, statusName, matchQuery,
-    CLAN_MIN_SEASON, FEATURE_TAG_MAX, TAG_TEXT, isClanTier, normalizeTag, validClanTags,
+    CLAN_MIN_SEASON, FEATURE_TAG_MAX, TAG_TEXT, PROXY_CLOSED, isClanTier, isRetiredKind, isTradeKind, normalizeTag, validClanTags,
     type DetailField, type SeasonTag, type User,
 } from '../shared/market';
 import { AD_TEXT, BULK_MAX, BULK_TEXT, GRADES, MANAGER_PERKS, MATCH_TEXT, PERKS, PIN_TEXT, SITE_RULES, STATS_RANK, perksOf, rulesOf, kstDayStart, gapText, walletOf, type Perks } from '../shared/membership';
@@ -15,7 +15,7 @@ import { STYLE_ERROR, shownStyle, styleRank, validate as validateStyle } from '.
 import { favoritesNotify, notifyStatement } from './notifications';
 import { bulkAuto, newPostEnrolStatements, postAutoHandler, postAutoOf } from './automation';
 import { MATCH_SCAN, pairSql, reachable } from './match';
-import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
+import { AD_CANDIDATES, BOX_MIN_OPEN, BOX_SIZE, adFillStatement, adFilters, adSelect, slotPost, adTrimStatement, adWhere, boxSeed, pickSimilar, rotate, similarStatement, stripAdRank } from './ads';
 import { buildPrint, printsStatement, findMatch, crossStatements, crossHit, printUpsert, reportStatement, soldTo, type PrintRow, type UploadHash, type NewPrint } from './prints';
 
 const HOUR = 3600000;
@@ -75,16 +75,15 @@ const onePostSelect = postSelect.replace(' FROM posts p ', `,u.last_seen_at AS a
 export const postStatement = (id: string | number) => db().prepare(onePostSelect + ' WHERE p.id=?').bind(id);
 async function rawPost(id: string | number) { return postStatement(id).first<any>(); }
 
-// Other members get 404 for a post the manager hid, and for a 대리(진행) post whose author
-// no longer holds 대리 인증 (the board list uses the same rule). The author and the manager still see both.
+// Other members get 404 for a post the manager hid, and for a post of a retired kind (대리, listedKind: the
+// board list uses the same rule). The author and the manager still see both.
 export async function visiblePost(id: unknown, u: User | null) {
     if (typeof id !== 'string' && typeof id !== 'number') fail(404, '게시글을 찾을 수 없습니다.');
     return visibleTo(await rawPost(id), u);
 }
 export function visibleTo(p: any, u: User | null) {
     const privileged = !!p && (p.author_id === u?.id || u?.role === 'manager');
-    const lostProxy = !!p && p.kind === 'proxy_offer' && p.role !== 'manager' && !parse(p.author_badges_json, []).includes('proxy');
-    if (!p || !privileged && (p.hidden || lostProxy)) fail(404, '게시글을 찾을 수 없습니다.');
+    if (!p || !privileged && (p.hidden || isRetiredKind(p.kind))) fail(404, '게시글을 찾을 수 없습니다.');
     return p;
 }
 
@@ -292,7 +291,6 @@ function validateBuyerDetails(details: Record<string, string>, prefix = '') {
     selectedDetails(details, key('skinTags'), SKIN_TAGS, label('skinTags'), true);
 }
 
-export const canOfferProxy = (u: User) => u.role === 'manager' || u.badges.includes('proxy');
 const uniqueTags = (list: SeasonTag[]) => [...new Map(list.map(t => [t.tier + ':' + t.season, { tier: t.tier, season: t.season }])).values()];
 
 // SQL filter for one season table: any (or all) of the chosen tier-season pairs.
@@ -348,12 +346,12 @@ function readTags(raw: unknown): string[] | null {
 }
 
 async function validatePost(b: any, u: User, existing?: any) {
+    // 대리 (2026-10-22): no new post, and no edit of an old one, of a retired kind (게임산업법 제32조 제1항 제11호).
+    if (isRetiredKind(b?.kind) || isRetiredKind(existing?.kind)) fail(400, PROXY_CLOSED);
     const title = textField(b.title, 2, 100, '제목'), content = textField(b.body, 1, 10000, '내용');
-    if (!TRADE_KINDS.includes(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
+    if (!isTradeKind(b.kind)) fail(400, '거래 구분을 선택해 주세요.');
     const category = b.category || categoriesForKind(b.kind)[0].id;
     if (!categoriesForKind(b.kind).some(c => c.id === category)) fail(400, '세부 분류를 선택해 주세요.');
-    // 대리(진행) is limited to members with 대리 인증, for new posts and for edits.
-    if (b.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 쓸 수 있습니다.');
     const latest = await latestSeason();
     if (!validTags(b.tags, latest)) fail(400, '티어와 시즌을 확인해 주세요.');
     const tags = category === 'account' || category === 'ladder' ? uniqueTags(b.tags) : [];
@@ -485,20 +483,18 @@ async function validatePost(b: any, u: User, existing?: any) {
 
 // The filters every list shares: the manager's hidden posts, members under 이용 정지 (boards, search,
 // 찜, profile lists and both promotion boxes leave them out until the suspension ends; authors still see
-// their own list), the authors the viewer blocked (boards only) and 대리(진행) posts whose author lost
-// 대리 인증. None of them joins users, so a count reads posts only.
+// their own list), posts of a retired kind (대리, listedKind; also only in the author's own list) and the
+// authors the viewer blocked (boards only). None of them joins users, so a count reads posts only.
 export const SUSPENDED_AUTHORS = 'p.author_id NOT IN (SELECT id FROM users WHERE suspended_until>?)';
 export function baseFilters(u: User | null, author: string | null, now: number) {
     const where: string[] = [], values: unknown[] = [];
     if (!u || author !== u.id) {
-        where.push('p.hidden=0', SUSPENDED_AUTHORS);
+        where.push('p.hidden=0', SUSPENDED_AUTHORS, listedKind('p'));
         values.push(now);
     }
     if (author) { where.push('p.author_id=?'); values.push(author); }
     // (Only for a member who blocked someone: the check probes blocks once per post read.)
     else if (u && mayHaveBlocks(u)) { where.push('p.author_id NOT IN (SELECT target_id FROM blocks WHERE user_id=?)'); values.push(u.id); }
-    where.push("(p.kind!='proxy_offer' OR p.author_id=? OR EXISTS(SELECT 1 FROM users ur WHERE ur.id=p.author_id AND ur.role='manager') OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))");
-    values.push(u?.id || '');
     return { where, values };
 }
 
@@ -759,7 +755,7 @@ export function buildPostFilter(s: URLSearchParams, u: Pick<User, 'id' | 'role'>
         values.push(tag);
     }
     const badge = s.get('badge');
-    if (badge && ['proxy', 'identity', 'credit'].includes(badge)) {
+    if (badge && ['identity', 'credit'].includes(badge)) {
         where.push('EXISTS (SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge=?)');
         values.push(badge);
     }
@@ -941,8 +937,9 @@ async function addOwnCounts(posts: any[]) {
 // event are written only when the post moved at exactly this time. Parallel taps therefore spend at
 // most what the wallet holds. The manager has no wallet and no gap.
 const WALLET_NOW = 'MIN(?, bump_tokens+CAST((?-bump_at)/? AS INTEGER))';
+export const PROXY_NO_BUMP = '대리 글은 끌올할 수 없습니다.';
 async function bumpPost(u: User, post: any) {
-    if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 끌올할 수 있습니다.');
+    if (isRetiredKind(post.kind)) fail(400, PROXY_NO_BUMP);
     const perks = perksOf(u), now = Date.now(), gapMs = perks.bumpGapMinutes * 60000;
     const capped = Number.isFinite(perks.bumpMax), M = capped ? perks.bumpMax : 0, R = perks.bumpRefillMinutes * 60000;
     const moved = 'EXISTS(SELECT 1 FROM posts WHERE id=? AND bumped_at=?)';
@@ -1017,8 +1014,8 @@ async function pinPost(req: Request, u: User, post: any) {
     return json({ pinned: true });
 }
 
-// The member's ad posts now (me/usage '광고 2/3 · 자동'): the slot posts that are open and visible.
-export const FEATURED_MINE = "author_id=? AND featured_at IS NOT NULL AND featured_pin>=0 AND status='open' AND hidden=0";
+// The member's ad posts now (me/usage '광고 2/3 · 자동'): the posts that hold a slot (slotPost).
+export const featuredMine = () => `author_id=? AND featured_at IS NOT NULL AND ${slotPost()}`;
 // PUT /posts/:id/feature (WP53): {active:true} '광고 고정' keeps the post in a slot (a pin beyond the
 // grade's slots unpins the member's oldest pin, which goes back to automatic); {active:false} '광고 빼기'
 // keeps it out of the ads and frees its slot for the newest automatic post. 프리미엄 and above only.
@@ -1026,7 +1023,7 @@ async function featurePost(req: Request, u: User, post: any) {
     const b = await body(req), slots = perksOf(u).adSlots, now = Date.now(), active = !!b.active;
     if (!slots) fail(403, AD_TEXT.error);
     if (active) {
-        if (post.kind === 'proxy_offer' && !canOfferProxy(u)) fail(403, '대리(진행) 글은 대리 인증 회원만 광고할 수 있습니다.');
+        if (isRetiredKind(post.kind)) fail(400, '대리 글은 광고할 수 없습니다.');
         if (post.status !== 'open' || post.hidden) fail(409, AD_TEXT.open);
     }
     const pins = "author_id=? AND featured_pin=1 AND status='open' AND hidden=0";
@@ -1039,7 +1036,7 @@ async function featurePost(req: Request, u: User, post: any) {
         ...replaced.length ? [db().prepare('UPDATE posts SET featured_pin=0 WHERE id IN (SELECT value FROM json_each(?)) AND featured_pin=1').bind(JSON.stringify(replaced.map(x => x.id)))] : [],
         adTrimStatement(u.id, slots),
         ...active ? [] : [adFillStatement(u.id, slots, now)],
-        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${FEATURED_MINE}`).bind(u.id),
+        db().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${featuredMine()}`).bind(u.id),
     ]);
     if (active && !r[0].meta.changes) fail(409, AD_TEXT.open);
     return json({
@@ -1310,7 +1307,7 @@ async function bulkBump(u: User, mine: BulkRow[], skipped: Skip[], stored: { bum
     const ready: BulkRow[] = [], later: (Skip & { at: number })[] = [];
     for (const r of mine) {
         if (r.status !== 'open' || r.hidden) { skipped.push({ id: r.id, reason: '거래중인 글만 끌올할 수 있습니다.' }); continue; }
-        if (r.kind === 'proxy_offer' && !canOfferProxy(u)) { skipped.push({ id: r.id, reason: '대리(진행) 글은 대리 인증 회원만 끌올할 수 있습니다.' }); continue; }
+        if (isRetiredKind(r.kind)) { skipped.push({ id: r.id, reason: PROXY_NO_BUMP }); continue; }
         // As bumpPost words it: the blocker that ends last (새 글 우선 or the same-post gap).
         const priorityEnd = r.bumped_at > now ? r.bumped_at : 0, gapEnd = (r.bump_count ? r.bumped_at : r.created_at) + gapMs;
         if (priorityEnd && priorityEnd >= gapEnd) later.push({ id: r.id, reason: `새 글 우선 중인 글은 ${clock(priorityEnd)}부터 끌올할 수 있습니다.`, at: priorityEnd });
@@ -1408,7 +1405,7 @@ function extraRows(v: Pick<Valid, 'tags' | 'wantedTags' | 'ladderHidden' | 'clan
         ...v.featureTags.length ? [db().prepare(`INSERT INTO post_tags(post_id,tag) SELECT n.id,j.value FROM ${target} n,json_each(?) j WHERE n.id IS NOT NULL`).bind(...targetArgs, JSON.stringify(v.featureTags))] : [],
     ];
 }
-const isWant = (kind: string) => kind === 'buy' || kind === 'proxy_request';
+const isWant = (kind: string) => kind === 'buy';
 
 // 409 for a new post (or an edit) that is the same listing as one of the author's open posts: which
 // post, what is the same ('사진 3장'), and when it can be bumped (null: now, or hidden by the manager,

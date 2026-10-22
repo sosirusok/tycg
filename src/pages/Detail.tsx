@@ -3,7 +3,7 @@ import { Bell, BellRing, ChevronRight, Flag, Heart, MessageCircle, MoreHorizonta
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, clanTierName, closedLabel, featureTags, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
+    ACCOUNT_CHOICES, DETAIL_FIELDS, KIND_NAMES, NICK_RANKS, NICK_TYPES, REPORT_REASONS, categoryName, clanTierName, closedLabel, featureTags, isRetiredKind, statusName, choiceLabel, manToWon, matchQuery, nickTypesText, parseList, priceText, rankText, skinDisplay, skinTags, suspendUntilText, tradeStatsText, wonToMan, dateText,
     type Post,
 } from '../../shared/market';
 import { ApiError, api, errorText, imageUrl } from '../lib/api';
@@ -226,8 +226,8 @@ export function Detail({ id }: { id: string }) {
     // Only the manager and the author see a hidden post, and a hidden post takes no offers.
     const canOffer = !mine && !withdrawnPost && !post.hidden && post.status === 'open' && post.kind === 'sell' && (post.accepts_offers === 1 || post.price_mode === 'offer');
     const exchangeWanted = post.details.wantedCategory || 'account';
-    // A 대리(진행) post whose author lost 대리 인증 is off every list; the author may only close it.
-    const lostProxy = mine && post.kind === 'proxy_offer' && !manager && !me?.badges.includes('proxy');
+    // A post of a retired kind (대리, 2026-10-22) is off every list; its author may only close or delete it.
+    const retired = isRetiredKind(post.kind);
     const openNow = post.status === 'open' && !post.hidden;
     // '가측 받기' (WP66): the owner of a 판매·교환 account post finds a 가측 인증 member on the '중개/가측' tab.
     const canAppraise = mine && !manager && (post.kind === 'sell' || post.kind === 'exchange') && post.category === 'account';
@@ -238,7 +238,7 @@ export function Detail({ id }: { id: string }) {
     const wallet = usage && walletNow(usage, now);
     const remindAt = post.auto?.remindAt && post.auto.remindAt > now ? post.auto.remindAt : 0;
     const bump = !usage ? { disabled: true, hint: '', remind: false }
-        : !openNow || lostProxy || suspended ? { disabled: true, hint: '', remind: false }
+        : !openNow || retired || suspended ? { disabled: true, hint: '', remind: false }
         : nextBump > now && remindAt ? { disabled: true, hint: remindText(remindAt), remind: false }
         : nextBump > now ? { disabled: false, hint: `${kstClock(nextBump)}부터 가능`, remind: true }
         : { disabled: false, hint: wallet ? `${wallet.tokens}/${wallet.max}` : '', remind: false };
@@ -246,7 +246,7 @@ export function Detail({ id }: { id: string }) {
     const autoAllowed = mine && (manager || gradeInfo(me?.grade).rank >= 1);
     // WP58: '다시 올리기' on a completed post and '복사해서 새 글' on any own post open the editor with this post
     // (/write?from=); an open 판매 or 구매 post links to the other side's board ('맞는 구매 글').
-    const canCopy = mine && !suspended && !lostProxy;
+    const canCopy = mine && !suspended && !retired;
     const copyHref = '/write?from=' + post.id;
     const match = mine && openNow ? matchQuery(post) : null;
 
@@ -290,7 +290,7 @@ export function Detail({ id }: { id: string }) {
         catch (e) { toast.error(errorText(e)); }
     }
 
-    const sectionTitle = post.kind === 'buy' ? '원하는 조건' : post.kind === 'exchange' ? '교환 조건' : post.kind.startsWith('proxy') ? (post.kind === 'proxy_request' ? '요청 내용' : '진행 내용') : `${categoryName(post.category)} 정보`;
+    const sectionTitle = post.kind === 'buy' ? '원하는 조건' : post.kind === 'exchange' ? '교환 조건' : retired ? '글 정보' : `${categoryName(post.category)} 정보`;
     // The rows of each section are built first; a section without any is left out.
     let info: ReactNode[];
     if (post.kind === 'exchange') {
@@ -361,7 +361,7 @@ export function Detail({ id }: { id: string }) {
                     {post.status !== 'closed' && <>
                         <div className="owner-bump">{bumpButton('btn-block')}</div>
                         {post.kind === 'sell' && <button type="button" className="btn btn-line btn-block" disabled={suspended} onClick={() => setPriceOpen(true)}>가격 수정</button>}
-                        {suspended ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
+                        {suspended || retired ? <button type="button" className="btn btn-line btn-block" disabled>수정</button> : <Link to={'/edit/' + post.id} className="btn btn-line btn-block">수정</Link>}
                     </>}
                     {post.status === 'closed' && canCopy && <Link to={copyHref} className="btn btn-line btn-block">다시 올리기</Link>}
                     {/* Wide screens have no 더보기 menu, so '가측 받기' and 복사해서 새 글 are quiet text buttons here. */}
@@ -376,7 +376,7 @@ export function Detail({ id }: { id: string }) {
                     <button type="button" className={'btn btn-line btn-lg side-fav' + (post.favorite ? ' is-on' : '')} aria-pressed={!!post.favorite} aria-label={favLabel} onClick={favorite}><Heart size={19} fill={post.favorite ? 'currentColor' : 'none'} /><span>찜 {favs}</span></button>
                 </div>}
                 {match && <Link to={'/trade?' + match.query} className="owner-match">{MATCH_TEXT.link(post.kind)}<ChevronRight size={16} aria-hidden="true" /></Link>}
-                {lostProxy && <p className="muted small">대리 인증이 없어 목록에 표시되지 않습니다.</p>}
+                {retired && <p className="muted small">종료된 분류의 글이라 목록에 표시되지 않습니다.</p>}
                 {autoAllowed && openNow && <div className="promo-row">
                     <label className="switch"><input type="checkbox" role="switch" checked={!!post.auto?.bump} disabled={toggling} onChange={e => void toggleAuto(post.id, e.target.checked)} />자동 끌올</label>
                     <Link to="/me/auto" className="owner-hint">설정</Link>
@@ -385,7 +385,7 @@ export function Detail({ id }: { id: string }) {
                 {mine && openNow && post.auto?.drop?.on && post.auto.drop.nextAt && post.auto.drop.nextPrice
                     && <p className="owner-drop">{DROP_TEXT.next(kstDateTime(post.auto.drop.nextAt), priceText(post.auto.drop.nextPrice))}</p>}
                 {autoSheet}
-                {manager && !mine && <div className="row">{!withdrawnPost && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
+                {manager && !mine && <div className="row">{!withdrawnPost && !(retired && post.hidden) && <button type="button" className="btn btn-line btn-sm grow" onClick={() => hide(!post.hidden)}>{post.hidden ? '다시 공개' : '숨기기'}</button>}<button type="button" className="btn btn-danger btn-sm grow" onClick={() => setConfirmDelete(true)}>삭제</button></div>}
                 <AuthorBox post={post} own={mine} className="author-box-side" onFollow={follow} followBusy={followBusy} />
                 <p className="safety">입금 전 <a href="https://thecheat.co.kr" target="_blank" rel="noreferrer">더치트</a>로 상대 전번·계좌 조회. 사이트는 거래를 보증하지 않습니다.</p>
             </aside>
@@ -401,7 +401,7 @@ export function Detail({ id }: { id: string }) {
                 <DropdownMenu.Portal>
                     <DropdownMenu.Content className="menu" align="end" side="top" sideOffset={8}>
                         {post.kind === 'sell' && post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => setPriceOpen(true)}>가격 수정</DropdownMenu.Item>}
-                        {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
+                        {post.status !== 'closed' && <DropdownMenu.Item className="menu-item" disabled={suspended || retired} onSelect={() => void navigate('/edit/' + post.id)}>수정</DropdownMenu.Item>}
                         {canCopy && <DropdownMenu.Item className="menu-item" onSelect={() => void navigate(copyHref)}>복사해서 새 글</DropdownMenu.Item>}
                         {canAppraise && <DropdownMenu.Item className="menu-item" onSelect={findAppraiser}>{PROVIDER_TEXT.appraise}</DropdownMenu.Item>}
                         <DropdownMenu.Item className="menu-item menu-danger" onSelect={() => setConfirmDelete(true)}>삭제</DropdownMenu.Item>

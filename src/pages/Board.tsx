@@ -2,14 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Keyb
 import { Bell, BellRing, PenLine, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-    ACCOUNT_CHOICES, CLAN_MIN_SEASON, KIND_ICONS, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, clanTierName, isTradeKind, manToWon, normalizeTag,
+    ACCOUNT_CHOICES, CLAN_MIN_SEASON, KIND_NAMES, NICK_TYPES, PHANTOM_HINT, PHANTOM_LABEL, PHANTOM_MAX, RARE_NICK_HINT, TRADE_KINDS, categoriesForKind, categoryName, choiceLabel, clanTierName, isTradeKind, manToWon, normalizeTag,
     parseList, priceLabel, priceText, rankText, skinTags, validClanTags, validTags, wonToMan,
-    type Post, type SeasonTag, type TradeKind,
+    type Post, type SeasonTag, type BoardKind,
 } from '../../shared/market';
 import { api, errorText } from '../lib/api';
 import { navigate, takeScrollRestore, useLocation, withParams } from '../lib/router';
 import { offerPush, useApp } from '../app/state';
-import { EmptyState, Icon, Modal, SkeletonRows } from '../components/ui';
+import { EmptyState, Modal, SkeletonRows } from '../components/ui';
 import { PostCard } from '../components/PostCard';
 import { AdBox } from '../components/AdBox';
 import { AD_TEXT, ALERT_TEXT } from '../../shared/membership';
@@ -55,7 +55,7 @@ function cachePut(key: string, data: ListData) {
     while (listCache.size > 20) listCache.delete(listCache.keys().next().value!);
 }
 
-type Ctx = { kind: TradeKind | 'all'; category: string; wanted: string };
+type Ctx = { kind: BoardKind | 'all'; category: string; wanted: string };
 // '전체' (WP70) on 구매 and 판매 lists every category; the account filters stay on screen there, and picking
 // one moves the board to 계정.
 const ALL_CATEGORY = { id: 'all', name: '전체' } as const;
@@ -82,8 +82,7 @@ function allowedKeys(ctx: Ctx) {
     if (kind === 'exchange') keys.push('wantedCategory');
     if (kind === 'exchange' && ctx.wanted === 'account') keys.push('wantedTags', 'wantedOwnerCountOfMine', 'wantedNicknameChars', 'wantedNicknameRank', 'wantedMyNicknameType', 'wantedMyRecord', 'wantedMyPhantom');
     if (kind !== 'exchange') keys.push('min', 'max');
-    if (category === 'account' || category === 'ladder') keys.push('tags', 'match');
-    if (category === 'account') keys.push('skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType', 'myPhantom'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS, ...ACCOUNT_MINS.map(m => m.key), 'tag']));
+    if (category === 'account') keys.push('tags', 'match', 'skinTags', 'nicknameChars', 'nicknameRank', ...(kind === 'buy' ? ['ownerCountOfMine', 'myRecord', 'myNicknameType', 'myPhantom'] : ['nicknameTypes', 'maxOwners', 'recordStatus', 'phantom', ...CONDITION_KEYS, ...ACCOUNT_MINS.map(m => m.key), 'tag']));
     // 클랜 (WP70): 클랜 래더, 현재 클랜 티어, 클랜 레벨, 클랜원 수 and (판매, 교환) 태그.
     if (category === 'clan') keys.push('clanTags', 'match', 'clanTier', 'clanLevel', 'clanMembersMin', 'clanMembersMax', ...(kind === 'buy' ? [] : ['tag']));
     // 판매 '전체' keeps its 태그 (accounts and clans both have them).
@@ -92,9 +91,9 @@ function allowedKeys(ctx: Ctx) {
 }
 
 // 작성자 인증 filter: posts whose author holds the badge.
-const BADGE_FILTERS = ['identity', 'proxy', 'credit'] as const;
-const BADGE_FILTER_NAMES: Record<string, string> = { identity: '본인 인증', proxy: '대리 인증', credit: '신용인' };
-const BADGE_CHIP_NAMES: Record<string, string> = { identity: '본인 인증 회원', proxy: '대리 인증 회원', credit: '신용인' };
+const BADGE_FILTERS = ['identity', 'credit'] as const;
+const BADGE_FILTER_NAMES: Record<string, string> = { identity: '본인 인증', credit: '신용인' };
+const BADGE_CHIP_NAMES: Record<string, string> = { identity: '본인 인증 회원', credit: '신용인' };
 // 계정 조건 in cafe words. 전비변 가능 sets both 비변 and 전변 (the server also counts 영전 as 전변 가능).
 const CONDITIONS: { label: string; values: Record<string, string> }[] = [
     { label: '전비변 가능', values: { passwordChange: '가능', phoneChange: '가능' } },
@@ -227,8 +226,8 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
                 <SeasonPicker value={wantedTags} onChange={v => update({ wantedTags: v.length ? JSON.stringify(v) : '' })} />
             </Group>
         </>}
-        {exchange && (account || category === 'ladder' || clan) && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
-        {(account || category === 'ladder') && <Group title={buying ? '원하는 래더' : category === 'ladder' ? '래더 시즌' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'} count={count('tags')}>
+        {exchange && (account || clan) && <h3 className="filter-section">상대가 내놓는 {categoryName(category)}</h3>}
+        {account && <Group title={buying ? '원하는 래더' : '래더 기록'} hint={tags.length > 1 ? undefined : '하나라도 맞으면 표시'} count={count('tags')}>
             <SeasonPicker value={tags} onChange={v => set({ tags: v.length ? JSON.stringify(v) : '', match: v.length > 1 ? params.get('match') || '' : '' })} />
             {tags.length > 1 && <label className="switch mt-12"><input type="checkbox" checked={params.get('match') === 'all'} onChange={e => update({ match: e.target.checked ? 'all' : '' })} />선택한 시즌 모두 포함</label>}
         </Group>}
@@ -284,8 +283,7 @@ function Filters({ ctx, params, update }: { ctx: Ctx; params: URLSearchParams; u
         {/* 태그 holds on 계정, 클랜 and 판매 '전체' (both kinds of posts carry tags), so it never moves the board. */}
         {!buying && (account || clan) && <TagFilter params={params} update={update} />}
         <Group title="작성자 인증" count={count('badge')}>
-            {/* 대리(진행) lists only 대리 인증 holders already, so that option would filter nothing there. */}
-            <Segmented name="작성자 인증" options={ctx.kind === 'proxy_offer' ? BADGE_FILTERS.filter(b => b !== 'proxy') : BADGE_FILTERS} label={v => BADGE_FILTER_NAMES[v]} value={params.get('badge') || ''} onChange={v => update({ badge: v })} />
+            <Segmented name="작성자 인증" options={BADGE_FILTERS} label={v => BADGE_FILTER_NAMES[v]} value={params.get('badge') || ''} onChange={v => update({ badge: v })} />
         </Group>
     </>;
 }
@@ -348,9 +346,10 @@ function activeChips(ctx: Ctx, params: URLSearchParams, update: (v: Record<strin
 
 export function Board() {
     const { params } = useLocation();
-    const { me, ready, config, requireLogin, openApply } = useApp();
+    const { me, ready, config, requireLogin } = useApp();
     const rawKind = params.get('kind');
-    const kind: TradeKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
+    // A link to a retired board (대리, 2026-10-22) opens 전체.
+    const kind: BoardKind | 'all' = isTradeKind(rawKind) ? rawKind : 'all';
     const categories = kind === 'all' ? [] : categoriesForKind(kind);
     const rawCategory = params.get('category');
     const category = kind === 'all' ? '' : rawCategory === ALL_CATEGORY.id && hasAllCategory(kind) ? ALL_CATEGORY.id : categories.some(c => c.id === rawCategory) ? rawCategory! : categories[0].id;
@@ -436,7 +435,7 @@ export function Board() {
         void navigate('/trade?' + next.toString());
         window.scrollTo({ top: 0 });
     };
-    const switchTo = (nextKind: TradeKind | 'all', nextCategory?: string, nextWanted?: string, keepSearch = true) => {
+    const switchTo = (nextKind: BoardKind | 'all', nextCategory?: string, nextWanted?: string, keepSearch = true) => {
         const p: Record<string, string> = {};
         if (nextKind !== 'all') {
             p.kind = nextKind;
@@ -521,11 +520,7 @@ export function Board() {
     }
     const boardBellOn = !!boardSaved?.alert;
     const writeHref = kind === 'all' ? '/write' : withParams('/write', { kind, category: category === ALL_CATEGORY.id ? '' : category, wantedCategory: kind === 'exchange' ? wanted : '' });
-    const proxyLocked = kind === 'proxy_offer' && !(me?.role === 'manager' || me?.badges.includes('proxy'));
-    const compose = () => requireLogin(u => {
-        if (kind === 'proxy_offer' && !(u.role === 'manager' || u.badges.includes('proxy'))) openApply({ kind: 'badge', target: 'proxy' });
-        else void navigate(writeHref);
-    });
+    const compose = () => requireLogin(() => void navigate(writeHref));
     const submit = (e: FormEvent) => { e.preventDefault(); update({ q: q.trim() }); };
     // Past the 300+ count the pager keeps going while pages come back full (as the profile and 내 글 do),
     // so every post of a busy board stays reachable.
@@ -566,7 +561,6 @@ export function Board() {
                 <span>구함</span>
             </div> : <div className="chip-scroll">{[...hasAllCategory(kind) ? [ALL_CATEGORY] : [], ...categories].map(c => <button type="button" key={c.id} className="chip" aria-pressed={category === c.id} onClick={() => switchTo(kind, c.id)}>{c.name}</button>)}</div>}
         </div>}
-        {proxyLocked && <div className="board-notice"><Icon name={KIND_ICONS.proxy_offer} size={20} /><span>대리(진행) 글쓰기는 <b>대리 인증</b> 필요</span><button type="button" className="btn btn-line btn-sm" onClick={() => openApply({ kind: 'badge', target: 'proxy' })}>대리 인증 신청</button></div>}
         </div>
 
         <div className={'board-layout' + (filters ? '' : ' no-filters')}>

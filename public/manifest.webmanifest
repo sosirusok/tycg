@@ -2,7 +2,7 @@
   "id": "/",
   "name": "좀비고 거래소",
   "short_name": "좀비고 거래소",
-  "description": "좀비고 계정, 클랜, 쿠폰 삽니다 팝니다, 교환, 래더 대리.",
+  "description": "좀비고 계정, 클랜, 쿠폰 삽니다 팝니다, 교환.",
   "lang": "ko",
   "start_url": "/",
   "scope": "/",

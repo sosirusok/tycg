@@ -81,11 +81,12 @@ const t0 = Date.now();
 sqlFile(`
 ${seq(50)} INSERT INTO users(id,username,nickname,nickname_key,password_hash,salt,role,bio,created_at)
 SELECT 'srch-${run}-'||i,'srch_${run}_'||i,'srch${run}n'||i,'srch${run}n'||i,'','','member','',${now} FROM n;
-INSERT INTO user_badges(user_id,badge,granted_by,granted_at) SELECT id,'proxy','manager',${now} FROM users WHERE id LIKE 'srch-${run}-%';
-${seq(20000)} INSERT INTO posts(author_id,kind,title,body,price,status,created_at,updated_at,category,price_mode,details,images,bumped_at,title_key)
+-- The two 대리 kinds (8,000 posts) are hidden as 0064_proxy_closed leaves them: in posts_fts, on no list.
+${seq(20000)} INSERT INTO posts(author_id,kind,title,body,price,status,created_at,updated_at,category,price_mode,details,images,bumped_at,title_key,hidden,hidden_reason)
 SELECT 'srch-${run}-'||(1+i%50),${kinds},'[search] ${run} '||i,'srch${run} 본문 '||i,12345,'open',
     ${now}-(i%90)*${DAY}-i*1000,${now}-(i%90)*${DAY}-i*1000,${category},'fixed',
-    CASE WHEN i=777 THEN '{"rareSkins":"불새상류 엠블럼, 유령 날개"}' ELSE '{}' END,'[]',${now}-(i%90)*${DAY}-i*1000,'search ${run} '||i FROM n;
+    CASE WHEN i=777 THEN '{"rareSkins":"불새상류 엠블럼, 유령 날개"}' ELSE '{}' END,'[]',${now}-(i%90)*${DAY}-i*1000,'search ${run} '||i,
+    CASE WHEN i%5 IN (3,4) THEN 1 ELSE 0 END,CASE WHEN i%5 IN (3,4) THEN '대리 카테고리 종료' ELSE '' END FROM n;
 `);
 console.log(`seeded in ${Date.now() - t0} ms`);
 equal(sql(`SELECT COUNT(*) AS n FROM posts WHERE title LIKE '[search] ${run} %'`)[0].n, 20000, '20,000 posts are seeded');

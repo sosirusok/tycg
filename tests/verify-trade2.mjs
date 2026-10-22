@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // Trade rules from round 2: price history, offers on status changes, chat creation from a post,
-// 대리(진행) visibility, blocks, hidden posts, numeric and record filters and per-tab search counts.
+// the retired 대리 kinds' visibility, blocks, hidden posts, numeric and record filters and per-tab search counts.
 // Runs only against a local Worker (see scripts/test-local.mjs).
 const endpoint = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8790');
 assert.ok(['127.0.0.1', 'localhost'].includes(endpoint.hostname), 'Local Worker origin required.');
@@ -15,14 +17,24 @@ let checks = 0;
 function check(value, name) { assert.ok(value, name); checks++; console.log('PASS ' + name); }
 function equal(actual, expected, name) { assert.deepEqual(actual, expected, name); checks++; console.log('PASS ' + name); }
 
+// Reads or changes the local D1 database the Worker is using.
+function sql(command) {
+    const out = execFileSync(process.execPath, ['./node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'DB', '--local', '--config', 'wrangler.jsonc',
+        '--persist-to', process.env.TEST_PERSIST || '.wrangler/state', '--json', '--command', command], { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+    return JSON.parse(out.slice(out.indexOf('[')))[0].results;
+}
+
 function client() {
     let cookie = '';
     return async (path, method = 'GET', data) => {
-        const response = await fetch(base + '/api/' + path, {
+        const send = () => fetch(base + '/api/' + path, {
             method, redirect: 'error', signal: AbortSignal.timeout(15000),
             headers: { ...(cookie ? { Cookie: cookie } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
             body: data === undefined ? undefined : JSON.stringify(data),
         });
+        // The local server closes idle keep-alive connections while a wrangler SQL step runs (F26); a request
+        // that lands on such a closed connection never reached the Worker, so it is sent once more.
+        const response = await send().catch(e => { if (e?.cause?.code === 'UND_ERR_SOCKET' || /other side closed/.test(String(e?.cause?.message))) return send(); throw e; });
         const session = response.headers.get('set-cookie');
         if (session) cookie = session.split(';')[0];
         const raw = await response.text();
@@ -189,20 +201,22 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
     equal((await s(`chats/${opened.data.id}/messages`, 'POST', { body: '제 글이에요', postId: postA })).status, 400, 'F13 the post author cannot attach their own post');
 }
 
-// F26: a 대리(진행) post is hidden from others once its author loses 대리 인증.
+// F26: a post of a retired kind (대리, 2026-10-22), as the previous Worker could still write one during the deploy
+// (not hidden yet), is hidden from everyone but its author and the manager.
 {
-    const px = members.proxy, o = members.other;
-    equal((await manager(`manage/users/${px.user.id}/badges`, 'POST', { badge: 'proxy', active: true })).status, 200, 'F26 manager grants 대리 인증');
-    const id = await post(px, { kind: 'proxy_offer', category: 'story', title: `[QA] 대리 진행 ${run}`, body: '자동 검증', price: 20000, status: 'open', tags: [], images: [], details: {} }, 'F26 대리(진행) post');
-    equal((await o('users/' + px.user.id)).data.user.postCount, 1, 'F26 the post counts while the badge is held');
-    equal((await manager(`manage/users/${px.user.id}/badges`, 'POST', { badge: 'proxy', active: false })).status, 200, 'F26 manager revokes 대리 인증');
+    const px = members.proxy, o = members.other, now = Date.now();
+    sql(`INSERT INTO posts(author_id,kind,title,body,price,status,category,price_mode,details,images,created_at,updated_at,bumped_at,title_key)
+        VALUES('${px.user.id}','proxy_offer','[QA] 대리 진행 ${run}','자동 검증',20000,'open','story','fixed','{}','[]',${now},${now},${now},'qa대리진행${run}')`);
+    const id = sql(`SELECT id FROM posts WHERE author_id='${px.user.id}' AND kind='proxy_offer'`)[0].id;
+    created.push(id);
     equal((await o('posts/' + id)).status, 404, 'F26 another member gets 404');
     equal((await guest('posts/' + id)).status, 404, 'F26 a guest gets 404');
     equal((await px('posts/' + id)).status, 200, 'F26 the author still opens it');
     equal((await manager('posts/' + id)).status, 200, 'F26 the manager still opens it');
     equal((await o('chats', 'POST', { postId: id })).status, 404, 'F26 no chat can be opened from it');
     equal((await o('users/' + px.user.id)).data.user.postCount, 0, 'F26 profile postCount excludes it');
-    equal((await px('users/' + px.user.id)).data.user.postCount, 1, 'F26 the author still counts it');
+    equal((await px('users/' + px.user.id)).data.user.postCount, 0, 'F26 and so does the author\'s own count (as for a hidden post)');
+    check((await px('posts?' + new URLSearchParams({ author: px.user.id }))).data.posts.some(p => p.id === id), 'F26 the author still has it in 내 글');
 }
 
 // F27: boards skip blocked authors; their profile list does not.
@@ -297,7 +311,7 @@ const chatUnread = async (viewer, chatId) => (await viewer('chats')).data.chats.
 // V-23: a search across every tab returns per-tab counts.
 {
     const all = await guest('posts?' + new URLSearchParams({ q: run }));
-    equal(Object.keys(all.data.counts || {}).sort(), ['buy', 'exchange', 'proxy_offer', 'proxy_request', 'sell'], 'V-23 counts cover the five tabs');
+    equal(Object.keys(all.data.counts || {}).sort(), ['buy', 'exchange', 'sell'], 'V-23 counts cover the three tabs');
     check(all.data.counts.sell >= 1 && all.data.counts.buy >= 3, 'V-23 counts.sell and counts.buy are filled');
     equal(Object.values(all.data.counts).reduce((n, v) => n + v, 0), all.data.total, 'V-23 counts add up to the total');
     check(!('counts' in (await guest('posts?' + new URLSearchParams({ q: run, kind: 'sell' }))).data), 'V-23 no counts inside one tab');

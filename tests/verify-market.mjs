@@ -123,11 +123,11 @@ try {
         }
         equal(response.status, 200, 'fixture member ' + index + ' registered');
     }
-    // 대리(진행) posts require 대리 인증; the manager grants it to the category fixture.
-    const manager = client();
-    equal((await manager('auth/login', 'POST', { username: 'sosirusok', password: process.env.TEST_MANAGER_PASSWORD || 'local-manager-password' })).status, 200, 'manager signs in for badge setup');
-    equal((await categories('posts', 'POST', { ...common, kind: 'proxy_offer', category: 'ladder', title: '[로컬 QA] 인증 전 ' + run })).status, 403, '대리(진행) is blocked before 대리 인증');
-    equal((await manager('manage/users/' + fixtureUsers[1].id + '/badges', 'POST', { badge: 'proxy', active: true })).status, 200, 'manager grants 대리 인증 to the category fixture');
+    // 대리(구함)·대리(진행) ended (2026-10-22): no member writes either, whatever the category.
+    for (const kind of ['proxy_request', 'proxy_offer']) {
+        const refused = await categories('posts', 'POST', { ...common, kind, category: 'ladder', title: '[로컬 QA] 대리 ' + run });
+        equal([refused.status, refused.data.error], [400, '대리 글은 더 이상 쓸 수 없습니다.'], `${kind} is refused`);
+    }
 
     const historyStarted = Date.now();
     const sale = {
@@ -310,19 +310,6 @@ try {
             }
         }
     }
-    for (const kind of ['proxy_request', 'proxy_offer']) {
-        for (const category of ['ladder', 'story', 'event']) {
-            const id = await create(categories, {
-                ...common, kind, category, title: `[로컬 QA] ${run} ${kind} ${category}`,
-            }, kind + '/' + category);
-            const stored = await read(id);
-            equal([stored.kind, stored.category], [kind, category], 'proxy direction and service category persist');
-            equal(stored.tags, category === 'ladder' ? [tag] : [], 'only ladder service retains ladder seasons');
-            const result = await search({ kind, category, q: run });
-            check(result.some(post => post.id === id) && result.every(post => post.kind === kind && post.category === category),
-                'proxy search respects both direction and category');
-        }
-    }
     for (const offered of ['account', 'clan']) {
         for (const wanted of ['account', 'clan']) {
             const id = await create(categories, {
@@ -363,10 +350,10 @@ try {
     }
 
     const invalid = [
-        ['sale cannot select a proxy category', { kind: 'sell', category: 'ladder' }],
-        ['purchase cannot select a proxy category', { kind: 'buy', category: 'event' }],
-        ['proxy request cannot select an account', { kind: 'proxy_request', category: 'account' }],
-        ['proxy offer cannot select goods', { kind: 'proxy_offer', category: 'goods_coupon' }],
+        ['sale cannot select a retired 대리 category', { kind: 'sell', category: 'ladder' }],
+        ['purchase cannot select a retired 대리 category', { kind: 'buy', category: 'event' }],
+        ['a 대리(구함) post is refused even with an account category', { kind: 'proxy_request', category: 'account' }],
+        ['a 대리(진행) post is refused even with a goods category', { kind: 'proxy_offer', category: 'goods_coupon' }],
         ['exchange cannot offer goods', { kind: 'exchange', category: 'goods_coupon', details: { wantedCategory: 'account' } }],
         ['exchange cannot request other items', { kind: 'exchange', details: { wantedCategory: 'other' } }],
         ['exchange requires the wanted type', { kind: 'exchange', details: {} }],
@@ -417,7 +404,6 @@ try {
     for (const [label, payload] of [
         ['ladderHidden on a 구매 post', { ...common, kind: 'buy', title: `[로컬 QA] ${run}-hidden buy`, tags: [], ladderHidden: { master: 1 } }],
         ['ladderHidden on a 클랜 sale', { ...hiddenSale, category: 'clan', title: `[로컬 QA] ${run}-hidden clan`, ladderHidden: { master: 1 } }],
-        ['ladderHidden on a 대리 post', { ...common, kind: 'proxy_request', category: 'ladder', title: `[로컬 QA] ${run}-hidden proxy`, ladderHidden: { master: 1 } }],
         ['hidden count 0', { ...hiddenSale, ladderHidden: { master: 0 } }],
         ['hidden count 100', { ...hiddenSale, ladderHidden: { master: 100 } }],
         ['hidden count 1.5', { ...hiddenSale, ladderHidden: { master: 1.5 } }],

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { toast } from 'sonner';
-import { KIND_ICONS, closedLabel, exchangeLabel, listingPrice, matchQuery, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
+import { KIND_ICONS, closedLabel, exchangeLabel, isRetiredKind, listingPrice, matchQuery, priceText, relativeTime, suspendUntilText, type Post } from '../../shared/market';
 import { AD_TEXT, APPLICATION_STATUS_NAMES, AUTO_TEXT, BULK_MAX, BULK_TEXT, MATCH_TEXT, PIN_TEXT, STATS_RANK, STATS_TEXT, applicationTitle, gradeInfo, type Application } from '../../shared/membership';
 import { api, errorText, imageUrl } from '../lib/api';
 import { Link, navigate, useLocation } from '../lib/router';
@@ -57,7 +57,7 @@ const uniquePosts = (list: Post[]) => [...new Map(list.map(p => [p.id, p])).valu
 
 // 끌올 in the same states as the detail page: the wallet ('3/4'), or '15:40부터 가능' (the latest of
 // the same-post gap, 새 글 우선 and, with an empty wallet, the next refill).
-// `closeOnly`: a 대리(진행) post without 대리 인증, or any post under 이용 정지 (only 완료 is allowed).
+// `closeOnly`: a post of a retired kind (대리), or any post under 이용 정지 (only 완료 is allowed).
 function bumpState(post: OwnPost, usage: Usage | null, closeOnly: boolean, now: number) {
     if (!usage || post.status !== 'open' || post.hidden || closeOnly) return { disabled: true, hint: '', title: undefined as string | undefined, remind: false };
     const ready = bumpReadyAt(post, usage, now);
@@ -340,7 +340,7 @@ export default function Mine({ tab: raw }: { tab?: string }) {
                     </div>
                     {!suspended && !!usage?.perks.adSlots && <p className="wallet-gauge mine-ad">{AD_TEXT.header(usage.featured.length, usage.perks.adSlots)}</p>}
                     {items.length ? <><ul className={'seller-list' + (selecting ? ' is-selecting' : '')}>{(items as OwnPost[]).map(p => <SellerRow key={p.id} post={p} usage={usage} now={now} busy={busy === p.id || bulkBusy}
-                        closeOnly={suspended || (p.kind === 'proxy_offer' && !manager && !me.badges.includes('proxy'))} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)} onStats={() => setStatsPost({ id: p.id, title: p.title })} onPin={pin => void setPin(p, pin)}
+                        closeOnly={suspended || isRetiredKind(p.kind)} suspended={suspended} onBump={() => void bumpPost(p)} onRemind={() => void remind(p)} onAd={pin => void setAd(p, pin)} onStats={() => setStatsPost({ id: p.id, title: p.title })} onPin={pin => void setPin(p, pin)}
                         onComplete={() => setTradePost({ id: p.id, kind: p.kind, title: p.title, price: p.price, price_mode: p.price_mode, status: p.status, thumb: p.images[0] ?? null, hidden: !!p.hidden })}
                         selecting={selecting} selected={picked.includes(p.id)} onSelect={on => pick(p.id, on)} skip={skips[p.id]} />)}</ul>
                     {moreButton}

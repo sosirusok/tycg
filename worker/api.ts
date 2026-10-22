@@ -1,6 +1,6 @@
 import {
     db, fail, ApiError, initManager, currentUser, requireUser, requireActive, json, body, csrf, limit, storedHash, verifyPassword, random, textField,
-    digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, DUMMY_HASH,
+    digest, tokenOf, sessionCookie, memberColumns, tradeStats, liveReview, withMember, nicknameField, nicknameKey, assertNicknameFree, isLegacyHash, isSuspended, listedKind, DUMMY_HASH,
     MANAGER_USERNAME, SESSION_DAYS, WITHDRAWN_NAME, trialWindow, trialOpen, grantTrial,
 } from './http';
 import { postsHandler, tagsHandler } from './posts';
@@ -96,6 +96,11 @@ async function withdraw(req: Request) {
     const now = Date.now();
     const line = (text: string, where: string, args: unknown[]) => db().prepare(`INSERT INTO messages(conversation_id,sender_id,body,type,reference_id,attachments,created_at) SELECT conversation_id,MIN(recipient_id),?,'system',NULL,'[]',? FROM offers WHERE ${where} GROUP BY conversation_id`).bind(text, now, ...args);
     await db().batch([
+        // 비밀번호 찾기 requests for the member's id go (before the id is replaced), and so do the texts only the
+        // member wrote for their own tools: 자주 쓰는 문구, 자동 응답, the 중개/가측 card intro (개인정보 처리방침 3).
+        db().prepare('DELETE FROM reset_requests WHERE username=(SELECT username FROM users WHERE id=?)').bind(u.id),
+        db().prepare("UPDATE automation SET templates='[]',first_on=0,first_text='',away_on=0,away_text='' WHERE user_id=?").bind(u.id),
+        db().prepare("UPDATE provider_profiles SET intro='',active=0 WHERE user_id=?").bind(u.id),
         // The key is never NULL, so ensureNicknameKeys does not walk withdrawn members; real keys have no '#'.
         db().prepare(`UPDATE users SET username='deleted_'||lower(hex(randomblob(6))),nickname='${WITHDRAWN_NAME}'||lower(hex(randomblob(4))),nickname_key='#deleted:'||id,prev_nickname='',nickname_changed_at=NULL,password_hash='',salt='',naver_id=NULL,naver_linked_at=NULL,phone_hash=NULL,bio='',avatar_id=NULL,avatar_thumb=NULL,deleted_at=? WHERE id=?`).bind(now, u.id),
         // 웹 푸시 (WP64): no device gets the member's pushes any more.
@@ -301,11 +306,11 @@ async function usersHandler(req: Request, p: string[]) {
     const method = req.method;
     if (method === 'GET') {
         const viewer = await currentUser(req);
-        // Counts skip 대리(진행) posts whose author lost 대리 인증, and every post of a member under 이용 정지,
-        // as the board list does (the author still counts them).
-        const listed = "p.author_id=u.id AND p.hidden=0 AND (p.kind!='proxy_offer' OR u.role='manager' OR p.author_id=? OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=p.author_id AND b.badge='proxy'))"
+        // Counts skip posts of a retired kind (대리, listedKind) and every post of a member under 이용 정지, as
+        // the board list does (the author still counts the second).
+        const listed = `p.author_id=u.id AND p.hidden=0 AND ${listedKind('p')}`
             + ' AND (p.author_id=? OR u.suspended_until IS NULL OR u.suspended_until<=?)';
-        const listedArgs = [viewer?.id || '', viewer?.id || '', Date.now()];
+        const listedArgs = [viewer?.id || '', Date.now()];
         // How many 후기 the 후기 tab holds; the trade counts come from tradeStats.
         const row = await db().prepare(`SELECT u.id,u.nickname,u.prev_nickname,u.nickname_changed_at,u.deleted_at,u.suspended_until,u.role,u.bio,u.created_at,u.last_seen_at,u.avatar_id,u.avatar_thumb,${memberColumns('u')},(SELECT COUNT(*) FROM posts p WHERE ${listed}) AS postCount,(SELECT COUNT(*) FROM posts p WHERE ${listed} AND p.status='closed') AS closedCount,
             (SELECT COUNT(*) FROM reviews rv WHERE rv.target_id=u.id AND ${liveReview('rv')}) AS review_count,
@@ -380,8 +385,8 @@ async function stats() {
     await initManager();
     const r = await db().batch([
         db().prepare('SELECT COUNT(*) AS count FROM users WHERE deleted_at IS NULL'),
-        db().prepare('SELECT COUNT(*) AS count FROM posts WHERE hidden=0'),
-        db().prepare("SELECT kind,category,COUNT(*) AS count FROM posts WHERE hidden=0 AND status!='closed' GROUP BY kind,category"),
+        db().prepare(`SELECT COUNT(*) AS count FROM posts p WHERE p.hidden=0 AND ${listedKind('p')}`),
+        db().prepare(`SELECT kind,category,COUNT(*) AS count FROM posts p WHERE p.hidden=0 AND p.status!='closed' AND ${listedKind('p')} GROUP BY kind,category`),
     ]);
     const categories = r[2].results as any[];
     const byCategory = new Map<string, number>();

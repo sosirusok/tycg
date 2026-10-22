@@ -90,7 +90,15 @@ sql(`INSERT INTO link_cache (url,card,ok,fetched_at) VALUES ('https://old-${run}
 // A 6-month grade of cb ends in 3 days, and cb blocked the manager: no reminder, but the grant is marked.
 equal((await b('blocks', 'POST', { userId: 'manager', active: true })).status, 200, 'cb blocks the manager');
 sql(`INSERT INTO user_grades(user_id,grade,rank,expires_at,granted_by,granted_at,source) VALUES('${users[1].id}','premium',2,${Date.now() + 3 * DAY},'manager',${old},'manager')`);
+// 비밀번호 찾기 requests are kept 90 days.
+sql(`INSERT INTO reset_requests(username,contact,ip_hash,status,created_at) VALUES('c_${run}_old','연락처','h','done',${Date.now() - 91 * DAY}),('c_${run}_new','연락처','h','pending',${Date.now() - 89 * DAY})`);
+// 대리 카테고리 종료 (0064): a visible post of a retired kind (one the previous Worker wrote during the deploy) is hidden.
+const retired = await a('posts', 'POST', { kind: 'sell', category: 'other', title: `[QA] 종료 분류 ${run}`, body: '자동 검증', price: 10000, status: 'open', tags: [], images: [], details: {} });
+equal(retired.status, 201, 'a post to turn into a retired kind');
+sql(`UPDATE posts SET kind='proxy_offer',category='ladder' WHERE id=${retired.data.id}`);
 equal(await fireCron(), 200, 'scheduled cleanup runs');
+equal(sql(`SELECT username FROM reset_requests WHERE username LIKE 'c_${run}_%'`).map(r => r.username), [`c_${run}_new`], '비밀번호 찾기 requests over 90 days old are removed');
+equal(sql(`SELECT hidden,hidden_reason FROM posts WHERE id=${retired.data.id}`)[0], { hidden: 1, hidden_reason: '대리 카테고리 종료' }, 'a visible post of a retired kind is hidden by the daily run');
 
 const ids = [inPost, inChat, inDraft, unused, fresh, inComment];
 equal(sql(`SELECT id FROM uploads WHERE id IN (${ids.map(i => `'${i}'`).join(',')})`).map(r => r.id).sort(), [inPost, inChat, inDraft, fresh, inComment].sort(), 'only the day-old unused photo is removed (a 댓글 photo survives)');
