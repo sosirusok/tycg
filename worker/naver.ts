@@ -5,18 +5,17 @@ import {
 } from './http';
 import { countFetch, localRequest } from './meter';
 import { sealPii, type Pii } from './pii';
-import { kstYear } from '../shared/membership';
 
 // 네이버 로그인 (OAuth 2.0). Members sign in with their Naver account only; the site keeps the Naver
 // per-app user id (users.naver_id), never the Naver access token. The member types a separate site 닉네임 on
 // 가입 마무리, and that is all other members ever see. naver_id is an internal key: no API response carries it
 // (the manager's member panel shows only whether one is linked).
-// 제공 정보 (all 필수): response.name, email, birthyear and mobile are kept encrypted in users.pii (worker/pii.ts),
+// 제공 정보 (all 필수): response.name, email and mobile are kept encrypted in users.pii (worker/pii.ts),
 // written at sign-up and 기존 계정 연결 and refreshed at every Naver login; only worker/info.ts shows them (the
 // member, the manager, a 관리자 the manager allowed). The mobile number also keeps its keyed hash
-// (users.phone_hash): a new Naver account whose number an active member already has cannot sign up. A new Naver
-// account whose 출생연도 says under 14 (KST year minus birth year) cannot either. MANAGER_PHONE: the Naver
-// account with that number signs in as the manager account.
+// (users.phone_hash): a new Naver account whose number an active member already has cannot sign up. 만 14세 미만
+// is kept out by the app's '만 14세 이상만 가입 가능' setting on Naver's side and the age14 confirmation here.
+// MANAGER_PHONE: the Naver account with that number signs in as the manager account.
 //
 //   GET  auth/naver/start?next=/path[&link=1]  302 to nid.naver.com with a fresh state in a short-lived cookie
 //   GET  auth/naver/callback?code&state        state check, token exchange, profile read, then one of:
@@ -38,9 +37,6 @@ const MANAGER_LINK_HERE = '관리자 계정은 로그인한 뒤 설정에서 네
 export const PHONE_TAKEN = '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.';
 export const AGE_REQUIRED = '만 14세 이상만 가입할 수 있습니다.';
 export const AGE_LINK_REQUIRED = '만 14세 이상만 이용할 수 있습니다.';
-// Under 14 by the Naver 출생연도 (/naver?error=age).
-const UNDER_14 = 14;
-
 const STATE_COOKIE = 'zg_naver_state', PENDING_COOKIE = 'zg_naver_pending', COOKIE_PATH = '/api/auth/naver';
 const STATE_MS = 10 * 60000, PENDING_MS = 30 * 60000;
 
@@ -153,9 +149,8 @@ async function start(req: Request, url: URL) {
 // The Naver profile fields, checked; anything else is none. None of them is ever logged.
 const plainText = (v: unknown, max: number) => typeof v === 'string' && v.trim() && v.trim().length <= max && !/[\u0000-\u001f\u007f]/.test(v) ? v.trim() : null;
 const emailText = (v: unknown) => typeof v === 'string' && v.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : null;
-const yearText = (v: unknown) => typeof v === 'string' && /^\d{4}$/.test(v) && Number(v) >= 1900 && Number(v) <= kstYear(Date.now()) ? v : null;
 
-type Profile = { id: string; digits: string | null; phone: string | null; birthyear: string | null; pii: string | null };
+type Profile = { id: string; digits: string | null; phone: string | null; pii: string | null };
 
 // The token exchange and the profile read. The access token lives only in this function.
 async function naverProfile(req: Request, code: string, state: string): Promise<Profile> {
@@ -169,14 +164,14 @@ async function naverProfile(req: Request, code: string, state: string): Promise<
     const token = await tokenRes.json().catch(() => null) as { access_token?: unknown } | null;
     if (!tokenRes.ok || typeof token?.access_token !== 'string' || !token.access_token) throw new Error('token');
     const meRes = await fetch(`${api}/v1/nid/me`, { headers: { Authorization: 'Bearer ' + token.access_token }, signal: AbortSignal.timeout(8000) });
-    // response.id, name, email, birthyear and mobile are read (the 제공 정보 the site asks for); the Naver nickname,
+    // response.id, name, email and mobile are read (the 제공 정보 the site asks for); the Naver nickname,
     // photo, gender and birthday never are.
-    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown; name?: unknown; email?: unknown; birthyear?: unknown; mobile?: unknown } } | null;
+    const me = await meRes.json().catch(() => null) as { resultcode?: unknown; response?: { id?: unknown; name?: unknown; email?: unknown; mobile?: unknown } } | null;
     const id = me?.response?.id, r = me?.response;
     if (!meRes.ok || me?.resultcode !== '00' || typeof id !== 'string' || !id || id.length > 128 || !r) throw new Error('profile');
-    const digits = phoneDigits(r.mobile), birthyear = yearText(r.birthyear);
-    const pii: Pii = { name: plainText(r.name, 50), email: emailText(r.email), birthyear, phone: digits };
-    return { id, digits, phone: digits ? await phoneHash(req, digits) : null, birthyear, pii: await sealPii(req, pii) };
+    const digits = phoneDigits(r.mobile);
+    const pii: Pii = { name: plainText(r.name, 50), email: emailText(r.email), phone: digits };
+    return { id, digits, phone: digits ? await phoneHash(req, digits) : null, pii: await sealPii(req, pii) };
 }
 
 // MANAGER_PHONE (a Worker secret), as digits; none when unset or not a mobile number.
@@ -229,8 +224,6 @@ async function callback(req: Request, url: URL, signIn: (id: string) => Promise<
         if ((profile.phone && found.phone_hash !== profile.phone) || profile.pii) await db().prepare('UPDATE users SET phone_hash=COALESCE(?,phone_hash),pii=COALESCE(?,pii) WHERE id=?').bind(profile.phone, profile.pii, found.id).run();
         return redirect(st.n, [clear, await signIn(found.id)]);
     }
-    // 만 14세 미만은 가입할 수 없습니다: a new Naver account whose 출생연도 is less than 14 years before this KST year.
-    if (profile.birthyear && kstYear(now) - Number(profile.birthyear) < UNDER_14) return back('age');
     // 같은 휴대전화번호: another Naver account of a number an active member has cannot start a sign-up.
     if (profile.phone && await phoneInUse(profile.phone)) return back('phone');
     const pending = await seal({ p: 'pending', e: now + PENDING_MS, id: profile.id, n: st.n, ...profile.phone ? { h: profile.phone } : {}, ...profile.pii ? { x: profile.pii } : {} });

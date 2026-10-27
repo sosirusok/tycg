@@ -4,7 +4,7 @@ import { INFO_FIELDS, type InfoField } from '../shared/membership';
 
 // 네이버 회원 정보 (users.pii, 0065): 회원이름, 연락처 이메일, 출생연도 and 휴대전화번호 as Naver sent them at the
 // member's latest Naver login, in one AES-GCM value: base64(12-byte iv | ciphertext) of JSON
-// {name,email,birthyear,phone(digits)}. The key is HKDF-SHA256 of PHONE_HASH_KEY (info 'zg-pii-v1'), so like the
+// {name,email,phone(digits)}. The key is HKDF-SHA256 of PHONE_HASH_KEY (info 'zg-pii-v1'), so like the
 // phone hash it is set once: a new PHONE_HASH_KEY makes earlier values unreadable until the next login writes them
 // again. Local test servers (TEST_HOOKS=on, local requests) use a fixed key; anywhere else without the key nothing
 // is stored. The values are never logged; only worker/info.ts decrypts them.
