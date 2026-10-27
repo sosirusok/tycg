@@ -18,12 +18,10 @@ const NAVER_ERRORS: Record<string, string> = {
     busy: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
     taken: '이미 다른 회원에게 연결된 네이버 계정입니다.',
     phone: '같은 휴대전화번호로 가입된 계정이 있습니다. 처음 가입한 네이버 계정으로 로그인해 주세요.',
-    // A new Naver account whose 출생연도 is less than 14 years ago (worker/naver.ts callback).
-    age: '만 14세 미만은 가입할 수 없습니다.',
 };
 const PENDING_GONE = '네이버 로그인 시간이 지났습니다. 다시 로그인해 주세요.';
 // What the site keeps from Naver and why (개인정보 처리방침 1~3 say the same).
-export const NAVER_INFO_RULE = '네이버에서 회원 식별값과 회원이름·연락처 이메일·출생연도·휴대전화번호를 받아 암호화해 저장합니다(휴대전화번호는 중복 가입 방지용 해시도 저장). 본인 확인과 거래 분쟁 시 연락, 만 14세 미만 가입 제한(출생연도), 같은 번호 중복 가입 방지, 인증/등급 신청 확인에만 쓰고, 본인과 매니저, 매니저가 지정한 관리자(지정한 항목만)만 볼 수 있습니다. 탈퇴하면 지웁니다.';
+export const NAVER_INFO_RULE = '네이버에서 회원 식별값과 회원이름·연락처 이메일·휴대전화번호를 받아 암호화해 저장합니다(휴대전화번호는 중복 가입 방지용 해시도 저장). 본인 확인과 거래 분쟁 시 연락, 같은 번호 중복 가입 방지, 인증/등급 신청 확인에만 쓰고, 본인과 매니저, 매니저가 지정한 관리자(지정한 항목만)만 볼 수 있습니다. 탈퇴하면 지웁니다.';
 
 type Pending = { pending: boolean; trial?: boolean };
 type Done = { user: User; trial?: TrialState | null; next?: string };

@@ -9,8 +9,8 @@ import { MOCK_BIRTHYEAR, MOCK_PROFILE, mockMobile } from './fixtures/naver-mock.
 
 // 네이버 로그인: start and callback (state cookie, safe next), 가입 마무리 (nickname rules, 플러스 체험), a linked
 // Naver account signing in, 기존 계정 연결 with the old ID/password (once), the 410 for the old member
-// endpoints, the manager's hidden /manager-login and 네이버 계정 연결, MANAGER_PHONE, 만 14세 by 출생연도, and that
-// neither the Naver token nor naver_id is ever stored or sent; 회원 정보 (name, email, birthyear, mobile) is stored
+// endpoints, the manager's hidden /manager-login and 네이버 계정 연결, MANAGER_PHONE, 출생연도 never read, and that
+// neither the Naver token nor naver_id is ever stored or sent; 회원 정보 (name, email, mobile) is stored
 // only encrypted and sent only by me/info, manage/info and member-info (관리자 열람 권한); 계정 정리 (0066).
 // scripts/test-local.mjs runs it on a short-lived
 // server with TEST_HOOKS=on and the mock (tests/fixtures/naver-mock.mjs) as NAVER_AUTH_BASE/NAVER_API_BASE and
@@ -359,11 +359,11 @@ const digits = mockMobile(NAVER('n')).replace(/-/g, '');
     const raw = Buffer.from(stored || '', 'base64');
     check(/^[A-Za-z0-9+/]{40,}={0,2}$/.test(stored) && ![MOCK_PROFILE.name, MOCK_PROFILE.email, digits, '"birthyear"'].some(v => stored.includes(v) || raw.includes(Buffer.from(v))), 'users.pii is one encrypted value, no plain field');
     const own = await fresh('me/info');
-    equal([own.status, own.data.info], [200, { name: MOCK_PROFILE.name, email: MOCK_PROFILE.email, birthyear: MOCK_BIRTHYEAR, phone: digits }], 'me/info: the member sees their own name, email, birth year and number');
+    equal([own.status, own.data.info], [200, { name: MOCK_PROFILE.name, email: MOCK_PROFILE.email, phone: digits }], 'me/info: the member sees their own name, email, birth year and number');
     equal((await guest('me/info')).status, 401, 'me/info needs a session');
     const tab = await manager('manage/info?q=' + encodeURIComponent('바꾼' + run));
     const row = tab.data.members?.find(m => m.id === member.id);
-    equal([tab.status, row?.nickname, row?.name, row?.email, row?.birthyear, row?.phone], [200, '바꾼' + run, MOCK_PROFILE.name, MOCK_PROFILE.email, MOCK_BIRTHYEAR, digits], 'manage/info: the manager sees all four fields, found by nickname');
+    equal([tab.status, row?.nickname, row?.name, row?.email, row?.birthyear, row?.phone], [200, '바꾼' + run, MOCK_PROFILE.name, MOCK_PROFILE.email, undefined, digits], 'manage/info: the manager sees all four fields, found by nickname');
     check(tab.data.members.every(m => m.nickname.includes('바꾼' + run)) && Array.isArray(tab.data.admins), 'the nickname search narrows the list; the 관리자 list rides on page 1');
     equal((await fresh('manage/info')).status, 403, 'a member cannot open manage/info');
 
@@ -401,14 +401,9 @@ const digits = mockMobile(NAVER('n')).replace(/-/g, '');
     equal((await adm('auth/me')).data.infoFields, undefined, 'and auth/me names no fields');
 }
 
-// 만 14세: a new Naver account whose 출생연도 is less than 14 years before this KST year cannot sign up.
+// 출생연도 is not read (Naver's review does not accept it as an age check): a young 출생연도 from Naver changes nothing.
 {
-    const young = await naverLogin(browser(), `${NAVER('y')}|-|${kstYear - 13}`);
-    equal(young.location, '/naver?error=age', 'a new Naver account under 14 by 출생연도 is refused');
-    check(!young.cookies.some(c => c.startsWith('zg_naver_pending=') && !c.startsWith('zg_naver_pending=;')), 'no pending sign-up for it');
-    equal((await naverLogin(browser(), `${NAVER('y2')}|-|${kstYear - 14}`)).location, '/naver', '14 this year goes on to 가입 마무리');
-    equal((await naverLogin(browser(), `${NAVER('y3')}|-|-`)).location, '/naver', 'without a 출생연도 the sign-up goes on');
-    equal((await naverLogin(browser(), `${NAVER('y4')}|-|20x1`)).location, '/naver', 'a malformed 출생연도 counts as none');
+    equal((await naverLogin(browser(), `${NAVER('y')}|-|${kstYear - 13}`)).location, '/naver', 'a 출생연도 from Naver is ignored');
 }
 
 // MANAGER_PHONE: the Naver account with the manager's number signs in as the manager; its Naver id moves to the
@@ -478,16 +473,16 @@ if (managerPhone) {
     check(join.includes('만 14세 이상입니다') && join.includes("'auth/naver/finish', 'POST', { nickname, agree, age14 }") && join.includes('!agree || !age14'), '가입 마무리 has the 만 14세 이상 box and sends age14');
     check(join.includes("'auth/naver/link', 'POST', { username, password, age14 }") && join.includes('!age14 || !username.trim()'), '기존 계정 연결 has the box too and sends age14');
     check(join.includes('href="/privacy"') && join.includes('{PROXY_RULE}'), '가입 마무리 links the 개인정보 처리방침 and states the 대리 게임 rule');
-    check(join.includes('{NAVER_INFO_RULE}') && join.includes('회원이름·연락처 이메일·출생연도·휴대전화번호를 받아 암호화해 저장합니다') && join.includes("age: '만 14세 미만은 가입할 수 없습니다.'"), '가입 마무리 says what Naver info is kept and why; /naver?error=age has its line');
+    check(join.includes('{NAVER_INFO_RULE}') && join.includes('회원이름·연락처 이메일·휴대전화번호를 받아 암호화해 저장합니다') && !join.includes('출생연도'), '가입 마무리 says what Naver info is kept and why');
     check(app.includes("page === 'privacy' ? <Privacy />") && app.includes('<Link to="/privacy">개인정보 처리방침</Link>'), '/privacy is a route with a footer link');
     const out = await build({ configFile: false, logLevel: 'silent', root, build: { lib: { entry: 'tests/fixtures/privacy-render.ts', formats: ['es'], fileName: 'privacy' }, write: false, minify: false } });
     const { html } = await import('data:text/javascript;base64,' + Buffer.from((Array.isArray(out) ? out[0] : out).output[0].code).toString('base64'));
     check(html.startsWith('<div class="container page guide privacy"><h1 class="page-title">개인정보 처리방침</h1>'), '/privacy renders its title');
-    for (const part of ['회원 식별값(id)과 회원이름, 연락처 이메일, 출생연도, 휴대전화번호', '암호화해 저장하고', '중복 가입을 막기 위해 비밀 키로 만든 해시값도 저장합니다', '별명, 프로필 사진, 성별, 생일은 받지 않고 저장하지 않습니다',
-        '본인 확인과 거래 분쟁 시 연락', '출생연도: 만 14세 미만 가입 제한', '인증/등급 신청 때 신청한 회원 본인인지 확인', '매니저가 지정한 관리자 등급 회원(매니저가 지정한 항목만',
-        '암호화해 저장한 회원이름·연락처 이메일·출생연도·휴대전화번호', '관리자에게 준 회원 정보 열람 권한',
+    for (const part of ['회원 식별값(id)과 회원이름, 연락처 이메일, 휴대전화번호', '암호화해 저장하고', '중복 가입을 막기 위해 비밀 키로 만든 해시값도 저장합니다', '별명, 프로필 사진, 성별, 생일, 출생연도, 연령대는 받지 않고 저장하지 않습니다',
+        '본인 확인과 거래 분쟁 시 연락', '인증/등급 신청 때 신청한 회원 본인인지 확인', '매니저가 지정한 관리자 등급 회원(매니저가 지정한 항목만',
+        '암호화해 저장한 회원이름·연락처 이메일·휴대전화번호', '관리자에게 준 회원 정보 열람 권한',
         '요청 횟수 제한', '회원 탈퇴 때 바로 지우는 정보', '탈퇴 후에도 남는 정보', '다른 회사나 개인에게 제공하지 않습니다', 'Cloudflare, Inc. (미국)',
-        '만 14세 미만은 가입할 수 없습니다', '가입 마무리와 기존 계정 연결에서', '네이버에서 받은 출생연도', '채팅 메시지이므로 적은 그대로 저장됩니다',
+        '만 14세 미만은 가입할 수 없습니다', '가입 마무리와 기존 계정 연결에서', '만 14세 이상만 가입 가능', '채팅 메시지이므로 적은 그대로 저장됩니다',
         '비밀번호 찾기 요청', '자주 쓰는 문구와 자동 응답 문구', '이용 정지 기록', '매니저에게 채팅으로', '시행일: 2026년 10월 22일']) check(html.includes(part), `/privacy says: ${part}`);
 }
 

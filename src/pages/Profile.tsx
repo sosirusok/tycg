@@ -286,7 +286,7 @@ export default function ProfilePage({ id }: { id?: string }) {
 
 // 네이버 회원 정보 (GET me/info): the member's own 이름, 연락처 이메일, 출생연도 and 휴대전화번호 as Naver sent them at the
 // latest login. Read when 프로필 수정 opens; no other screen shows them.
-const OWN_INFO_LABELS = { name: '이름', email: '연락처 이메일', birthyear: '출생연도', phone: '휴대전화번호' } as const;
+const OWN_INFO_LABELS = { name: '이름', email: '연락처 이메일', phone: '휴대전화번호' } as const;
 function NaverInfoCard() {
     const [info, setInfo] = useState<MemberInfo | null | undefined>(undefined);
     useEffect(() => {

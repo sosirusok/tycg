@@ -672,12 +672,13 @@ export function trialStatus(endsAt: number, now = Date.now()) {
     return `플러스 체험 · ${kstDayStart(endsAt) === kstDayStart(now) ? '오늘' : '내일'} ${p.time} 종료`;
 }
 
-// 네이버 회원 정보 (worker/pii.ts, 0065): the four 제공 정보 fields kept encrypted in users.pii, in screen order.
+// 네이버 회원 정보 (worker/pii.ts, 0065): the three 제공 정보 fields (출생연도 is not requested: Naver's review does not
+// accept it as an age check, and the app's '만 14세 이상만 가입 가능' setting does that on Naver's side) kept encrypted in users.pii, in screen order.
 // Only the member (me/info), the manager (manage/info) and a 관리자 the manager allowed (member-info, the allowed
 // fields only) ever receive their values; auth/me names the allowed field keys alone (infoFields).
-export const INFO_FIELDS = ['name', 'email', 'birthyear', 'phone'] as const;
+export const INFO_FIELDS = ['name', 'email', 'phone'] as const;
 export type InfoField = typeof INFO_FIELDS[number];
-export const INFO_LABELS: Record<InfoField, string> = { name: '회원이름', email: '연락처 이메일', birthyear: '출생연도', phone: '휴대전화번호' };
+export const INFO_LABELS: Record<InfoField, string> = { name: '회원이름', email: '연락처 이메일', phone: '휴대전화번호' };
 export type MemberInfo = { [K in InfoField]?: string | null };
 export const isInfoField = (v: unknown): v is InfoField => typeof v === 'string' && (INFO_FIELDS as readonly string[]).includes(v);
 // 01012345678 as '010-1234-5678' (10 digits: '011-123-4567'); anything else as it is.
